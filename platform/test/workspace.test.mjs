@@ -19,7 +19,9 @@ test('platform manifest defines isolated workspaces and verification scripts', a
   for (const script of ['test', 'test:unit', 'test:integration', 'typecheck']) {
     assert.equal(typeof pkg.scripts?.[script], 'string', `missing ${script} script`);
   }
+  assert.match(pkg.scripts.test, /node --test test\/\*\.test\.mjs/);
 });
+
 test('docker compose defines the isolated PostgreSQL development service', async () => {
   const compose = await readFile(path.join(platformRoot, 'docker-compose.yml'), 'utf8');
   assert.match(compose, /postgres:/);
@@ -31,6 +33,7 @@ test('environment example uses the Docker PostgreSQL database', async () => {
   const env = await readFile(path.join(platformRoot, '.env.example'), 'utf8');
   assert.match(env, /DATABASE_URL=postgresql:\/\/[^\r\n]+@localhost:55432\/engineering_os_test/);
 });
+
 test('TypeScript base config always includes at least one real TypeScript input', async () => {
   const tsconfig = await readJson('tsconfig.base.json');
   assert.equal(Array.isArray(tsconfig.files) && tsconfig.files.length === 0, false);
@@ -39,6 +42,7 @@ test('TypeScript base config always includes at least one real TypeScript input'
     'vitest.config.ts must keep the base configuration type-checkable before app packages exist',
   );
 });
+
 test('top-level verification serialises PostgreSQL integration suites', async () => {
   const pkg = await readJson('package.json');
   assert.match(pkg.scripts.test, /npm run test:unit.*npm run test:integration/);
