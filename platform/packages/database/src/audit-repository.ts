@@ -63,4 +63,16 @@ export class AuditRepository {
     );
     return result.rows.map(mapAuditEvent);
   }
+
+  async listByOrganisation(organisationId: string): Promise<AuditEvent[]> {
+    const result = await this.database.query<AuditRow>(
+      `SELECT id, organisation_id, project_id, event_type, actor_type, actor_id,
+              subject_type, subject_id, metadata, occurred_at
+       FROM audit_events
+       WHERE organisation_id = $1
+       ORDER BY sequence ASC`,
+      [organisationId],
+    );
+    return result.rows.map(mapAuditEvent);
+  }
 }

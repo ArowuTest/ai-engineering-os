@@ -1,7 +1,7 @@
 # AI Product & Engineering Operating System
 ## Product Requirements & Software Requirements Specification
 
-**Document version:** 1.1  
+**Document version:** 1.2
 **Status:** Approved baseline for V1 planning  
 **Date:** 9 August 2026  
 **Working name:** AI Engineering OS  
@@ -9,6 +9,17 @@
 
 ## 0. Change record
 
+### Version 1.2
+This revision adds the approved V1 authentication and collaboration requirements:
+
+1. Permanent login is **User ID + password only**; email is not required for V1.
+2. New users join through an administrator-generated **single-use invitation key**.
+3. Invitation expiry is configurable by organisation policy, with a **30-minute default** and optional per-invitation override.
+4. Invitation keys are stored only as cryptographic hashes and become permanently unusable after successful redemption, expiry, cancellation or replacement.
+5. Organisation membership and project membership are separate access-control layers.
+6. Administrators may revoke organisation access, remove a user from selected projects, suspend an account, and invalidate active sessions immediately.
+7. Authentication, invitation, membership, role and revocation events are auditable.
+8. Multiple independent projects and multiple product-discovery conversation sessions are supported while canonical Product Knowledge remains project-scoped.
 ### Version 1.1
 This revision incorporates the decisions made after the original v1.0 requirements discussion:
 
@@ -404,7 +415,10 @@ Discovery may cover:
 - support model.
 
 ## PS-004 Persistent Product Knowledge
-Material facts and decisions from conversations shall be extracted into a canonical knowledge model.
+Material facts and decisions from conversations shall be extracted as structured candidates for the project knowledge model.
+
+## PS-004A Review-first AI extraction
+AI-extracted requirements, business rules, assumptions, risks, decisions and other product facts shall enter a candidate review queue first. AI extraction alone shall **not** create or modify canonical Product Knowledge. A candidate becomes canonical only after an authorised user explicitly accepts it; rejected candidates remain non-canonical review evidence.
 
 ## PS-005 Knowledge status
 Knowledge records shall support at least Proposed, Inferred, Confirmed, Approved, Superseded and Rejected states.
@@ -915,7 +929,12 @@ Required V1 outcomes:
 - initial skill registry based on ECC;
 - initial MCP registry;
 - audit trail;
-- provider route/cost metadata.
+- provider route/cost metadata;
+- real User ID/password authentication with no email requirement;
+- one-time invitation-key onboarding with configurable expiry and 30-minute default;
+- organisation/project memberships and roles;
+- session revocation, account suspension and project-specific access removal;
+- People & Access administration.
 
 Full autonomous engineering is not required to prove V1.
 
@@ -1002,7 +1021,41 @@ The target architecture must eventually demonstrate:
 
 ---
 
-# 40. Final Product Definition
+# 40. Authentication & Collaboration Requirements
+
+## AUTH-FR-001 Login identity
+The platform shall support permanent sign-in using a unique **User ID + password**. Email shall not be required for V1 account creation, authentication or normal use.
+
+## AUTH-FR-002 One-time invitation onboarding
+New users shall be onboarded using an administrator-generated high-entropy invitation key. The key shall be single-use and shall not be accepted after successful redemption.
+
+## AUTH-FR-003 Configurable invitation expiry
+Invitation expiry shall be configurable by organisation policy. The default shall be **30 minutes**. An authorised administrator may override the period for an individual invitation. The absolute expiry timestamp shall be captured when the invitation is issued.
+
+## AUTH-FR-004 Secret storage
+The platform shall store only cryptographic hashes of invitation keys and authentication-session tokens. Passwords shall be stored only as memory-hard password verifiers. Plaintext passwords, invitation keys and session tokens shall not be written to audit metadata or application logs.
+
+## AUTH-FR-005 Invitation lifecycle
+Invitation states shall include pending, consumed, expired, revoked and replaced. Expired, consumed, revoked and replaced invitations shall be permanently unusable. Replacing an invitation shall invalidate the previous outstanding key before a new key is issued.
+
+## AUTH-FR-006 Organisation roles
+Organisation roles shall include `owner`, `admin` and `member`. Owner/Admin privileges shall govern organisation-level administration, provider/security configuration and access management.
+
+## AUTH-FR-007 Project roles
+Project roles shall include `product_owner`, `contributor`, `engineer`, `reviewer` and `viewer`. Project access shall be explicit and separable from organisation membership.
+
+## AUTH-FR-008 Immediate revocation
+Authorised administrators shall be able to suspend a user, revoke organisation membership, revoke or change access to an individual project, cancel a pending invitation and invalidate active sessions. Protected requests shall re-evaluate current account/session/membership state so revocation takes effect immediately.
+
+## AUTH-FR-009 Auditability
+Invitation creation/redemption/cancellation/expiry, login/logout, account suspension/reactivation, organisation membership changes, project membership changes and session revocation shall produce append-only audit evidence without exposing authentication secrets.
+
+## AUTH-FR-010 Multiple products and discovery sessions
+A user may belong to multiple projects subject to access control. Each project shall retain independent Product Knowledge, documents, requirements, conversations and engineering state. A project may contain multiple product-discovery conversations that share the same project-owned canonical Product Knowledge.
+
+---
+
+# 41. Final Product Definition
 
 The AI Product & Engineering Operating System is a **private, model-independent, AI-native product and software engineering platform** built around an updateable ECC engineering substrate.
 

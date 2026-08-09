@@ -42,3 +42,32 @@ test('Product Studio primary composer uses the live Product Partner route', asyn
   assert.match(page, /action=\{appendMessageAction\}/);
   assert.doesNotMatch(page, /Live provider execution is intentionally not enabled/);
 });
+
+test('authentication and collaboration routes are part of the web application', async () => {
+  for (const relativePath of [
+    'app/login/page.tsx',
+    'app/redeem/page.tsx',
+    'app/admin/access/page.tsx',
+  ]) {
+    await access(path.join(webRoot, relativePath));
+  }
+
+  const api = await readFile(path.join(webRoot, 'lib/api.ts'), 'utf8');
+  const actions = await readFile(path.join(webRoot, 'app/actions.ts'), 'utf8');
+  const login = await readFile(path.join(webRoot, 'app/login/page.tsx'), 'utf8');
+  const redeem = await readFile(path.join(webRoot, 'app/redeem/page.tsx'), 'utf8');
+
+  assert.match(api, /engineering_os_session/);
+  assert.match(api, /authorization/i);
+  assert.doesNotMatch(api, /headers\.set\('x-user-id'/);
+  assert.match(actions, /loginAction/);
+  assert.match(actions, /redeemInvitationAction/);
+  assert.match(actions, /httpOnly:\s*true/);
+  assert.match(login, /name="userId"/);
+  assert.match(login, /name="password"/);
+  assert.doesNotMatch(login, /name="email"/);
+  assert.match(redeem, /name="key"/);
+  assert.match(redeem, /name="userId"/);
+  assert.match(redeem, /name="password"/);
+  assert.doesNotMatch(redeem, /name="email"/);
+});

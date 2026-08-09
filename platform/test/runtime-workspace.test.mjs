@@ -17,9 +17,13 @@ test('API workspace has executable development and start commands', async () => 
   assert.match(pkg.scripts?.start ?? '', /tsx/);
 });
 
-test('development environment documents bootstrap identity and web API URL', async () => {
+test('environment example defaults to real auth and explicit first-owner bootstrap', async () => {
   const env = await readFile(path.join(platformRoot, '.env.example'), 'utf8');
-  assert.match(env, /DEV_BOOTSTRAP_ORGANISATION_ID=org-001/);
+  assert.match(env, /ALLOW_DEV_IDENTITY_HEADERS=false/);
+  assert.match(env, /BOOTSTRAP_ORGANISATION_ID=org-001/);
+  assert.match(env, /BOOTSTRAP_OWNER_USER_ID=/);
+  assert.match(env, /BOOTSTRAP_OWNER_PASSWORD=/);
   assert.match(env, /DEV_ORGANISATION_ID=org-001/);
   assert.match(env, /API_BASE_URL=http:\/\/127\.0\.0\.1:3100/);
+  assert.doesNotMatch(env, /DEV_USER_ID=/);
 });

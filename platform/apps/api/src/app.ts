@@ -15,13 +15,17 @@ import {
   createProject,
   DomainValidationError,
   reviseKnowledgeRecord,
+  requireOrganisationRole,
+  requireProjectRole,
   type CreateKnowledgeInput,
   type CreateProjectInput,
   type KnowledgeStatus,
   type ProductPartner,
+  type ProjectRole,
 } from '@engineering-os/domain';
 import { NoEligibleRouteError, ProviderExecutionError, type ModelGateway } from '@engineering-os/model-gateway';
 import { buildProductPartnerRequest } from './product-partner-context.js';
+import { AuthService, AuthServiceError } from './auth-service.js';
 
 export interface AppDependencies {
   projects: ProjectRepository;
@@ -29,6 +33,8 @@ export interface AppDependencies {
   conversations: ConversationRepository;
   unitOfWork: DatabaseUnitOfWork;
   modelGateway: ModelGateway;
+  authService?: AuthService;
+  allowDevIdentityHeaders?: boolean;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -42,16 +48,94 @@ function stringField(body: JsonObject, field: string): string {
   return typeof value === 'string' ? value : '';
 }
 
-function requireIdentity(request: FastifyRequest): { organisationId: string; userId: string } {
-  const organisationId = request.headers['x-organisation-id'];
-  const userId = request.headers['x-user-id'];
-  if (typeof organisationId !== 'string' || organisationId.trim() === '') {
+class RequestAuthError extends Error {
+  constructor(readonly statusCode: 401 | 403, message: string) {
+    super(message);
+    this.name = 'RequestAuthError';
+  }
+}
+
+interface RequestIdentity {
+  organisationId: string;
+  userId: string;
+  authenticated: boolean;
+  token?: string;
+  organisationRole?: 'owner' | 'admin' | 'member';
+  projectRole?: ProjectRole | null;
+}
+
+function bearerToken(request: FastifyRequest): string | null {
+  const value = request.headers.authorization;
+  if (typeof value !== 'string') return null;
+  const match = /^Bearer\s+(.+)$/i.exec(value.trim());
+  return match?.[1]?.trim() || null;
+}
+
+function requireOrganisationId(request: FastifyRequest): string {
+  const value = request.headers['x-organisation-id'];
+  if (typeof value !== 'string' || value.trim() === '') {
     throw new DomainValidationError('x-organisation-id');
   }
+  return value.trim();
+}
+
+async function resolveIdentity(
+  request: FastifyRequest,
+  dependencies: AppDependencies,
+): Promise<RequestIdentity> {
+  const organisationId = requireOrganisationId(request);
+  if (dependencies.authService) {
+    const token = bearerToken(request);
+    if (!token) throw new RequestAuthError(401, 'Authentication required');
+    const params = request.params as { id?: unknown };
+    const projectId = typeof params.id === 'string' ? params.id : null;
+    if (projectId) {
+      const projectIdentity = await dependencies.authService.authorizeProject(token, organisationId, projectId);
+      if (!projectIdentity) {
+        const session = await dependencies.authService.resolveSession(token);
+        if (!session) throw new RequestAuthError(401, 'Invalid or expired session');
+        throw new RequestAuthError(403, 'Project access denied');
+      }
+      return {
+        organisationId,
+        userId: projectIdentity.accountId,
+        authenticated: true,
+        token,
+        organisationRole: projectIdentity.organisationRole,
+        projectRole: projectIdentity.projectRole,
+      };
+    }
+    const identity = await dependencies.authService.resolveOrganisation(token, organisationId);
+    if (!identity) {
+      const session = await dependencies.authService.resolveSession(token);
+      if (!session) throw new RequestAuthError(401, 'Invalid or expired session');
+      throw new RequestAuthError(403, 'Organisation access denied');
+    }
+    return { organisationId, userId: identity.accountId, authenticated: true, token, organisationRole: identity.organisationRole };
+  }
+
+  if (dependencies.allowDevIdentityHeaders === false) {
+    throw new RequestAuthError(401, 'Authentication required');
+  }
+  const userId = request.headers['x-user-id'];
   if (typeof userId !== 'string' || userId.trim() === '') {
     throw new DomainValidationError('x-user-id');
   }
-  return { organisationId: organisationId.trim(), userId: userId.trim() };
+  return { organisationId, userId: userId.trim(), authenticated: false };
+}
+
+function requireProductContributor(identity: RequestIdentity): void {
+  if (!identity.authenticated) return;
+  if (identity.projectRole !== 'product_owner' && identity.projectRole !== 'contributor') {
+    throw new RequestAuthError(403, 'Product write access denied');
+  }
+}
+
+function requireProductOwner(identity: RequestIdentity): void {
+  if (!identity.authenticated) return;
+  if (identity.projectRole !== 'product_owner') {
+    throw new RequestAuthError(403, 'Product Owner access required');
+  }
 }
 
 function routeId(request: FastifyRequest): string {
@@ -114,10 +198,27 @@ async function projectOrNull(
   return dependencies.projects.getById(organisationId, projectId);
 }
 
+function requireAuthService(dependencies: AppDependencies): AuthService {
+  if (!dependencies.authService) {
+    throw new RequestAuthError(401, 'Authentication is not configured');
+  }
+  return dependencies.authService;
+}
+
 export function buildApp(dependencies: AppDependencies): FastifyInstance {
   const app = Fastify({ logger: false });
 
   app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof RequestAuthError) {
+      return reply.code(error.statusCode).send({ error: error.message });
+    }
+    if (error instanceof AuthServiceError) {
+      const status = error.code === 'invalid_credentials' ? 401
+        : error.code === 'forbidden' || error.code === 'account_suspended' ? 403
+        : error.code === 'user_id_taken' ? 409
+        : 410;
+      return reply.code(status).send({ error: error.code });
+    }
     if (error instanceof DomainValidationError) {
       return reply.code(400).send({ error: error.message, field: error.field });
     }
@@ -136,9 +237,173 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
   }));
   app.get('/model-routes', async () => dependencies.modelGateway.listRoutes());
 
+  app.post('/auth/login', async (request, reply) => {
+    const body = bodyObject(request.body);
+    const result = await requireAuthService(dependencies).login({
+      userId: stringField(body, 'userId'),
+      password: stringField(body, 'password'),
+    });
+    return reply.send(result);
+  });
+
+  app.post('/auth/redeem', async (request, reply) => {
+    const body = bodyObject(request.body);
+    const result = await requireAuthService(dependencies).redeemInvitation({
+      key: stringField(body, 'key'),
+      userId: stringField(body, 'userId'),
+      password: stringField(body, 'password'),
+    });
+    return reply.code(201).send(result);
+  });
+
+  app.get('/auth/me', async (request, reply) => {
+    const token = bearerToken(request);
+    if (!token) throw new RequestAuthError(401, 'Authentication required');
+    const identity = await requireAuthService(dependencies).resolveSession(token);
+    if (!identity) throw new RequestAuthError(401, 'Invalid or expired session');
+    return reply.send(identity);
+  });
+
+  app.post('/auth/logout', async (request, reply) => {
+    const token = bearerToken(request);
+    if (!token) throw new RequestAuthError(401, 'Authentication required');
+    await requireAuthService(dependencies).logout(token);
+    return reply.code(204).send();
+  });
+
+  app.post('/auth/invitations', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const body = bodyObject(request.body);
+    const rawGrants = Array.isArray(body.projectGrants) ? body.projectGrants : [];
+    const projectGrants = rawGrants.map((raw) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new DomainValidationError('projectGrants');
+      }
+      const item = raw as JsonObject;
+      return {
+        projectId: stringField(item, 'projectId'),
+        role: requireProjectRole(item.role),
+      };
+    });
+    const ttl = body.ttlMinutes;
+    const result = await requireAuthService(dependencies).createInvitation({
+      organisationId: identity.organisationId,
+      actorUserId: identity.userId,
+      organisationRole: requireOrganisationRole(body.organisationRole),
+      projectGrants,
+      ...(typeof ttl === 'number' ? { ttlMinutes: ttl } : {}),
+    });
+    return reply.code(201).send(result);
+  });
+
+  app.get('/admin/users', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const people = await requireAuthService(dependencies).listPeople({
+      organisationId: identity.organisationId,
+      actorUserId: identity.userId,
+    });
+    return reply.send(people);
+  });
+
+  app.patch('/admin/users/:userId', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const params = request.params as { userId?: unknown };
+    const targetUserId = typeof params.userId === 'string' ? params.userId : '';
+    const status = stringField(bodyObject(request.body), 'status');
+    if (status !== 'active' && status !== 'suspended') throw new DomainValidationError('status');
+    await requireAuthService(dependencies).setUserStatus({
+      organisationId: identity.organisationId,
+      actorUserId: identity.userId,
+      targetUserId,
+      status,
+    });
+    return reply.send({ status });
+  });
+
+  app.delete('/admin/users/:userId/organisation-access', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const params = request.params as { userId?: unknown };
+    const targetUserId = typeof params.userId === 'string' ? params.userId : '';
+    await requireAuthService(dependencies).revokeOrganisationAccess({
+      organisationId: identity.organisationId,
+      actorUserId: identity.userId,
+      targetUserId,
+    });
+    return reply.code(204).send();
+  });
+
+  app.get('/admin/invitation-policy', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    return reply.send(await requireAuthService(dependencies).getInvitationPolicy({
+      organisationId: identity.organisationId,
+      actorUserId: identity.userId,
+    }));
+  });
+
+  app.patch('/admin/invitation-policy', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const ttlMinutes = bodyObject(request.body).ttlMinutes;
+    if (typeof ttlMinutes !== 'number') throw new DomainValidationError('ttlMinutes');
+    await requireAuthService(dependencies).setInvitationPolicy({
+      organisationId: identity.organisationId,
+      actorUserId: identity.userId,
+      ttlMinutes,
+    });
+    return reply.send({ ttlMinutes });
+  });
+
+  app.get('/admin/invitations', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    return reply.send(await requireAuthService(dependencies).listInvitations({
+      organisationId: identity.organisationId,
+      actorUserId: identity.userId,
+    }));
+  });
+
+  app.delete('/auth/invitations/:invitationId', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const params = request.params as { invitationId?: unknown };
+    const invitationId = typeof params.invitationId === 'string' ? params.invitationId : '';
+    await requireAuthService(dependencies).cancelInvitation({
+      organisationId: identity.organisationId,
+      actorUserId: identity.userId,
+      invitationId,
+    });
+    return reply.code(204).send();
+  });
+
+  app.put('/projects/:id/members/:userId', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const params = request.params as { id?: unknown; userId?: unknown };
+    const projectId = typeof params.id === 'string' ? params.id : '';
+    const targetUserId = typeof params.userId === 'string' ? params.userId : '';
+    const role = requireProjectRole(bodyObject(request.body).role);
+    await requireAuthService(dependencies).grantProjectAccess({
+      organisationId: identity.organisationId,
+      projectId,
+      actorUserId: identity.userId,
+      targetUserId,
+      role,
+    });
+    return reply.send({ projectId, userId: targetUserId, role });
+  });
+
+  app.delete('/projects/:id/members/:userId', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const params = request.params as { id?: unknown; userId?: unknown };
+    const projectId = typeof params.id === 'string' ? params.id : '';
+    const targetUserId = typeof params.userId === 'string' ? params.userId : '';
+    await requireAuthService(dependencies).revokeProjectAccess({
+      organisationId: identity.organisationId,
+      projectId,
+      actorUserId: identity.userId,
+      targetUserId,
+    });
+    return reply.code(204).send();
+  });
 
   app.post('/projects', async (request, reply) => {
-    const identity = requireIdentity(request);
+    const identity = await resolveIdentity(request, dependencies);
     const project = createProject(
       projectInput(bodyObject(request.body), identity.organisationId, identity.userId),
     );
@@ -162,17 +427,35 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
       },
     });
 
-    await dependencies.unitOfWork.run(async ({ projects, conversations, audit }) => {
+    await dependencies.unitOfWork.run(async ({ projects, conversations, memberships, audit }) => {
       await projects.create(project);
       await conversations.create(conversation);
+      if (identity.authenticated) {
+        await memberships.grantProject({
+          organisationId: identity.organisationId,
+          projectId: project.id,
+          userId: identity.userId,
+          role: 'product_owner',
+          createdBy: identity.userId,
+          now: project.createdAt,
+        });
+      }
       await audit.append(event);
     });
     return reply.code(201).send(project);
   });
 
   app.get('/projects', async (request, reply) => {
-    const identity = requireIdentity(request);
-    const projects = await dependencies.projects.listByOrganisation(identity.organisationId);
+    const identity = await resolveIdentity(request, dependencies);
+    let projects = await dependencies.projects.listByOrganisation(identity.organisationId);
+    if (dependencies.authService && identity.token) {
+      const scope = await dependencies.authService.getProjectAccessScope(identity.token, identity.organisationId);
+      if (!scope) throw new RequestAuthError(403, 'Organisation access denied');
+      if (!scope.allProjects) {
+        const allowed = new Set(scope.projectIds);
+        projects = projects.filter((project) => allowed.has(project.id));
+      }
+    }
     const summaries = await Promise.all(
       projects.map(async (project) => {
         const records = await dependencies.knowledge.listByProject(identity.organisationId, project.id);
@@ -183,14 +466,14 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
   });
 
   app.get('/projects/:id', async (request, reply) => {
-    const identity = requireIdentity(request);
+    const identity = await resolveIdentity(request, dependencies);
     const project = await projectOrNull(dependencies, identity.organisationId, routeId(request));
     if (!project) return reply.code(404).send({ error: 'Project not found' });
     return reply.send(project);
   });
 
   app.get('/projects/:id/studio', async (request, reply) => {
-    const identity = requireIdentity(request);
+    const identity = await resolveIdentity(request, dependencies);
     const projectId = routeId(request);
     const project = await projectOrNull(dependencies, identity.organisationId, projectId);
     if (!project) return reply.code(404).send({ error: 'Project not found' });
@@ -210,7 +493,8 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
   });
 
   app.patch('/projects/:id/product-partner', async (request, reply) => {
-    const identity = requireIdentity(request);
+    const identity = await resolveIdentity(request, dependencies);
+    requireProductContributor(identity);
     const projectId = routeId(request);
     const current = await projectOrNull(dependencies, identity.organisationId, projectId);
     if (!current) return reply.code(404).send({ error: 'Project not found' });
@@ -242,7 +526,8 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
   });
 
   app.post('/projects/:id/product-partner-turn', async (request, reply) => {
-    const identity = requireIdentity(request);
+    const identity = await resolveIdentity(request, dependencies);
+    requireProductContributor(identity);
     const projectId = routeId(request);
     const project = await projectOrNull(dependencies, identity.organisationId, projectId);
     if (!project) return reply.code(404).send({ error: 'Project not found' });
@@ -344,7 +629,8 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     return reply.code(201).send({ userMessage, assistantMessage, execution });
   });
   app.post('/projects/:id/messages', async (request, reply) => {
-    const identity = requireIdentity(request);
+    const identity = await resolveIdentity(request, dependencies);
+    requireProductContributor(identity);
     const projectId = routeId(request);
     const project = await projectOrNull(dependencies, identity.organisationId, projectId);
     if (!project) return reply.code(404).send({ error: 'Project not found' });
@@ -381,13 +667,21 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
   });
 
   app.post('/projects/:id/knowledge', async (request, reply) => {
-    const identity = requireIdentity(request);
+    const identity = await resolveIdentity(request, dependencies);
+    requireProductContributor(identity);
+    const body = bodyObject(request.body);
+    if (identity.authenticated && identity.projectRole === 'contributor') {
+      const requestedStatus = typeof body.status === 'string' ? body.status : 'proposed';
+      if (requestedStatus !== 'proposed') {
+        throw new RequestAuthError(403, 'Contributors may only propose Product Knowledge');
+      }
+    }
     const projectId = routeId(request);
     const project = await projectOrNull(dependencies, identity.organisationId, projectId);
     if (!project) return reply.code(404).send({ error: 'Project not found' });
 
     const record = createKnowledgeRecord(
-      knowledgeInput(bodyObject(request.body), identity.organisationId, projectId, identity.userId),
+      knowledgeInput(body, identity.organisationId, projectId, identity.userId),
     );
     const event = createAuditEvent({
       organisationId: identity.organisationId,
@@ -411,7 +705,7 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
   });
 
   app.get('/projects/:id/knowledge', async (request, reply) => {
-    const identity = requireIdentity(request);
+    const identity = await resolveIdentity(request, dependencies);
     const projectId = routeId(request);
     const project = await projectOrNull(dependencies, identity.organisationId, projectId);
     if (!project) return reply.code(404).send({ error: 'Project not found' });
@@ -419,7 +713,8 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
   });
 
   app.patch('/projects/:id/knowledge/:knowledgeId', async (request, reply) => {
-    const identity = requireIdentity(request);
+    const identity = await resolveIdentity(request, dependencies);
+    requireProductOwner(identity);
     const projectId = routeId(request);
     const project = await projectOrNull(dependencies, identity.organisationId, projectId);
     if (!project) return reply.code(404).send({ error: 'Project not found' });

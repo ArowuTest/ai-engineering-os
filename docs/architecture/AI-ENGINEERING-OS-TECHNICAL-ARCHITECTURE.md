@@ -1,14 +1,14 @@
 # AI Product & Engineering Operating System
 ## Technical Architecture & Detailed Module Specification
 
-**Document version:** 1.1
+**Document version:** 1.2
 **Status:** Approved technical baseline for V1 planning
 **Date:** 9 August 2026
 **Parent:** `docs/product/AI-PRODUCT-ENGINEERING-OS-SRS.md`
 
 ## 0. Change Record
 
-Version 1.1 replaces the earlier public-fork assumption with the agreed private-derivative model.
+Version 1.2 retains the private-derivative baseline and adds the approved V1 authentication/collaboration architecture.
 
 - `ArowuTest/ai-engineering-os` is an independent private repository seeded from official ECC.
 - `affaan-m/ECC` is a read-only upstream source of candidate updates.
@@ -249,6 +249,8 @@ Each knowledge record includes:
 
 AI output may propose or infer knowledge but cannot silently convert it to an approved fact.
 
+For V1, AI extraction is **review-first**: extracted requirements, rules, assumptions, risks and decisions are persisted as non-canonical candidates in a review queue. Only an explicit authorised-user acceptance operation may promote a candidate into canonical Product Knowledge; rejection leaves canonical knowledge unchanged.
+
 A Context Builder queries approved/confirmed project knowledge, relevant source material, requirements and decisions for each task. It explicitly excludes unrelated conversation history and irrelevant tool descriptions.
 
 Model switching therefore means rebuilding a task context from canonical state, not replaying an entire previous provider conversation.
@@ -393,3 +395,30 @@ The PostgreSQL layer exposes a `DatabaseUnitOfWork` that creates transaction-sco
 If audit persistence or any later operation fails, PostgreSQL rolls the complete transaction back. The platform must never return an error while silently leaving an unaudited product mutation committed.
 
 This is enforced by integration tests that deliberately reject audit insertion and verify that the associated project does not survive.
+
+## 24. Authentication and Collaboration Architecture
+
+V1 authentication uses **User ID + password only**; email is not required.
+
+New users join through administrator-generated one-time invitation keys. Keys are high entropy, displayed only at creation, stored only as cryptographic hashes, and become permanently unusable after redemption, expiry, cancellation or replacement.
+
+Invitation TTL is organisation-policy driven with a default of **30 minutes**. The invitation stores its absolute expiry timestamp when created.
+
+Access is evaluated through two layers:
+
+- organisation membership: `owner`, `admin`, `member`;
+- project membership: `product_owner`, `contributor`, `engineer`, `reviewer`, `viewer`.
+
+A user may be removed from one project without losing access to another. Account suspension blocks all organisations/projects.
+
+Authentication sessions are opaque random bearer values whose hashes are persisted in PostgreSQL. Protected requests re-check current user/session/membership state so revocation takes effect immediately rather than waiting for session expiry.
+
+The web application will ultimately store the session in an HTTP-only cookie. Temporary development identity headers remain available only behind an explicit local-development flag and are disabled by default elsewhere.
+
+Authentication-related database entities include `users`, `organisation_memberships`, `project_memberships`, `invitations` and `auth_sessions`.
+
+Invitation/account/session/membership mutations and their required audit events must use the same PostgreSQL unit-of-work pattern already used for material Product Studio mutations.
+
+No password, invitation plaintext or session plaintext may be written to audit metadata, application logs or browser-visible route metadata.
+
+The detailed V1 contract is defined in `docs/architecture/AUTHENTICATION-COLLABORATION-V1-DESIGN.md`.

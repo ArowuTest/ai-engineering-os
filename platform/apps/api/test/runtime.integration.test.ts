@@ -45,8 +45,37 @@ describe('API runtime composition', () => {
       );
       expect(organisations.rowCount).toBe(1);
       const migrations = await runtime.pool.query('SELECT name FROM schema_migrations');
-      expect(migrations.rowCount).toBe(2);
+      expect(migrations.rowCount).toBe(3);
     } finally {
       await runtime.close();
     }
-  });});
+  });
+
+  it('creates the first owner only when explicit bootstrap credentials are supplied', async () => {
+    const runtime = createRuntimeApp({ DATABASE_URL: databaseUrl });
+    try {
+      await runtime.pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
+      const environment = {
+        BOOTSTRAP_ORGANISATION_ID: 'org-bootstrap',
+        BOOTSTRAP_ORGANISATION_NAME: 'Bootstrap Organisation',
+        BOOTSTRAP_OWNER_USER_ID: 'Initial.Owner',
+        BOOTSTRAP_OWNER_PASSWORD: 'Bootstrap-owner-2026!',
+      };
+      await prepareRuntimeDatabase(runtime.pool, environment);
+      await prepareRuntimeDatabase(runtime.pool, environment);
+
+      const users = await runtime.pool.query<{ user_id: string; password_hash: string }>(
+        `SELECT user_id, password_hash FROM users WHERE user_id = 'initial.owner'`,
+      );
+      expect(users.rowCount).toBe(1);
+      expect(users.rows[0]?.password_hash).not.toContain('Bootstrap-owner-2026!');
+      const membership = await runtime.pool.query<{ role: string }>(
+        `SELECT role FROM organisation_memberships
+         WHERE organisation_id = 'org-bootstrap' AND user_id = (SELECT id FROM users WHERE user_id = 'initial.owner')`,
+      );
+      expect(membership.rows[0]?.role).toBe('owner');
+    } finally {
+      await runtime.close();
+    }
+  });
+});
