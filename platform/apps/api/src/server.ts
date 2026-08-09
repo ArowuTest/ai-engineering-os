@@ -6,10 +6,10 @@ import {
   ProjectRepository,
   runMigrations,
 } from '@engineering-os/database';
-import { ModelGateway } from '@engineering-os/model-gateway';
 import { buildApp } from './app.js';
+import { createConfiguredModelGateway, type ModelRuntimeEnvironment } from './model-runtime.js';
 
-export interface RuntimeEnvironment {
+export interface RuntimeEnvironment extends ModelRuntimeEnvironment {
   DATABASE_URL?: string;
   PLATFORM_HOST?: string;
   PLATFORM_PORT?: string;
@@ -40,7 +40,7 @@ export function createRuntimeApp(environment: RuntimeEnvironment) {
     knowledge: new KnowledgeRepository(pool),
     conversations: new ConversationRepository(pool),
     unitOfWork: new DatabaseUnitOfWork(pool),
-    modelGateway: new ModelGateway(),
+    modelGateway: createConfiguredModelGateway(environment),
   });
 
   return {

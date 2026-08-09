@@ -127,6 +127,8 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     status: 'ok',
     modelRoutes: dependencies.modelGateway.listRoutes().length,
   }));
+  app.get('/model-routes', async () => dependencies.modelGateway.listRoutes());
+
 
   app.post('/projects', async (request, reply) => {
     const identity = requireIdentity(request);

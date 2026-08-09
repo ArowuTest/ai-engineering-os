@@ -129,4 +129,9 @@ describe('platform API', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json().error).toContain('name');
   });
+  it('exposes safe configured model route metadata', async () => {
+    const response = await app.inject({ method: 'GET', url: '/model-routes' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual([]);
+  });
 });
