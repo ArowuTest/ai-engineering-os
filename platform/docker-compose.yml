@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: engineering_os
+      POSTGRES_PASSWORD: engineering_os
+      POSTGRES_DB: engineering_os_test
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U engineering_os -d engineering_os_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    volumes:
+      - engineering_os_postgres:/var/lib/postgresql/data
+
+volumes:
+  engineering_os_postgres:

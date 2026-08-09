@@ -1,0 +1,13 @@
+{
+  "name": "@engineering-os/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@engineering-os/database": "0.1.0",
+    "@engineering-os/domain": "0.1.0",
+    "@engineering-os/model-gateway": "0.1.0",
+    "fastify": "5.11.3"
+  },
+  "exports": "./src/app.ts"
+}
