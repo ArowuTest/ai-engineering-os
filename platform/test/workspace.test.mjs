@@ -48,4 +48,5 @@ test('top-level verification serialises PostgreSQL integration suites', async ()
   assert.match(pkg.scripts.test, /npm run test:unit.*npm run test:integration/);
   assert.match(pkg.scripts['test:integration'], /--no-file-parallelism/);
   assert.match(pkg.scripts['test:integration'], /--maxWorkers=1/);
+  assert.match(pkg.scripts.typecheck, /@engineering-os\/web/);
 });

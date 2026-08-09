@@ -59,6 +59,10 @@ jobs:
         working-directory: platform
         run: npm run typecheck
 
+      - name: Build Product Studio web application
+        working-directory: platform
+        run: npm run build --workspace @engineering-os/web
+
       - name: Audit platform runtime dependencies
         working-directory: platform
         run: |

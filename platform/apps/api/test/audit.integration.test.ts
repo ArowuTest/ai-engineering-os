@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   AuditRepository,
+  ConversationRepository,
   DatabaseUnitOfWork,
   KnowledgeRepository,
   ProjectRepository,
@@ -15,10 +16,11 @@ import {
 
 const projects = new ProjectRepository(pool);
 const knowledge = new KnowledgeRepository(pool);
+const conversations = new ConversationRepository(pool);
 const audit = new AuditRepository(pool);
 const unitOfWork = new DatabaseUnitOfWork(pool);
 const modelGateway = new ModelGateway();
-const app = buildApp({ projects, knowledge, unitOfWork, modelGateway });
+const app = buildApp({ projects, knowledge, conversations, unitOfWork, modelGateway });
 
 const headers = {
   'x-organisation-id': 'org-001',

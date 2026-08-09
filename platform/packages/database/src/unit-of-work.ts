@@ -1,10 +1,12 @@
 import type { Pool } from 'pg';
 import { AuditRepository } from './audit-repository.js';
+import { ConversationRepository } from './conversation-repository.js';
 import { KnowledgeRepository } from './knowledge-repository.js';
 import { ProjectRepository } from './project-repository.js';
 
 export interface TransactionRepositories {
   projects: ProjectRepository;
+  conversations: ConversationRepository;
   knowledge: KnowledgeRepository;
   audit: AuditRepository;
 }
@@ -18,6 +20,7 @@ export class DatabaseUnitOfWork {
       await client.query('BEGIN');
       const result = await work({
         projects: new ProjectRepository(client),
+        conversations: new ConversationRepository(client),
         knowledge: new KnowledgeRepository(client),
         audit: new AuditRepository(client),
       });

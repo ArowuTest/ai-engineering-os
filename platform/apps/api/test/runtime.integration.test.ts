@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createRuntimeApp, resolveServerConfig } from '../src/server.js';
+import { createRuntimeApp, prepareRuntimeDatabase, resolveServerConfig } from '../src/server.js';
 
 const databaseUrl =
   'postgresql://engineering_os:engineering_os@localhost:55432/engineering_os_test';
@@ -28,4 +28,25 @@ describe('API runtime composition', () => {
       await runtime.close();
     }
   });
-});
+
+  it('prepares runtime migrations and optional development organisation idempotently', async () => {
+    const runtime = createRuntimeApp({ DATABASE_URL: databaseUrl });
+    try {
+      await runtime.pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
+      const environment = {
+        DEV_BOOTSTRAP_ORGANISATION_ID: 'org-001',
+        DEV_BOOTSTRAP_ORGANISATION_NAME: 'Development Organisation',
+      };
+      await prepareRuntimeDatabase(runtime.pool, environment);
+      await prepareRuntimeDatabase(runtime.pool, environment);
+
+      const organisations = await runtime.pool.query<{ id: string }>(
+        'SELECT id FROM organisations WHERE id = $1', ['org-001'],
+      );
+      expect(organisations.rowCount).toBe(1);
+      const migrations = await runtime.pool.query('SELECT name FROM schema_migrations');
+      expect(migrations.rowCount).toBe(2);
+    } finally {
+      await runtime.close();
+    }
+  });});

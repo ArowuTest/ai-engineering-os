@@ -28,3 +28,8 @@ test('routine CI does not upload bulk test artifacts', async () => {
   assert.doesNotMatch(workflow, /actions\/upload-artifact/);
   assert.doesNotMatch(workflow, /path:\s*\|\s*[\s\S]*tests\//);
 });
+
+test('routine CI builds the Product Studio web application', async () => {
+  const workflow = await readWorkflow();
+  assert.match(workflow, /npm run build --workspace @engineering-os\/web/);
+});

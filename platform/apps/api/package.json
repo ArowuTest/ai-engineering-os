@@ -3,11 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/entry.ts",
+    "start": "tsx src/entry.ts"
+  },
   "dependencies": {
     "@engineering-os/database": "0.1.0",
     "@engineering-os/domain": "0.1.0",
     "@engineering-os/model-gateway": "0.1.0",
     "fastify": "5.11.3"
+  },
+  "devDependencies": {
+    "tsx": "4.23.11"
   },
   "exports": "./src/app.ts"
 }

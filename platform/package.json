@@ -11,7 +11,7 @@
     "test": "node --test test/*.test.mjs && npm run test:unit && npm run test:integration",
     "test:unit": "vitest run --exclude '**/*.integration.test.ts'",
     "test:integration": "vitest run .integration.test.ts --maxWorkers=1 --no-file-parallelism",
-    "typecheck": "tsc --noEmit --project tsconfig.base.json"
+    "typecheck": "tsc --noEmit --project tsconfig.base.json && npm run typecheck --workspace @engineering-os/web"
   },
   "devDependencies": {
     "typescript": "^6.0.3",

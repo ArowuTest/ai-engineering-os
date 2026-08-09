@@ -1,16 +1,21 @@
 import {
+  ConversationRepository,
   createDatabasePool,
   DatabaseUnitOfWork,
   KnowledgeRepository,
   ProjectRepository,
+  runMigrations,
 } from '@engineering-os/database';
 import { ModelGateway } from '@engineering-os/model-gateway';
 import { buildApp } from './app.js';
 
-interface RuntimeEnvironment {
+export interface RuntimeEnvironment {
   DATABASE_URL?: string;
   PLATFORM_HOST?: string;
   PLATFORM_PORT?: string;
+  DEV_BOOTSTRAP_ORGANISATION_ID?: string;
+  DEV_BOOTSTRAP_ORGANISATION_NAME?: string;
+  [key: string]: string | undefined;
 }
 
 export interface ServerConfig {
@@ -27,11 +32,13 @@ export function resolveServerConfig(environment: RuntimeEnvironment): ServerConf
   }
   return { host, port };
 }
+
 export function createRuntimeApp(environment: RuntimeEnvironment) {
   const pool = createDatabasePool(environment.DATABASE_URL);
   const app = buildApp({
     projects: new ProjectRepository(pool),
     knowledge: new KnowledgeRepository(pool),
+    conversations: new ConversationRepository(pool),
     unitOfWork: new DatabaseUnitOfWork(pool),
     modelGateway: new ModelGateway(),
   });
@@ -46,10 +53,29 @@ export function createRuntimeApp(environment: RuntimeEnvironment) {
   };
 }
 
+export async function prepareRuntimeDatabase(
+  pool: ReturnType<typeof createDatabasePool>,
+  environment: RuntimeEnvironment,
+): Promise<void> {
+  await runMigrations(pool);
+  const organisationId = environment.DEV_BOOTSTRAP_ORGANISATION_ID?.trim();
+  if (!organisationId) return;
+
+  const organisationName =
+    environment.DEV_BOOTSTRAP_ORGANISATION_NAME?.trim() || 'Development Organisation';
+  await pool.query(
+    `INSERT INTO organisations (id, name)
+     VALUES ($1, $2)
+     ON CONFLICT (id) DO NOTHING`,
+    [organisationId, organisationName],
+  );
+}
+
 export async function startServer(environment: RuntimeEnvironment = process.env) {
   const runtime = createRuntimeApp(environment);
   const config = resolveServerConfig(environment);
   try {
+    await prepareRuntimeDatabase(runtime.pool, environment);
     await runtime.app.listen(config);
     return runtime;
   } catch (error) {
