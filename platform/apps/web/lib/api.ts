@@ -130,3 +130,40 @@ export function reviseKnowledge(
     body: JSON.stringify(input),
   });
 }
+
+export interface ModelRouteSummary {
+  id: string;
+  provider: 'openai' | 'anthropic' | 'google';
+  model: string;
+  executionMode: string;
+  costType: string;
+  available: boolean;
+}
+
+export interface ProductPartnerTurnResult {
+  userMessage: ConversationMessage;
+  assistantMessage: ConversationMessage;
+  execution: {
+    provider: 'openai' | 'anthropic' | 'google';
+    model: string;
+    routeId: string;
+    executionMode: string;
+    costType: string;
+    inputTokens?: number;
+    outputTokens?: number;
+  };
+}
+
+export function listModelRoutes(): Promise<ModelRouteSummary[]> {
+  return apiFetch<ModelRouteSummary[]>('/model-routes');
+}
+
+export function sendProductPartnerTurn(
+  projectId: string,
+  content: string,
+): Promise<ProductPartnerTurnResult> {
+  return apiFetch<ProductPartnerTurnResult>(`/projects/${projectId}/product-partner-turn`, {
+    method: 'POST',
+    body: JSON.stringify({ content }),
+  });
+}

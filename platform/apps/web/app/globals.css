@@ -179,3 +179,24 @@ h3 { font-size: 14px; }
   .studio-knowledge { border-left: 0; border-top: 1px solid var(--line); }
   .message-list { min-height: 420px; }
 }
+
+.provider-notice { display: grid; gap: 10px; }
+.provider-notice strong { display: block; color: #17345f; font-size: 12px; margin-bottom: 3px; }
+.provider-notice p { margin: 0; }
+.provider-live { border-color: #b9e3cf; background: #f1fbf6; color: #276448; }
+.provider-live strong { color: #17513a; }
+.provider-offline { border-color: #f0d5b8; background: #fff8ef; color: #805327; }
+.provider-offline strong { color: #693d16; }
+.provider-status-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.provider-status {
+  display: inline-flex; align-items: center; gap: 5px; border-radius: 999px;
+  border: 1px solid currentColor; padding: 4px 7px; font-size: 9px; line-height: 1.2;
+}
+.provider-status b { font-weight: 700; }
+.provider-status.connected { color: #2f6a4d; background: rgba(255,255,255,.55); }
+.provider-status.disconnected { color: #8d6d50; background: rgba(255,255,255,.48); }
+.composer .button:disabled, .composer .textarea:disabled { opacity: .55; cursor: not-allowed; }
+.manual-note { background: white; border-top: 1px solid var(--line); padding: 0 18px 14px; }
+.manual-note summary { cursor: pointer; color: var(--muted); font-size: 10px; }
+.manual-note-form { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; margin-top: 10px; }
+.manual-note-form .textarea { min-height: 58px; }

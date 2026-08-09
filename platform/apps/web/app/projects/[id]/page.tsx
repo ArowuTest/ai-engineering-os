@@ -4,8 +4,9 @@ import {
   appendMessageAction,
   changePartnerAction,
   reviseKnowledgeStatusAction,
+  sendProductPartnerTurnAction,
 } from '../../actions';
-import { getStudio, type KnowledgeStatus, type ProductPartner } from '../../../lib/api';
+import { getStudio, listModelRoutes, type KnowledgeStatus, type ProductPartner } from '../../../lib/api';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,8 +32,14 @@ function label(value: string): string {
 
 export default async function ProductStudioPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const studio = await getStudio(id);
+  const [studio, modelRoutes] = await Promise.all([getStudio(id), listModelRoutes()]);
   const missingPreview = studio.completeness.missingCategories.slice(0, 5).map(label).join(', ');
+  const availableRoutes = modelRoutes.filter((route) => route.available);
+  const selectedPartner = studio.project.preferredProductPartner;
+  const liveAvailable = selectedPartner === 'auto'
+    ? availableRoutes.length > 0
+    : availableRoutes.some((route) => route.provider === selectedPartner);
+  const selectedPartnerLabel = partnerLabels[selectedPartner];
 
   return (
     <main className="studio-shell">
@@ -69,10 +76,25 @@ export default async function ProductStudioPage({ params }: { params: Promise<{ 
           </form>
         </header>
 
-        <div className="provider-notice">
-          Live provider execution is intentionally not enabled in this build yet. Messages are
-          being stored as durable discovery input; the next integration slice will let the selected
-          Product Partner respond through the model gateway without changing this project state.
+        <div className={`provider-notice ${liveAvailable ? 'provider-live' : 'provider-offline'}`}>
+          <div>
+            <strong>{liveAvailable ? 'Live Product Partner ready' : `${selectedPartnerLabel} is not connected`}</strong>
+            <p>
+              {liveAvailable
+                ? 'Your next message will run through the server-side model gateway. Project history and Product Knowledge remain platform-owned.'
+                : 'Configure the selected provider on the API server or switch Product Partner. You can still save a manual discovery note below.'}
+            </p>
+          </div>
+          <div className="provider-status-row" aria-label="Live provider connections">
+            {(['openai', 'anthropic', 'google'] as const).map((provider) => {
+              const route = availableRoutes.find((candidate) => candidate.provider === provider);
+              return (
+                <span className={`provider-status ${route ? 'connected' : 'disconnected'}`} key={provider}>
+                  {partnerLabels[provider]} <b>{route ? route.model : 'Not configured'}</b>
+                </span>
+              );
+            })}
+          </div>
         </div>
 
         <div className="message-list">
@@ -90,20 +112,44 @@ export default async function ProductStudioPage({ params }: { params: Promise<{ 
               <article className={`message message-${message.role}`} key={message.id}>
                 {message.content}
                 <span className="message-meta">
-                  {message.role}{message.provider ? ` / ${message.provider}` : ''}
+                  {message.role}{message.provider ? ` / ${partnerLabels[message.provider]}` : ''}
                 </span>
               </article>
             ))
           )}
         </div>
 
-        <form action={appendMessageAction} className="composer">
+        <form action={sendProductPartnerTurnAction} className="composer">
           <input name="projectId" type="hidden" value={id} />
           <div className="composer-row">
-            <textarea className="textarea" name="content" required placeholder="Describe the product, answer a discovery question, or add a decision..." />
-            <button className="button" type="submit">Add</button>
+            <textarea
+              className="textarea"
+              disabled={!liveAvailable}
+              name="content"
+              required
+              placeholder={liveAvailable
+                ? `Message ${selectedPartnerLabel} about the product...`
+                : `Connect ${selectedPartnerLabel} or switch Product Partner to send a live turn.`}
+            />
+            <button className="button" disabled={!liveAvailable} type="submit">
+              {liveAvailable ? 'Send' : 'Provider offline'}
+            </button>
           </div>
         </form>
+
+        <details className="manual-note">
+          <summary>Save a manual discovery note instead</summary>
+          <form action={appendMessageAction} className="manual-note-form">
+            <input name="projectId" type="hidden" value={id} />
+            <textarea
+              className="textarea"
+              name="content"
+              required
+              placeholder="Store a note without calling an AI provider..."
+            />
+            <button className="button-small" type="submit">Save note</button>
+          </form>
+        </details>
       </section>
 
       <aside className="studio-knowledge" aria-label="Canonical Product Knowledge">

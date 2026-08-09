@@ -8,6 +8,7 @@ import {
   changeProductPartner,
   createProject,
   reviseKnowledge,
+  sendProductPartnerTurn,
   type KnowledgeStatus,
   type ProductPartner,
 } from '../lib/api';
@@ -30,6 +31,12 @@ export async function createProductAction(formData: FormData) {
   redirect(`/projects/${project.id}`);
 }
 
+export async function sendProductPartnerTurnAction(formData: FormData) {
+  const projectId = required(formData, 'projectId');
+  await sendProductPartnerTurn(projectId, required(formData, 'content'));
+  revalidatePath('/');
+  revalidatePath(`/projects/${projectId}`);
+}
 export async function appendMessageAction(formData: FormData) {
   const projectId = required(formData, 'projectId');
   await appendMessage(projectId, required(formData, 'content'));

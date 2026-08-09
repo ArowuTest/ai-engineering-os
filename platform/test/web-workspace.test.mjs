@@ -29,3 +29,16 @@ test('Product Studio routes and central API client exist', async () => {
     await access(path.join(webRoot, relativePath));
   }
 });
+
+test('Product Studio primary composer uses the live Product Partner route', async () => {
+  const api = await readFile(path.join(webRoot, 'lib/api.ts'), 'utf8');
+  const actions = await readFile(path.join(webRoot, 'app/actions.ts'), 'utf8');
+  const page = await readFile(path.join(webRoot, 'app/projects/[id]/page.tsx'), 'utf8');
+
+  assert.match(api, /\/model-routes/);
+  assert.match(api, /\/product-partner-turn/);
+  assert.match(actions, /sendProductPartnerTurnAction/);
+  assert.match(page, /action=\{sendProductPartnerTurnAction\}/);
+  assert.match(page, /action=\{appendMessageAction\}/);
+  assert.doesNotMatch(page, /Live provider execution is intentionally not enabled/);
+});
