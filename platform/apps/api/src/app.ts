@@ -20,7 +20,8 @@ import {
   type KnowledgeStatus,
   type ProductPartner,
 } from '@engineering-os/domain';
-import type { ModelGateway } from '@engineering-os/model-gateway';
+import { NoEligibleRouteError, ProviderExecutionError, type ModelGateway } from '@engineering-os/model-gateway';
+import { buildProductPartnerRequest } from './product-partner-context.js';
 
 export interface AppDependencies {
   projects: ProjectRepository;
@@ -119,6 +120,12 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof DomainValidationError) {
       return reply.code(400).send({ error: error.message, field: error.field });
+    }
+    if (error instanceof NoEligibleRouteError) {
+      return reply.code(503).send({ error: 'No live Product Partner is configured' });
+    }
+    if (error instanceof ProviderExecutionError) {
+      return reply.code(502).send({ error: 'Live Product Partner execution failed' });
     }
     return reply.code(500).send({ error: 'Internal server error' });
   });
@@ -234,6 +241,108 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     return reply.send(changed);
   });
 
+  app.post('/projects/:id/product-partner-turn', async (request, reply) => {
+    const identity = requireIdentity(request);
+    const projectId = routeId(request);
+    const project = await projectOrNull(dependencies, identity.organisationId, projectId);
+    if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+    const conversation = await dependencies.conversations.getByProject(
+      identity.organisationId,
+      projectId,
+    );
+    if (!conversation) {
+      return reply.code(409).send({ error: 'Product discovery conversation not initialised' });
+    }
+
+    const history = await dependencies.conversations.listMessages(
+      identity.organisationId,
+      projectId,
+      conversation.id,
+    );
+    const records = await dependencies.knowledge.listByProject(identity.organisationId, projectId);
+    const userMessage = createConversationMessage({
+      organisationId: identity.organisationId,
+      projectId,
+      conversationId: conversation.id,
+      role: 'user',
+      content: stringField(bodyObject(request.body), 'content'),
+      createdBy: identity.userId,
+    });
+
+    const modelResponse = await dependencies.modelGateway.execute(
+      buildProductPartnerRequest({
+        project,
+        knowledge: records,
+        messages: history,
+        newUserContent: userMessage.content,
+      }),
+    );
+    const assistantContent = modelResponse.content.trim();
+    if (!assistantContent) throw new ProviderExecutionError(modelResponse.provider);
+
+    const agentId = `product-partner:${modelResponse.provider}`;
+    const assistantMessage = createConversationMessage({
+      organisationId: identity.organisationId,
+      projectId,
+      conversationId: conversation.id,
+      role: 'assistant',
+      content: assistantContent,
+      provider: modelResponse.provider,
+      createdBy: agentId,
+    });
+
+    const userEvent = createAuditEvent({
+      organisationId: identity.organisationId,
+      projectId,
+      eventType: 'product_partner.user_message.created',
+      actorType: 'user',
+      actorId: identity.userId,
+      subjectType: 'conversation_message',
+      subjectId: userMessage.id,
+      metadata: { conversationId: conversation.id },
+    });
+    const assistantEvent = createAuditEvent({
+      organisationId: identity.organisationId,
+      projectId,
+      eventType: 'product_partner.assistant_message.created',
+      actorType: 'agent',
+      actorId: agentId,
+      subjectType: 'conversation_message',
+      subjectId: assistantMessage.id,
+      metadata: {
+        conversationId: conversation.id,
+        provider: modelResponse.provider,
+        model: modelResponse.model,
+        routeId: modelResponse.routeId,
+        executionMode: modelResponse.executionMode,
+        costType: modelResponse.costType,
+        usage: modelResponse.usage ?? null,
+      },
+    });
+
+    await dependencies.unitOfWork.run(async ({ conversations, audit }) => {
+      await conversations.appendMessage(userMessage);
+      await audit.append(userEvent);
+      await conversations.appendMessage(assistantMessage);
+      await audit.append(assistantEvent);
+    });
+
+    const execution: Record<string, unknown> = {
+      provider: modelResponse.provider,
+      model: modelResponse.model,
+      routeId: modelResponse.routeId,
+      executionMode: modelResponse.executionMode,
+      costType: modelResponse.costType,
+    };
+    if (modelResponse.usage?.inputTokens !== undefined) {
+      execution.inputTokens = modelResponse.usage.inputTokens;
+    }
+    if (modelResponse.usage?.outputTokens !== undefined) {
+      execution.outputTokens = modelResponse.usage.outputTokens;
+    }
+    return reply.code(201).send({ userMessage, assistantMessage, execution });
+  });
   app.post('/projects/:id/messages', async (request, reply) => {
     const identity = requireIdentity(request);
     const projectId = routeId(request);
