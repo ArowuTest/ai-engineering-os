@@ -420,6 +420,9 @@ Material facts and decisions from conversations shall be extracted as structured
 ## PS-004A Review-first AI extraction
 AI-extracted requirements, business rules, assumptions, risks, decisions and other product facts shall enter a candidate review queue first. AI extraction alone shall **not** create or modify canonical Product Knowledge. A candidate becomes canonical only after an authorised user explicitly accepts it; rejected candidates remain non-canonical review evidence.
 
+## PS-004B Automatic extraction trigger
+After every successful live Product Partner turn, the platform shall automatically attempt to extract structured Product Knowledge candidates. The normal execution path should obtain the conversational answer and candidate set within the same provider operation where the selected provider/model supports the approved structured-output contract. Extraction failure shall not silently promote knowledge or erase an otherwise successful conversation turn.
+
 ## PS-005 Knowledge status
 Knowledge records shall support at least Proposed, Inferred, Confirmed, Approved, Superseded and Rejected states.
 
