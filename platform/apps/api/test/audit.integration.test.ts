@@ -84,14 +84,26 @@ describe('platform API audit trail', () => {
       FOR EACH ROW EXECUTE FUNCTION reject_project_created_audit();
     `);
 
-    const response = await app.inject({
-      method: 'POST',
-      url: '/projects',
-      headers,
-      payload: { name: 'Must Roll Back' },
-    });
-    expect(response.statusCode).toBe(500);
-    const stored = await pool.query('SELECT id FROM projects WHERE name = $1', ['Must Roll Back']);
-    expect(stored.rowCount).toBe(0);
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/projects',
+        headers,
+        payload: { name: 'Must Roll Back' },
+      });
+      expect(response.statusCode).toBe(500);
+      const stored = await pool.query('SELECT id FROM projects WHERE name = $1', ['Must Roll Back']);
+      expect(stored.rowCount).toBe(0);
+    } finally {
+      await pool.query(`
+        DROP TRIGGER IF EXISTS reject_project_created_audit_trigger ON audit_events;
+        DROP FUNCTION IF EXISTS reject_project_created_audit();
+      `);
+    }
+
+    const leakedTrigger = await pool.query(
+      "SELECT 1 FROM pg_trigger WHERE tgname = 'reject_project_created_audit_trigger'",
+    );
+    expect(leakedTrigger.rowCount).toBe(0);
   });
 });

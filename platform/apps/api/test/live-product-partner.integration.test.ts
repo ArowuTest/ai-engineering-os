@@ -239,14 +239,26 @@ describe('live Product Partner turn', () => {
       FOR EACH ROW EXECUTE FUNCTION reject_assistant_live_audit();
     `);
 
-    const response = await app.inject({
-      method: 'POST', url: `/projects/${project.id}/product-partner-turn`, headers,
-      payload: { content: 'This transaction must roll back.' },
-    });
-    expect(response.statusCode).toBe(500);
-    const conversation = await conversations.getByProject('org-001', project.id);
-    expect(await conversations.listMessages('org-001', project.id, conversation!.id)).toEqual([]);
-    expect((await audit.listByProject('org-001', project.id)).map((event) => event.eventType)).toEqual(['project.created']);
-    await app.close();
+    try {
+      const response = await app.inject({
+        method: 'POST', url: `/projects/${project.id}/product-partner-turn`, headers,
+        payload: { content: 'This transaction must roll back.' },
+      });
+      expect(response.statusCode).toBe(500);
+      const conversation = await conversations.getByProject('org-001', project.id);
+      expect(await conversations.listMessages('org-001', project.id, conversation!.id)).toEqual([]);
+      expect((await audit.listByProject('org-001', project.id)).map((event) => event.eventType)).toEqual(['project.created']);
+    } finally {
+      await pool.query(`
+        DROP TRIGGER IF EXISTS reject_assistant_live_audit_trigger ON audit_events;
+        DROP FUNCTION IF EXISTS reject_assistant_live_audit();
+      `);
+      await app.close();
+    }
+
+    const leakedTrigger = await pool.query(
+      "SELECT 1 FROM pg_trigger WHERE tgname = 'reject_assistant_live_audit_trigger'",
+    );
+    expect(leakedTrigger.rowCount).toBe(0);
   });
 });
