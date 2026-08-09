@@ -1,5 +1,7 @@
 # AI Engineering OS
 
+[![AI Engineering OS CI](https://github.com/ArowuTest/ai-engineering-os/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ArowuTest/ai-engineering-os/actions/workflows/ci.yml)
+
 **An AI-powered software company in a box.**
 
 AI Engineering OS is a web-based product and engineering operating system that takes a software product from idea through discovery, persistent requirements, engineering, independent review, QA and deployment.
