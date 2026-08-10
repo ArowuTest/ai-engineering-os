@@ -14,7 +14,7 @@
     "typecheck": "tsc --noEmit --project tsconfig.base.json && npm run typecheck --workspace @engineering-os/web"
   },
   "devDependencies": {
-    "typescript": "^6.0.3",
-    "vitest": "^3.2.4"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   }
 }
