@@ -29,3 +29,10 @@ For each candidate update:
 9. update this file only after the approved update is merged.
 
 New upstream skills or MCP definitions do not automatically become trusted or receive project credentials.
+## Branch Tracking
+
+- `main` is the AI Engineering OS source of truth.
+- `ecc-seed` is the frozen original private-repository ECC seed and must not receive product development commits.
+- local remote `upstream` points to `affaan-m/ECC` and has push disabled; it is fetch-only.
+- `ecc-upstream` mirrors the current upstream ECC `main` for comparison and evaluation only.
+- Moving `ecc-upstream` does **not** change the accepted ECC baseline above; accepted upstream changes still require the review policy below.
