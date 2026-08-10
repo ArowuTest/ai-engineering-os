@@ -177,16 +177,16 @@ describe('AuthService', () => {
       now: new Date('2026-08-09T12:06:00Z'),
     });
 
-    expect(await auth.authorizeProject(login.token, 'org-001', projectOne)).toMatchObject({ projectRole: 'contributor' });
-    expect(await auth.authorizeProject(login.token, 'org-001', projectTwo)).toMatchObject({ projectRole: 'viewer' });
+    expect(await auth.authorizeProject(login.token, 'org-001', projectOne, new Date('2026-08-09T12:06:30Z'))).toMatchObject({ projectRole: 'contributor' });
+    expect(await auth.authorizeProject(login.token, 'org-001', projectTwo, new Date('2026-08-09T12:06:30Z'))).toMatchObject({ projectRole: 'viewer' });
 
     await auth.revokeProjectAccess({
       organisationId: 'org-001', projectId: projectOne,
       actorUserId: owner.id, targetUserId: member.id,
       now: new Date('2026-08-09T12:07:00Z'),
     });
-    expect(await auth.authorizeProject(login.token, 'org-001', projectOne)).toBeNull();
-    expect(await auth.authorizeProject(login.token, 'org-001', projectTwo)).toMatchObject({ projectRole: 'viewer' });
+    expect(await auth.authorizeProject(login.token, 'org-001', projectOne, new Date('2026-08-09T12:07:30Z'))).toBeNull();
+    expect(await auth.authorizeProject(login.token, 'org-001', projectTwo, new Date('2026-08-09T12:07:30Z'))).toMatchObject({ projectRole: 'viewer' });
   });
 
   it('grants and changes project access without changing organisation membership', async () => {
@@ -232,14 +232,14 @@ describe('AuthService', () => {
       userId: 'suspend.me', password: 'Suspend-password-2026!',
       now: new Date('2026-08-09T12:06:00Z'),
     });
-    expect(await auth.resolveSession(login.token)).not.toBeNull();
+    expect(await auth.resolveSession(login.token, new Date('2026-08-09T12:06:30Z'))).not.toBeNull();
 
     await auth.setUserStatus({
       organisationId: 'org-001', actorUserId: owner.id,
       targetUserId: member.id, status: 'suspended',
       now: new Date('2026-08-09T12:07:00Z'),
     });
-    expect(await auth.resolveSession(login.token)).toBeNull();
+    expect(await auth.resolveSession(login.token, new Date('2026-08-09T12:07:30Z'))).toBeNull();
     await expectAuthError(auth.login({
       userId: 'suspend.me', password: 'Suspend-password-2026!',
       now: new Date('2026-08-09T12:08:00Z'),
