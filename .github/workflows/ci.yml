@@ -110,7 +110,7 @@ jobs:
         run: node scripts/ci/validate-workflow-security.js
 
       - name: Validate catalog
-        run: node scripts/ci/catalog.js --text
+        run: node scripts/ci/validate-derivative-ecc-catalog.js --text
 
       - name: Validate command registry
         run: npm run command-registry:check

@@ -128,6 +128,8 @@ ecc2/
 
 AI Engineering OS does not blindly merge upstream ECC changes. Upstream changes are fetched, classified, security/compatibility reviewed, regression tested and selectively adopted. See `UPSTREAM.md` and `docs/architecture/ECC-BASELINE-ASSESSMENT.md`.
 
+The original ECC README is preserved at `docs/upstream/ECC-README.md` so ECC catalog compatibility can be verified without turning the product homepage back into an ECC landing page.
+
 ## Branch model
 
 ```text

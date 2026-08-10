@@ -33,3 +33,10 @@ test('routine CI builds the Product Studio web application', async () => {
   const workflow = await readWorkflow();
   assert.match(workflow, /npm run build --workspace @engineering-os\/web/);
 });
+
+
+test('ECC compatibility validates the preserved upstream README, not the product README', async () => {
+  const workflow = await readWorkflow();
+  assert.match(workflow, /node scripts\/ci\/validate-derivative-ecc-catalog\.js --text/);
+  assert.doesNotMatch(workflow, /node scripts\/ci\/catalog\.js --text/);
+});
