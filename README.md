@@ -136,6 +136,7 @@ The original ECC README is preserved at `docs/upstream/ECC-README.md` so ECC cat
 main                         AI Engineering OS source of truth
 ecc-seed                     frozen original imported ECC seed
 ecc-upstream                 upstream ECC tracking/evaluation when refreshed
+dependabot/*                 temporary grouped dependency-update branches (max two routine groups)
 feature/* or chore/*         short-lived work; delete after merge
 release/*                    only when a formal release branch is needed
 ```
