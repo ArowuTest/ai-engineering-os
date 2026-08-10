@@ -12,9 +12,11 @@ async function readWorkflow() {
   return readFile(workflowPath, 'utf8');
 }
 
-test('routine CI runs for platform branches', async () => {
+test('routine CI runs for product development branches', async () => {
   const workflow = await readWorkflow();
-  assert.match(workflow, /platform-\*/);
+  assert.match(workflow, /feature\/\*\*/);
+  assert.match(workflow, /chore\/\*\*/);
+  assert.match(workflow, /release\/\*\*/);
 });
 
 test('routine CI does not use the inherited cross-platform package-manager matrix', async () => {

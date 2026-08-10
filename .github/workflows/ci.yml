@@ -2,7 +2,7 @@ name: Engineering OS CI
 
 on:
   push:
-    branches: [main, 'platform-*', 'release/**']
+    branches: [main, 'feature/**', 'chore/**', 'release/**']
   pull_request:
     branches: [main]
   workflow_dispatch:
