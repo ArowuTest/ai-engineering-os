@@ -776,8 +776,8 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     const params = request.params as { runId?: unknown };
     const runId = typeof params.runId === 'string' ? params.runId : '';
     const canonical = await dependencies.knowledge.listByProject(identity.organisationId, projectId);
-    // Build a candidates repository. Prefer explicit dependency; fall back to a UoW-scoped instance.
-    // For getRunById + insertRetryAttempt we use the dependency-provided candidates repo (or create one via UoW-adapter).
+    // The retry service reads the original run outside its write UoW. Prefer an explicit
+    // top-level dependency; otherwise fall back to a UoW-scoped read adapter.
     const candidatesRepo = dependencies.knowledgeCandidates
       ?? new UoWScopedKnowledgeCandidatesReadonly(dependencies.unitOfWork);
     try {

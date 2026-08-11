@@ -302,79 +302,43 @@ export class KnowledgeCandidateRepository {
     return row ? mapRun(row) : null;
   }
 
-  async insertProvenance(input: {
-    id: string;
-    organisationId: string;
-    projectId: string;
-    knowledgeId: string;
-    revision: number;
-    candidateId: string;
-    extractionRunId: string;
-    createdAt: Date;
-  }): Promise<void> {
-    await this.database.query(
-      `INSERT INTO product_knowledge_provenance
-         (id, organisation_id, project_id, knowledge_id, revision,
-          candidate_id, extraction_run_id, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [
-        input.id,
-        input.organisationId,
-        input.projectId,
-        input.knowledgeId,
-        input.revision,
-        input.candidateId,
-        input.extractionRunId,
-        input.createdAt,
-      ],
-    );
-  }
-
-  async hasActiveRetryAttempt(
+  // Acquires a transaction-scoped advisory lock keyed to (organisationId, projectId, originalRunId)
+  // to serialize retry writes. The lock is released automatically at COMMIT/ROLLBACK, so callers
+  // must invoke this inside a UoW transaction.
+  async acquireRetryAdvisoryLock(
     organisationId: string,
     projectId: string,
     originalRunId: string,
+  ): Promise<void> {
+    await this.database.query(
+      `SELECT pg_advisory_xact_lock(
+         hashtextextended('knowledge-extraction-retry:' || $1 || ':' || $2 || ':' || $3, 0)
+       )`,
+      [organisationId, projectId, originalRunId],
+    );
+  }
+
+  // Returns true iff a knowledge_extraction_run.retry_completed audit event for the given
+  // original run committed after `since`. Used to detect that an originally-concurrent retry
+  // won the write race while this request was still in flight.
+  async hasRetryCompletedSince(
+    organisationId: string,
+    projectId: string,
+    originalRunId: string,
+    since: Date,
   ): Promise<boolean> {
     const result = await this.database.query<{ exists: number }>(
       `SELECT 1 AS exists
-       FROM knowledge_extraction_retry_attempts a
-       JOIN knowledge_extraction_runs r
-         ON r.id = a.retry_run_id
-        AND r.organisation_id = a.organisation_id
-        AND r.project_id = a.project_id
-       WHERE a.organisation_id = $1 AND a.project_id = $2
-         AND a.original_run_id = $3
-         AND r.status = 'received'
-       LIMIT 1`,
-      [organisationId, projectId, originalRunId],
+         FROM audit_events
+        WHERE organisation_id = $1
+          AND project_id = $2
+          AND event_type = 'knowledge_extraction_run.retry_completed'
+          AND metadata ->> 'originalRunId' = $3
+          AND occurred_at > $4
+        LIMIT 1`,
+      [organisationId, projectId, originalRunId, since],
     );
     return result.rowCount === 1;
-  }
-
-  async insertRetryAttempt(input: {
-    id: string;
-    organisationId: string;
-    projectId: string;
-    originalRunId: string;
-    retryRunId: string;
-    requestedBy: string;
-    requestedAt: Date;
-  }): Promise<void> {
-    await this.database.query(
-      `INSERT INTO knowledge_extraction_retry_attempts
-         (id, organisation_id, project_id, original_run_id, retry_run_id,
-          requested_by, requested_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [
-        input.id,
-        input.organisationId,
-        input.projectId,
-        input.originalRunId,
-        input.retryRunId,
-        input.requestedBy,
-        input.requestedAt,
-      ],
-    );
   }
 
   async rejectCandidateDecision(

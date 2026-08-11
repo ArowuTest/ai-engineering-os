@@ -261,23 +261,42 @@ describe('knowledge candidate review API', () => {
         basis: 'user_stated',
       });
 
-      // Provenance row exists.
-      const prov = await pool.query(
-        `SELECT candidate_id, extraction_run_id, knowledge_id, revision
-           FROM product_knowledge_provenance
-          WHERE knowledge_id = $1`,
-        [acceptBody.knowledge.id],
+      // Explicit provenance is preserved via existing tables + append-only audit:
+      //   - candidate.accepted_knowledge_id → canonical knowledge id
+      //   - candidate.extraction_run_id     → source extraction run id
+      //   - product_knowledge.created audit metadata carries {candidateId, extractionRunId}
+      //   - knowledge_candidate.accepted audit metadata carries {acceptedKnowledgeId, extractionRunId}
+      // All rows are tenant-scoped by (organisation_id, project_id) constraints in migration 005.
+      const candRow = await pool.query(
+        `SELECT accepted_knowledge_id, extraction_run_id
+           FROM knowledge_candidates
+          WHERE organisation_id = $1 AND project_id = $2 AND id = $3`,
+        ['org-001', projectId, candidateId],
       );
-      expect(prov.rowCount).toBe(1);
-      expect(prov.rows[0].candidate_id).toBe(candidateId);
-      expect(prov.rows[0].revision).toBe(1);
-      expect(prov.rows[0].extraction_run_id).toBe(pending[0]!.extractionRunId);
+      expect(candRow.rows[0].accepted_knowledge_id).toBe(acceptBody.knowledge.id);
+      expect(candRow.rows[0].extraction_run_id).toBe(pending[0]!.extractionRunId);
 
-      // Audit events include acceptance + product_knowledge.created.
+      // Audit events include acceptance + product_knowledge.created with full provenance metadata.
       const events = await audit.listByProject('org-001', projectId);
       const types = events.map((e) => e.eventType);
       expect(types).toContain('knowledge_candidate.accepted');
       expect(types).toContain('product_knowledge.created');
+      const acceptedEvent = events.find((e) => e.eventType === 'knowledge_candidate.accepted')!;
+      const acceptedMeta = acceptedEvent.metadata as {
+        acceptedKnowledgeId?: string;
+        extractionRunId?: string;
+      };
+      expect(acceptedMeta.acceptedKnowledgeId).toBe(acceptBody.knowledge.id);
+      expect(acceptedMeta.extractionRunId).toBe(pending[0]!.extractionRunId);
+      const createdEvent = events.find((e) => e.eventType === 'product_knowledge.created')!;
+      const createdMeta = createdEvent.metadata as {
+        candidateId?: string;
+        extractionRunId?: string;
+        revision?: number;
+      };
+      expect(createdMeta.candidateId).toBe(candidateId);
+      expect(createdMeta.extractionRunId).toBe(pending[0]!.extractionRunId);
+      expect(createdMeta.revision).toBe(1);
 
       // Repeat accept -> 409.
       const repeat = await app.inject({
@@ -347,10 +366,14 @@ describe('knowledge candidate review API', () => {
       const stillPending = await candidatesRepo.listByProject('org-001', projectId, 'pending');
       expect(stillPending).toHaveLength(1);
       expect(stillPending[0]!.id).toBe(candidateId);
+      expect(stillPending[0]!.acceptedKnowledgeId).toBeUndefined();
       const canonical = await knowledgeRepo.listByProject('org-001', projectId);
       expect(canonical).toEqual([]);
-      const prov = await pool.query(`SELECT 1 FROM product_knowledge_provenance`);
-      expect(prov.rowCount).toBe(0);
+      // No acceptance-side audit rows persisted (transaction fully rolled back).
+      const events = await audit.listByProject('org-001', projectId);
+      const types = events.map((e) => e.eventType);
+      expect(types).not.toContain('knowledge_candidate.accepted');
+      expect(types).not.toContain('product_knowledge.created');
     } finally {
       await app.close();
     }
@@ -508,15 +531,22 @@ describe('knowledge candidate review API', () => {
       expect(schema.required).toEqual(['candidates']);
       expect(Object.keys(schema.properties ?? {})).toEqual(['candidates']);
 
-      // Retry attempt row.
-      const attempts = await pool.query(
-        `SELECT original_run_id, retry_run_id, requested_by
-           FROM knowledge_extraction_retry_attempts
-          WHERE original_run_id = $1`,
-        [failedRunId!],
+      // Retry provenance is preserved via the retry_completed audit metadata linking
+      // originalRunId → retryRunId, plus the retry run row itself (existing migration-005 schema).
+      const events = await audit.listByProject('org-001', projectId!);
+      const completedEvent = events.find(
+        (e) => e.eventType === 'knowledge_extraction_run.retry_completed'
+          && (e.metadata as { originalRunId?: string }).originalRunId === failedRunId!,
       );
-      expect(attempts.rowCount).toBe(1);
-      expect(attempts.rows[0].retry_run_id).toBe(rb.retryRunId);
+      expect(completedEvent).toBeDefined();
+      expect(completedEvent!.subjectId).toBe(rb.retryRunId);
+      const completedMeta = completedEvent!.metadata as {
+        originalRunId?: string;
+        retryRunId?: string;
+        requestedBy?: string;
+      };
+      expect(completedMeta.originalRunId).toBe(failedRunId!);
+      expect(completedMeta.retryRunId).toBe(rb.retryRunId);
 
       // New extraction run has response_contract_version candidate_only_v1.
       const runRow = await pool.query(
@@ -536,8 +566,7 @@ describe('knowledge candidate review API', () => {
       expect(runRow.rows[0].source_user_message_id).toBe(originalRow.rows[0].source_user_message_id);
       expect(runRow.rows[0].source_assistant_message_id).toBe(originalRow.rows[0].source_assistant_message_id);
 
-      // Audit events.
-      const events = await audit.listByProject('org-001', projectId!);
+      // Audit events include both retry_requested (preflight+attempt phases) and retry_completed.
       const types = events.map((e) => e.eventType);
       expect(types).toContain('knowledge_extraction_run.retry_requested');
       expect(types).toContain('knowledge_extraction_run.retry_completed');
@@ -857,11 +886,112 @@ describe('knowledge candidate review API', () => {
     expect(successes).toHaveLength(1);
     expect(conflicts).toHaveLength(1);
 
-    const attempts = await pool.query(
-      `SELECT retry_run_id FROM knowledge_extraction_retry_attempts WHERE original_run_id = $1`,
-      [failedRunId!],
+    // Exactly one retry run row must have been persisted (existing migration-005 schema),
+    // and exactly one retry_completed audit event whose metadata links to the original run.
+    const retryRuns = await pool.query(
+      `SELECT id, status FROM knowledge_extraction_runs
+        WHERE organisation_id = $1 AND project_id = $2
+          AND response_contract_version = 'candidate_only_v1'`,
+      ['org-001', projectId!],
     );
-    expect(attempts.rowCount).toBe(1);
+    expect(retryRuns.rowCount).toBe(1);
+    expect(retryRuns.rows[0].status).toBe('succeeded');
+    const events = await audit.listByProject('org-001', projectId!);
+    const completed = events.filter(
+      (e) => e.eventType === 'knowledge_extraction_run.retry_completed'
+        && (e.metadata as { originalRunId?: string }).originalRunId === failedRunId!,
+    );
+    expect(completed).toHaveLength(1);
+  });
+
+  it('allows a genuinely later sequential retry of the same failed original run', async () => {
+    await bootstrapOwner();
+
+    const primary = new ModelGateway();
+    primary.register(adapter('anthropic', async () => ({
+      content: envelope('Ans.', [
+        { category: 'not_a_real_category', title: 'X', content: 'y', basis: 'user_stated' },
+      ]),
+    })));
+    const { app: primaryApp } = makeAuthApp(primary);
+    let projectId: string;
+    let failedRunId: string;
+    try {
+      const owner = await login(primaryApp, 'platform.owner', 'Owner-password-2026!');
+      projectId = await createProjectViaOwner(primaryApp, owner.token);
+      const turn = await primaryApp.inject({
+        method: 'POST', url: `/projects/${projectId}/product-partner-turn`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+        payload: { content: 'sequential retry probe.' },
+      });
+      failedRunId = turn.json().extraction.runId;
+    } finally {
+      await primaryApp.close();
+    }
+
+    // First retry: succeeded and fully complete before the second one is submitted.
+    const gwFirst = new ModelGateway();
+    gwFirst.register(adapter('anthropic', async () => ({
+      content: candidateOnly([
+        { category: 'objectives', title: 'Seq target A', content: 'First sequential retry candidate.', basis: 'assistant_recommended' },
+      ]),
+    })));
+    const { app: firstApp } = makeAuthApp(gwFirst);
+    let firstRetryRunId: string;
+    try {
+      const owner = await login(firstApp, 'platform.owner', 'Owner-password-2026!');
+      const r1 = await firstApp.inject({
+        method: 'POST', url: `/projects/${projectId!}/extraction-runs/${failedRunId!}/retry`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+        payload: {},
+      });
+      expect(r1.statusCode).toBe(201);
+      const rb1 = r1.json() as { status: string; retryRunId: string };
+      expect(rb1.status).toBe('succeeded');
+      firstRetryRunId = rb1.retryRunId;
+    } finally {
+      await firstApp.close();
+    }
+
+    // Second retry begins strictly after the first has completed.
+    const gwSecond = new ModelGateway();
+    gwSecond.register(adapter('anthropic', async () => ({
+      content: candidateOnly([
+        { category: 'risks', title: 'Seq risk B', content: 'Second sequential retry candidate.', basis: 'assistant_inferred' },
+      ]),
+    })));
+    const { app: secondApp } = makeAuthApp(gwSecond);
+    try {
+      const owner = await login(secondApp, 'platform.owner', 'Owner-password-2026!');
+      const r2 = await secondApp.inject({
+        method: 'POST', url: `/projects/${projectId!}/extraction-runs/${failedRunId!}/retry`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+        payload: {},
+      });
+      expect(r2.statusCode).toBe(201);
+      const rb2 = r2.json() as { status: string; retryRunId: string };
+      expect(rb2.status).toBe('succeeded');
+      expect(rb2.retryRunId).not.toBe(firstRetryRunId!);
+    } finally {
+      await secondApp.close();
+    }
+
+    // Two retry runs must be persisted (existing schema), and two retry_completed audits linked to the original.
+    const retryRuns = await pool.query(
+      `SELECT id, status FROM knowledge_extraction_runs
+        WHERE organisation_id = $1 AND project_id = $2
+          AND response_contract_version = 'candidate_only_v1'
+        ORDER BY created_at ASC`,
+      ['org-001', projectId!],
+    );
+    expect(retryRuns.rowCount).toBe(2);
+    expect(retryRuns.rows.every((r) => r.status === 'succeeded')).toBe(true);
+    const events = await audit.listByProject('org-001', projectId!);
+    const completed = events.filter(
+      (e) => e.eventType === 'knowledge_extraction_run.retry_completed'
+        && (e.metadata as { originalRunId?: string }).originalRunId === failedRunId!,
+    );
+    expect(completed).toHaveLength(2);
   });
 
   it('retry suppresses a candidate that matches an existing pending candidate by shared fingerprint', async () => {

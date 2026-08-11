@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import {
   createAuditEvent,
   createKnowledgeExtractionRun,
@@ -103,17 +102,10 @@ export async function acceptCandidate(
 
     await knowledge.create(knowledgeRecord);
 
-    await knowledgeCandidates.insertProvenance({
-      id: randomUUID(),
-      organisationId: input.organisationId,
-      projectId: input.projectId,
-      knowledgeId: knowledgeRecord.id,
-      revision: knowledgeRecord.revision,
-      candidateId: locked.id,
-      extractionRunId: locked.extractionRunId,
-      createdAt: now,
-    });
-
+    // Explicit provenance is preserved via existing migration-005 state + append-only audit:
+    //   - candidate.accepted_knowledge_id (set below) links the candidate to canonical revision 1
+    //   - candidate.extraction_run_id already links to the source extraction run (immutable trigger)
+    //   - The audits below carry the full three-way linkage.
     await knowledgeCandidates.acceptCandidateDecision(
       input.organisationId, input.projectId, input.candidateId,
       input.reviewerId, now, knowledgeRecord.id,
@@ -146,6 +138,7 @@ export async function acceptCandidate(
         status: knowledgeRecord.status,
         source: knowledgeRecord.source,
         candidateId: locked.id,
+        extractionRunId: locked.extractionRunId,
       },
     }));
 
@@ -210,7 +203,11 @@ export async function retryExtractionRun(
   unitOfWork: DatabaseUnitOfWork,
   input: RetryExtractionRunInput,
 ): Promise<RetryExtractionRunResult> {
-  // Load and pre-validate the original run outside any UoW.
+  // Per-request timestamp captured before any external work. Used to gate concurrent retries:
+  // a `retry_completed` audit that committed AFTER `requestedAt` proves an originally-concurrent
+  // request won the write race while this request was still in flight → return 409.
+  const requestedAt = new Date();
+
   const original = await input.candidates.getRunById(
     input.organisationId, input.projectId, input.runId,
   );
@@ -228,7 +225,7 @@ export async function retryExtractionRun(
     throw new KnowledgeCandidateServiceError(404, 'source messages not found');
   }
 
-  // Emit a preflight retry_requested audit before any external work so retries always leave a trace.
+  // Preflight audit: emit BEFORE the provider call so a provider throw still leaves a trace.
   await unitOfWork.run(async ({ audit }) => {
     await audit.append(createAuditEvent({
       organisationId: input.organisationId,
@@ -241,6 +238,7 @@ export async function retryExtractionRun(
       metadata: {
         originalRunId: original.id,
         phase: 'preflight',
+        requestedAt: requestedAt.toISOString(),
         responseContractVersion: RETRY_RESPONSE_CONTRACT_VERSION,
       },
     }));
@@ -254,6 +252,7 @@ export async function retryExtractionRun(
     taskId: `candidate-only-retry:${input.projectId}:${original.id}`,
   });
 
+  // NOTE: no DB transaction is held across this network call.
   let response;
   try {
     response = await input.modelGateway.execute(request);
@@ -267,7 +266,12 @@ export async function retryExtractionRun(
       input.projectId,
       original.id,
       input.requestedBy,
-      { originalRunId: original.id, failureCode, phase: 'preflight' },
+      {
+        originalRunId: original.id,
+        failureCode,
+        phase: 'preflight',
+        requestedAt: requestedAt.toISOString(),
+      },
     );
     throw error;
   }
@@ -286,47 +290,6 @@ export async function retryExtractionRun(
 
   const agentId = `product-partner:${response.provider}`;
 
-  // Serialize concurrent retries: lock the original run and reject if an in-flight retry attempt exists.
-  await unitOfWork.run(async ({ knowledgeCandidates, audit }) => {
-    const locked = await knowledgeCandidates.getRunForUpdate(
-      input.organisationId, input.projectId, original.id,
-    );
-    if (!locked) throw new KnowledgeCandidateServiceError(404, 'extraction run not found');
-    if (locked.status !== 'failed') {
-      throw new KnowledgeCandidateServiceError(409, 'extraction run is not failed');
-    }
-    const active = await knowledgeCandidates.hasActiveRetryAttempt(
-      input.organisationId, input.projectId, original.id,
-    );
-    if (active) {
-      throw new KnowledgeCandidateServiceError(409, 'a retry attempt is already in progress');
-    }
-    await knowledgeCandidates.createRun(retryRun);
-    await knowledgeCandidates.insertRetryAttempt({
-      id: randomUUID(),
-      organisationId: input.organisationId,
-      projectId: input.projectId,
-      originalRunId: original.id,
-      retryRunId: retryRun.id,
-      requestedBy: input.requestedBy,
-      requestedAt: new Date(),
-    });
-    await audit.append(createAuditEvent({
-      organisationId: input.organisationId,
-      projectId: input.projectId,
-      eventType: 'knowledge_extraction_run.retry_requested',
-      actorType: 'user',
-      actorId: input.requestedBy,
-      subjectType: 'knowledge_extraction_run',
-      subjectId: retryRun.id,
-      metadata: {
-        originalRunId: original.id,
-        phase: 'attempt',
-        responseContractVersion: RETRY_RESPONSE_CONTRACT_VERSION,
-      },
-    }));
-  });
-
   let proposals;
   try {
     const parsed = JSON.parse(response.content);
@@ -335,14 +298,8 @@ export async function retryExtractionRun(
     }
     proposals = parseKnowledgeCandidateProposals((parsed as { candidates: unknown }).candidates);
   } catch {
-    await markRetryRunFailedStrict(
-      unitOfWork,
-      input.organisationId,
-      input.projectId,
-      retryRun.id,
-      'candidate_validation_failed',
-      input.requestedBy,
-      original.id,
+    await persistFailedRetryRunStrict(
+      unitOfWork, input, retryRun, original.id, requestedAt, 'candidate_validation_failed',
     );
     return {
       originalRunId: original.id,
@@ -352,6 +309,7 @@ export async function retryExtractionRun(
     };
   }
 
+  // Compute dedup outside the main UoW so the write transaction stays short.
   const pendingFingerprints = await unitOfWork.run(async ({ knowledgeCandidates }) =>
     knowledgeCandidates.listPendingFingerprintsByProject(input.organisationId, input.projectId),
   );
@@ -370,6 +328,44 @@ export async function retryExtractionRun(
 
   try {
     await unitOfWork.run(async ({ knowledgeCandidates, audit }) => {
+      // Serialize concurrent retries via a transaction-scoped advisory lock keyed to
+      // (organisationId, projectId, originalRunId). Released automatically at COMMIT/ROLLBACK.
+      await knowledgeCandidates.acquireRetryAdvisoryLock(
+        input.organisationId, input.projectId, original.id,
+      );
+      // After acquiring the lock: reject if an originally-concurrent retry already committed
+      // (its retry_completed audit occurred after this request began).
+      const raced = await knowledgeCandidates.hasRetryCompletedSince(
+        input.organisationId, input.projectId, original.id, requestedAt,
+      );
+      if (raced) {
+        throw new KnowledgeCandidateServiceError(409, 'a retry for this run has already completed');
+      }
+      // Re-validate the original run is still failed (immutable-transition trigger enforces this;
+      // this check keeps the 409 semantics explicit).
+      const still = await knowledgeCandidates.getRunById(
+        input.organisationId, input.projectId, original.id,
+      );
+      if (!still || still.status !== 'failed') {
+        throw new KnowledgeCandidateServiceError(409, 'extraction run is not failed');
+      }
+      // Atomically: create retry run, insert candidates, mark succeeded, emit attempt+completed audits.
+      await knowledgeCandidates.createRun(retryRun);
+      await audit.append(createAuditEvent({
+        organisationId: input.organisationId,
+        projectId: input.projectId,
+        eventType: 'knowledge_extraction_run.retry_requested',
+        actorType: 'user',
+        actorId: input.requestedBy,
+        subjectType: 'knowledge_extraction_run',
+        subjectId: retryRun.id,
+        metadata: {
+          originalRunId: original.id,
+          phase: 'attempt',
+          requestedAt: requestedAt.toISOString(),
+          responseContractVersion: RETRY_RESPONSE_CONTRACT_VERSION,
+        },
+      }));
       for (const candidate of candidates) {
         await knowledgeCandidates.insertCandidate(candidate);
         await audit.append(createAuditEvent({
@@ -398,18 +394,20 @@ export async function retryExtractionRun(
         actorId: input.requestedBy,
         subjectType: 'knowledge_extraction_run',
         subjectId: retryRun.id,
-        metadata: { originalRunId: original.id, candidateCount: candidates.length },
+        metadata: {
+          originalRunId: original.id,
+          retryRunId: retryRun.id,
+          requestedBy: input.requestedBy,
+          requestedAt: requestedAt.toISOString(),
+          candidateCount: candidates.length,
+        },
       }));
     });
-  } catch {
-    await markRetryRunFailedStrict(
-      unitOfWork,
-      input.organisationId,
-      input.projectId,
-      retryRun.id,
-      'candidate_insert_failed',
-      input.requestedBy,
-      original.id,
+  } catch (error) {
+    // Concurrency rejection must propagate as 409 without persisting a failed retry run.
+    if (error instanceof KnowledgeCandidateServiceError) throw error;
+    await persistFailedRetryRunStrict(
+      unitOfWork, input, retryRun, original.id, requestedAt, 'candidate_insert_failed',
     );
     return {
       originalRunId: original.id,
@@ -427,31 +425,35 @@ export async function retryExtractionRun(
   };
 }
 
-// Marks a retry run as failed AND emits retry_failed audit in one atomic transaction.
-// Deliberately NOT swallowed: a failed audit must surface (500) rather than leaving a run
-// stuck in `received` with no signal.
-async function markRetryRunFailedStrict(
+// Persists a failed retry run + retry_failed audit atomically in one UoW. Deliberately not
+// wrapped in try/catch: an audit-side failure must surface as 500 rather than a silent swallow.
+async function persistFailedRetryRunStrict(
   unitOfWork: DatabaseUnitOfWork,
-  organisationId: string,
-  projectId: string,
-  retryRunId: string,
-  failureCode: string,
-  requestedBy: string,
+  input: RetryExtractionRunInput,
+  retryRun: ReturnType<typeof createKnowledgeExtractionRun>,
   originalRunId: string,
+  requestedAt: Date,
+  failureCode: string,
 ): Promise<void> {
   await unitOfWork.run(async ({ knowledgeCandidates, audit }) => {
+    await knowledgeCandidates.createRun(retryRun);
     await knowledgeCandidates.markRunFailed(
-      organisationId, projectId, retryRunId, failureCode, null, new Date(),
+      input.organisationId, input.projectId, retryRun.id, failureCode, null, new Date(),
     );
     await audit.append(createAuditEvent({
-      organisationId,
-      projectId,
+      organisationId: input.organisationId,
+      projectId: input.projectId,
       eventType: 'knowledge_extraction_run.retry_failed',
       actorType: 'user',
-      actorId: requestedBy,
+      actorId: input.requestedBy,
       subjectType: 'knowledge_extraction_run',
-      subjectId: retryRunId,
-      metadata: { originalRunId, failureCode },
+      subjectId: retryRun.id,
+      metadata: {
+        originalRunId,
+        retryRunId: retryRun.id,
+        failureCode,
+        requestedAt: requestedAt.toISOString(),
+      },
     }));
   });
 }
@@ -478,4 +480,3 @@ async function auditRetryFailedStrict(
     }));
   });
 }
-
