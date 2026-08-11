@@ -497,12 +497,12 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     const viewerProjectRole = identity.authenticated
       ? (identity.projectRole ?? null)
       : ('product_owner' as ProjectRole);
-    const latestFailedExtractionRun = dependencies.knowledgeCandidates
-      ? await dependencies.knowledgeCandidates.getLatestFailedExtractionRun(
-          identity.organisationId,
-          projectId,
-        )
-      : null;
+    // Always route through the UoW so the durable read is available to every deployment,
+    // regardless of whether the top-level optional `knowledgeCandidates` dependency is wired.
+    const latestFailedExtractionRun = await dependencies.unitOfWork.run(
+      async ({ knowledgeCandidates }) =>
+        knowledgeCandidates.getLatestFailedExtractionRun(identity.organisationId, projectId),
+    );
     return reply.send({
       project,
       conversation,

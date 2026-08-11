@@ -294,9 +294,12 @@ export class KnowledgeCandidateRepository {
     }));
   }
 
-  // Returns the newest failed extraction run for the project only when no succeeded run
-  // exists with a later created_at. Used by the studio read contract to power a durable
-  // "retry available" banner that survives navigation without depending on URL query params.
+  // Returns the newest failed extraction run for the project whose SAME source turn lineage
+  // (source_user_message_id + source_assistant_message_id) has not since been recovered by a
+  // successful run. Retries reuse the original run's source message ids
+  // (see retryExtractionRun in knowledge-candidate-service.ts), so this predicate exactly
+  // encodes "failed run whose retry has not itself succeeded". An unrelated later Product
+  // Partner turn — different source message ids — does not hide a still-retryable failed run.
   async getLatestFailedExtractionRun(
     organisationId: string,
     projectId: string,
@@ -306,11 +309,13 @@ export class KnowledgeCandidateRepository {
        FROM knowledge_extraction_runs
        WHERE organisation_id = $1 AND project_id = $2 AND status = 'failed'
          AND NOT EXISTS (
-           SELECT 1 FROM knowledge_extraction_runs later
-           WHERE later.organisation_id = knowledge_extraction_runs.organisation_id
-             AND later.project_id = knowledge_extraction_runs.project_id
-             AND later.status = 'succeeded'
-             AND later.created_at > knowledge_extraction_runs.created_at
+           SELECT 1 FROM knowledge_extraction_runs recovered
+           WHERE recovered.organisation_id = knowledge_extraction_runs.organisation_id
+             AND recovered.project_id = knowledge_extraction_runs.project_id
+             AND recovered.status = 'succeeded'
+             AND recovered.source_user_message_id = knowledge_extraction_runs.source_user_message_id
+             AND recovered.source_assistant_message_id = knowledge_extraction_runs.source_assistant_message_id
+             AND recovered.created_at > knowledge_extraction_runs.created_at
          )
        ORDER BY created_at DESC
        LIMIT 1`,

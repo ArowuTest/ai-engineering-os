@@ -375,6 +375,166 @@ describe('GET /projects/:id/studio exposes durable review context', () => {
       await retryApp.close();
     }
   });
+
+  // Critical B (C2b): supersession of a failed extraction run must be scoped to the
+  // *same source turn lineage* — a later unrelated succeeded turn (different source
+  // user/assistant message ids) must NOT hide the still-retryable failed run. Retries
+  // reuse the original source message ids, so a same-lineage success clears it.
+  it('preserves the failed run when an unrelated later turn succeeds, and clears/re-exposes it based on retry lineage', async () => {
+    await bootstrapOwner();
+
+    // Turn A: extraction fails (invalid category).
+    const gatewayA = new ModelGateway();
+    gatewayA.register(adapter('anthropic', async () => ({
+      content: envelope('Turn A answer.', [
+        { category: 'not_a_real_category', title: 'X', content: 'y', basis: 'user_stated' },
+      ]),
+    })));
+    const { app: appA } = makeAuthApp(gatewayA);
+    let projectId: string; let ownerToken: string; let failedRunId: string;
+    try {
+      const owner = await login(appA, 'platform.owner');
+      ownerToken = owner.token;
+      projectId = await createProjectViaOwner(appA, owner.token);
+      const turnA = await appA.inject({
+        method: 'POST', url: `/projects/${projectId}/product-partner-turn`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+        payload: { content: 'Turn A user content.' },
+      });
+      expect(turnA.statusCode).toBe(201);
+      const tab = turnA.json() as { extraction: { status: string; runId: string } };
+      expect(tab.extraction.status).toBe('failed');
+      failedRunId = tab.extraction.runId;
+    } finally {
+      await appA.close();
+    }
+
+    // Turn B: unrelated later turn — succeeds with a different pair of source message ids.
+    const gatewayB = new ModelGateway();
+    gatewayB.register(adapter('anthropic', async () => ({
+      content: envelope('Turn B answer.', [
+        { category: 'objectives', title: 'Adoption', content: 'Reach 10k MAU.', basis: 'assistant_recommended' },
+      ]),
+    })));
+    const { app: appB } = makeAuthApp(gatewayB);
+    try {
+      const owner = await login(appB, 'platform.owner');
+      const turnB = await appB.inject({
+        method: 'POST', url: `/projects/${projectId!}/product-partner-turn`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+        payload: { content: 'Turn B user content — completely different.' },
+      });
+      expect(turnB.statusCode).toBe(201);
+      expect((turnB.json() as { extraction: { status: string } }).extraction.status).toBe('succeeded');
+
+      // (1) Turn A's failed run must STILL be exposed — a later unrelated success does not hide it.
+      const studio1 = await appB.inject({
+        method: 'GET', url: `/projects/${projectId!}/studio`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+      });
+      const body1 = studio1.json() as { latestFailedExtractionRun: { id: string } | null };
+      expect(body1.latestFailedExtractionRun).not.toBeNull();
+      expect(body1.latestFailedExtractionRun!.id).toBe(failedRunId!);
+    } finally {
+      await appB.close();
+    }
+
+    // Successful retry of Turn A: same source message ids → must clear the banner.
+    const retryOkGateway = new ModelGateway();
+    retryOkGateway.register(adapter('anthropic', async () => ({
+      content: candidateOnly([
+        { category: 'objectives', title: 'Retry ok', content: 'Same source succeeded.', basis: 'assistant_recommended' },
+      ]),
+    })));
+    const { app: retryOkApp } = makeAuthApp(retryOkGateway);
+    try {
+      const owner = await login(retryOkApp, 'platform.owner');
+      const retry = await retryOkApp.inject({
+        method: 'POST', url: `/projects/${projectId!}/extraction-runs/${failedRunId!}/retry`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+        payload: {},
+      });
+      expect(retry.statusCode).toBe(201);
+      expect((retry.json() as { status: string }).status).toBe('succeeded');
+
+      const studio2 = await retryOkApp.inject({
+        method: 'GET', url: `/projects/${projectId!}/studio`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+      });
+      const body2 = studio2.json() as { latestFailedExtractionRun: unknown };
+      expect(body2.latestFailedExtractionRun).toBeNull();
+    } finally {
+      await retryOkApp.close();
+    }
+
+    // Now trigger a Turn C that FAILS for the same source lineage? We can't easily replay Turn A.
+    // Instead: fire a fresh Turn C that fails. Then a subsequent successful retry of Turn C.
+    // That doesn't cover the same lineage. To cover "failed retry of Turn A → exposed", we need to
+    // make a retry of Turn A fail even though Turn A was already cleared by the ok retry above.
+    // The retry service rejects if the ORIGINAL run status !== 'failed'. Since Turn A is still
+    // marked failed (retries create new rows, they never mutate the original), we can retry again.
+    ownerToken; // silence unused warning
+
+    const retryFailGateway = new ModelGateway();
+    retryFailGateway.register(adapter('anthropic', async () => ({
+      content: candidateOnly([
+        { category: 'not_a_real_category', title: 'Bad', content: 'z', basis: 'user_stated' },
+      ]),
+    })));
+    const { app: retryFailApp } = makeAuthApp(retryFailGateway);
+    let failedRetryRunId: string;
+    try {
+      const owner = await login(retryFailApp, 'platform.owner');
+      const retry = await retryFailApp.inject({
+        method: 'POST', url: `/projects/${projectId!}/extraction-runs/${failedRunId!}/retry`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+        payload: {},
+      });
+      expect(retry.statusCode).toBe(201);
+      const rb = retry.json() as { retryRunId: string; status: string };
+      expect(rb.status).toBe('failed');
+      failedRetryRunId = rb.retryRunId;
+
+      // (2) A later failed retry of the same lineage must become the newly exposed banner run.
+      const studio3 = await retryFailApp.inject({
+        method: 'GET', url: `/projects/${projectId!}/studio`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+      });
+      const body3 = studio3.json() as { latestFailedExtractionRun: { id: string } | null };
+      expect(body3.latestFailedExtractionRun).not.toBeNull();
+      expect(body3.latestFailedExtractionRun!.id).toBe(failedRetryRunId);
+    } finally {
+      await retryFailApp.close();
+    }
+
+    // (3) A subsequent successful retry of the same source lineage must clear again.
+    const retryOk2Gateway = new ModelGateway();
+    retryOk2Gateway.register(adapter('anthropic', async () => ({
+      content: candidateOnly([
+        { category: 'vision', title: 'Second retry ok', content: 'Same source succeeded.', basis: 'assistant_recommended' },
+      ]),
+    })));
+    const { app: retryOk2App } = makeAuthApp(retryOk2Gateway);
+    try {
+      const owner = await login(retryOk2App, 'platform.owner');
+      const retry = await retryOk2App.inject({
+        method: 'POST', url: `/projects/${projectId!}/extraction-runs/${failedRunId!}/retry`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+        payload: {},
+      });
+      expect(retry.statusCode).toBe(201);
+      expect((retry.json() as { status: string }).status).toBe('succeeded');
+
+      const studio4 = await retryOk2App.inject({
+        method: 'GET', url: `/projects/${projectId!}/studio`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+      });
+      const body4 = studio4.json() as { latestFailedExtractionRun: unknown };
+      expect(body4.latestFailedExtractionRun).toBeNull();
+    } finally {
+      await retryOk2App.close();
+    }
+  });
 });
 
 describe('GET /projects/:id/knowledge-candidates exposes exact per-candidate sourceRun metadata', () => {
