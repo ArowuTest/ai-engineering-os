@@ -119,6 +119,7 @@ describe('ModelGateway', () => {
   it.each([
     [{ id: '' }, 'route id'],
     [{ id: 'Bad Route' }, 'route id'],
+    [{ provider: 'auto' as ModelRoute['provider'] }, 'provider'],
     [{ provider: 'OpenAI' as ModelRoute['provider'] }, 'provider'],
     [{ provider: 'bad provider' as ModelRoute['provider'] }, 'provider'],
     [{ model: '   ' }, 'model'],
