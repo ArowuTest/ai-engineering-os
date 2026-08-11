@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { ProductKnowledge } from './product-knowledge.js';
-import { DomainValidationError, requireNonBlank } from './validation.js';
+import {
+  DomainValidationError,
+  requireNonBlank,
+  requireStableIdentifier,
+} from './validation.js';
 
 export const CONVERSATION_PURPOSES = ['product_discovery'] as const;
 export type ConversationPurpose = (typeof CONVERSATION_PURPOSES)[number];
@@ -8,8 +12,7 @@ export type ConversationPurpose = (typeof CONVERSATION_PURPOSES)[number];
 export const CONVERSATION_ROLES = ['user', 'assistant', 'system'] as const;
 export type ConversationRole = (typeof CONVERSATION_ROLES)[number];
 
-export const MESSAGE_PROVIDERS = ['openai', 'anthropic', 'google'] as const;
-export type MessageProvider = (typeof MESSAGE_PROVIDERS)[number];
+export type MessageProvider = string;
 
 export interface ProductConversation {
   id: string;
@@ -56,10 +59,7 @@ function requireRole(value: unknown): ConversationRole {
 }
 
 function requireProvider(value: unknown): MessageProvider {
-  if (typeof value !== 'string' || !MESSAGE_PROVIDERS.includes(value as MessageProvider)) {
-    throw new DomainValidationError('provider', 'provider must be openai, anthropic, or google');
-  }
-  return value as MessageProvider;
+  return requireStableIdentifier(value, 'provider');
 }
 
 export function createConversation(input: CreateConversationInput): ProductConversation {
