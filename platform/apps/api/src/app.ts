@@ -24,8 +24,8 @@ import {
   type ProjectRole,
 } from '@engineering-os/domain';
 import { NoEligibleRouteError, ProviderExecutionError, type ModelGateway } from '@engineering-os/model-gateway';
-import { buildProductPartnerRequest } from './product-partner-context.js';
 import { AuthService, AuthServiceError } from './auth-service.js';
+import { executeProductPartnerTurn } from './product-partner-turn-service.js';
 
 export interface AppDependencies {
   projects: ProjectRepository;
@@ -546,87 +546,21 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
       conversation.id,
     );
     const records = await dependencies.knowledge.listByProject(identity.organisationId, projectId);
-    const userMessage = createConversationMessage({
+
+    const result = await executeProductPartnerTurn({
       organisationId: identity.organisationId,
       projectId,
-      conversationId: conversation.id,
-      role: 'user',
-      content: stringField(bodyObject(request.body), 'content'),
-      createdBy: identity.userId,
+      userId: identity.userId,
+      userContent: stringField(bodyObject(request.body), 'content'),
+      project,
+      conversation,
+      history,
+      knowledge: records,
+      modelGateway: dependencies.modelGateway,
+      unitOfWork: dependencies.unitOfWork,
     });
 
-    const modelResponse = await dependencies.modelGateway.execute(
-      buildProductPartnerRequest({
-        project,
-        knowledge: records,
-        messages: history,
-        newUserContent: userMessage.content,
-      }),
-    );
-    const assistantContent = modelResponse.content.trim();
-    if (!assistantContent) throw new ProviderExecutionError(modelResponse.provider);
-
-    const agentId = `product-partner:${modelResponse.provider}`;
-    const assistantMessage = createConversationMessage({
-      organisationId: identity.organisationId,
-      projectId,
-      conversationId: conversation.id,
-      role: 'assistant',
-      content: assistantContent,
-      provider: modelResponse.provider,
-      createdBy: agentId,
-    });
-
-    const userEvent = createAuditEvent({
-      organisationId: identity.organisationId,
-      projectId,
-      eventType: 'product_partner.user_message.created',
-      actorType: 'user',
-      actorId: identity.userId,
-      subjectType: 'conversation_message',
-      subjectId: userMessage.id,
-      metadata: { conversationId: conversation.id },
-    });
-    const assistantEvent = createAuditEvent({
-      organisationId: identity.organisationId,
-      projectId,
-      eventType: 'product_partner.assistant_message.created',
-      actorType: 'agent',
-      actorId: agentId,
-      subjectType: 'conversation_message',
-      subjectId: assistantMessage.id,
-      metadata: {
-        conversationId: conversation.id,
-        provider: modelResponse.provider,
-        model: modelResponse.model,
-        routeId: modelResponse.routeId,
-        executionMode: modelResponse.executionMode,
-        costType: modelResponse.costType,
-        usage: modelResponse.usage ?? null,
-      },
-    });
-
-    await dependencies.unitOfWork.run(async ({ conversations, audit }) => {
-      await conversations.appendMessage(userMessage);
-      await audit.append(userEvent);
-      await conversations.appendMessage(assistantMessage);
-      await audit.append(assistantEvent);
-    });
-
-    const execution: Record<string, unknown> = {
-      provider: modelResponse.provider,
-      model: modelResponse.model,
-      routeId: modelResponse.routeId,
-      executionMode: modelResponse.executionMode,
-      costType: modelResponse.costType,
-    };
-    if (modelResponse.usage?.inputTokens !== undefined) {
-      execution.inputTokens = modelResponse.usage.inputTokens;
-    }
-    if (modelResponse.usage?.outputTokens !== undefined) {
-      execution.outputTokens = modelResponse.usage.outputTokens;
-    }
-    return reply.code(201).send({ userMessage, assistantMessage, execution });
+    return reply.code(201).send(result);
   });
   app.post('/projects/:id/messages', async (request, reply) => {
     const identity = await resolveIdentity(request, dependencies);
