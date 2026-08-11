@@ -237,6 +237,19 @@ export class KnowledgeCandidateRepository {
     return result.rows.map(mapCandidate);
   }
 
+  async listPendingFingerprintsByProject(
+    organisationId: string,
+    projectId: string,
+  ): Promise<string[]> {
+    const result = await this.database.query<{ fingerprint: string }>(
+      `SELECT fingerprint
+       FROM knowledge_candidates
+       WHERE organisation_id = $1 AND project_id = $2 AND status = 'pending'`,
+      [organisationId, projectId],
+    );
+    return result.rows.map((row) => row.fingerprint);
+  }
+
   async getCandidateForUpdate(
     organisationId: string,
     projectId: string,

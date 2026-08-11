@@ -261,6 +261,57 @@ describe('knowledge extraction persistence', () => {
     await expect(repository.insertCandidate(duplicate)).rejects.toThrow();
   });
 
+  it('lists only pending fingerprints for the project scope', async () => {
+    const seeded = await seedTurn();
+    const repository = new KnowledgeCandidateRepository(pool);
+    const run = createKnowledgeExtractionRun({
+      organisationId,
+      projectId: seeded.project.id,
+      conversationId: seeded.conversation.id,
+      sourceUserMessageId: seeded.userMessage.id,
+      sourceAssistantMessageId: seeded.assistantMessage.id,
+      provider: 'openai', model: 'gpt-5.6', routeId: 'openai-api',
+      responseContractVersion: 'product_partner_knowledge_v1',
+    });
+    await repository.createRun(run);
+
+    const pendingCandidate = createPendingKnowledgeCandidate({
+      organisationId,
+      projectId: seeded.project.id,
+      extractionRunId: run.id,
+      category: 'business_rules', title: 'Pass scope',
+      content: 'A pass is valid for one event.', basis: 'user_stated',
+    });
+    await repository.insertCandidate(pendingCandidate);
+
+    const rejectedCandidate = createPendingKnowledgeCandidate({
+      organisationId,
+      projectId: seeded.project.id,
+      extractionRunId: run.id,
+      category: 'risks', title: 'Rights risk', content: 'Rights must be confirmed.',
+      basis: 'assistant_inferred',
+    });
+    await repository.insertCandidate(rejectedCandidate);
+    await repository.rejectCandidateDecision(
+      organisationId,
+      seeded.project.id,
+      rejectedCandidate.id,
+      'reviewer-001',
+      new Date(),
+      'not relevant',
+    );
+
+    const fingerprints = await repository.listPendingFingerprintsByProject(
+      organisationId,
+      seeded.project.id,
+    );
+    expect(fingerprints).toEqual([pendingCandidate.fingerprint]);
+
+    expect(
+      await repository.listPendingFingerprintsByProject(otherOrganisationId, seeded.project.id),
+    ).toEqual([]);
+  });
+
   it('cascades extraction evidence when its project is deleted', async () => {
     const seeded = await seedTurn();
     const repository = new KnowledgeCandidateRepository(pool);

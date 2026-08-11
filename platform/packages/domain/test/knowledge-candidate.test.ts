@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createKnowledgeExtractionRun,
   createPendingKnowledgeCandidate,
+  dedupeCandidateProposals,
   DomainValidationError,
   fingerprintKnowledgeCandidate,
   KNOWLEDGE_CANDIDATE_CATEGORIES,
@@ -130,6 +131,30 @@ describe('Product Knowledge candidate domain', () => {
       basis: 'user_stated',
       status: 'accepted',
     }])).toThrow(DomainValidationError);
+  });
+
+  it('dedupes proposals within a batch and against blocked fingerprints', () => {
+    const proposals = parseKnowledgeCandidateProposals([
+      { category: 'business_rules', title: 'Pass scope', content: 'A pass grants access to one event.', basis: 'user_stated' },
+      { category: 'business_rules', title: 'PASS SCOPE', content: 'A pass grants access to  one event.', basis: 'user_stated' },
+      { category: 'risks', title: 'Pass scope', content: 'A pass grants access to one event.', basis: 'assistant_inferred' },
+      { category: 'stakeholders', title: 'Legal owns compliance', content: 'Legal validates residency.', basis: 'assistant_inferred' },
+    ]);
+
+    const blocked = new Set<string>([
+      fingerprintKnowledgeCandidate({
+        category: 'stakeholders',
+        title: 'Legal owns compliance',
+        content: 'Legal validates residency.',
+      }),
+    ]);
+
+    const unique = dedupeCandidateProposals(proposals, blocked);
+
+    expect(unique).toEqual([
+      { category: 'business_rules', title: 'Pass scope', content: 'A pass grants access to one event.', basis: 'user_stated' },
+      { category: 'risks', title: 'Pass scope', content: 'A pass grants access to one event.', basis: 'assistant_inferred' },
+    ]);
   });
 
   it('parses valid model proposals without creating canonical knowledge', () => {

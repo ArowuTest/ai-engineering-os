@@ -223,6 +223,29 @@ export function parseProductPartnerEnvelope(raw: string): ProductPartnerEnvelope
   };
 }
 
+export function dedupeCandidateProposals(
+  proposals: readonly KnowledgeCandidateProposal[],
+  blockedFingerprints: ReadonlySet<string> | Iterable<string> = [],
+): KnowledgeCandidateProposal[] {
+  const blocked = blockedFingerprints instanceof Set
+    ? new Set(blockedFingerprints)
+    : new Set<string>(blockedFingerprints);
+  const seen = new Set<string>();
+  const result: KnowledgeCandidateProposal[] = [];
+  for (const proposal of proposals) {
+    const fingerprint = fingerprintKnowledgeCandidate({
+      category: proposal.category,
+      title: proposal.title,
+      content: proposal.content,
+    });
+    if (blocked.has(fingerprint)) continue;
+    if (seen.has(fingerprint)) continue;
+    seen.add(fingerprint);
+    result.push(proposal);
+  }
+  return result;
+}
+
 export function parseKnowledgeCandidateProposals(value: unknown): KnowledgeCandidateProposal[] {
   if (!Array.isArray(value)) {
     throw new DomainValidationError('candidates', 'candidates must be an array');

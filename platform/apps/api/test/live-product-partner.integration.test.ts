@@ -451,6 +451,242 @@ describe('live Product Partner turn', () => {
     }
   });
 
+  it('collapses duplicate candidates in one envelope into a single pending row', async () => {
+    const gateway = new ModelGateway();
+    gateway.register(adapter('anthropic', 10, async () => ({
+      content: envelope('Which regulations apply?', [
+        {
+          category: 'regulatory_requirements',
+          title: 'GDPR applicability',
+          content: 'Product must comply with GDPR for EU customers.',
+          basis: 'user_stated',
+        },
+        {
+          category: 'regulatory_requirements',
+          title: 'GDPR APPLICABILITY',
+          content: '  Product must comply with GDPR for EU customers.  ',
+          basis: 'assistant_inferred',
+        },
+      ]),
+    })));
+    const app = testApp(gateway);
+    const project = await createProject(app, 'anthropic');
+    const response = await app.inject({
+      method: 'POST', url: `/projects/${project.id}/product-partner-turn`, headers,
+      payload: { content: 'Regulatory question.' },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+    expect(body.extraction.status).toBe('succeeded');
+    expect(body.extraction.candidateCount).toBe(1);
+
+    const pending = await candidatesRepo.listByProject('org-001', project.id, 'pending');
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.category).toBe('regulatory_requirements');
+    await app.close();
+  });
+
+  it('suppresses candidates that duplicate an existing pending fingerprint', async () => {
+    const gateway = new ModelGateway();
+    let call = 0;
+    gateway.register(adapter('anthropic', 10, async () => {
+      call += 1;
+      if (call === 1) {
+        return {
+          content: envelope('First turn.', [
+            {
+              category: 'regulatory_requirements',
+              title: 'GDPR applicability',
+              content: 'Product must comply with GDPR for EU customers.',
+              basis: 'user_stated',
+            },
+          ]),
+        };
+      }
+      return {
+        content: envelope('Second turn.', [
+          {
+            category: 'regulatory_requirements',
+            title: 'gdpr applicability',
+            content: 'Product must comply with GDPR for EU customers.',
+            basis: 'assistant_inferred',
+          },
+          {
+            category: 'stakeholders',
+            title: 'Legal team',
+            content: 'Legal validates residency.',
+            basis: 'assistant_inferred',
+          },
+        ]),
+      };
+    }));
+    const app = testApp(gateway);
+    const project = await createProject(app, 'anthropic');
+
+    const first = await app.inject({
+      method: 'POST', url: `/projects/${project.id}/product-partner-turn`, headers,
+      payload: { content: 'First discovery.' },
+    });
+    expect(first.statusCode).toBe(201);
+    expect(first.json().extraction.candidateCount).toBe(1);
+
+    const second = await app.inject({
+      method: 'POST', url: `/projects/${project.id}/product-partner-turn`, headers,
+      payload: { content: 'Second discovery.' },
+    });
+    expect(second.statusCode).toBe(201);
+    const body = second.json();
+    expect(body.extraction.status).toBe('succeeded');
+    expect(body.extraction.candidateCount).toBe(1);
+
+    const pending = await candidatesRepo.listByProject('org-001', project.id, 'pending');
+    expect(pending).toHaveLength(2);
+    expect(pending.map((c) => c.category).sort()).toEqual(['regulatory_requirements', 'stakeholders']);
+    await app.close();
+  });
+
+  it('suppresses candidates that duplicate current canonical Product Knowledge', async () => {
+    const gateway = new ModelGateway();
+    gateway.register(adapter('anthropic', 10, async () => ({
+      content: envelope('Restating known compliance rule.', [
+        {
+          category: 'regulatory_requirements',
+          title: 'GDPR applicability',
+          content: 'Product must comply with GDPR for EU customers.',
+          basis: 'user_stated',
+        },
+        {
+          category: 'risks',
+          title: 'Rights risk',
+          content: 'Rights must be confirmed.',
+          basis: 'assistant_inferred',
+        },
+      ]),
+    })));
+    const app = testApp(gateway);
+    const project = await createProject(app, 'anthropic');
+
+    const createKnowledge = await app.inject({
+      method: 'POST', url: `/projects/${project.id}/knowledge`, headers,
+      payload: {
+        category: 'regulatory_requirements',
+        title: 'GDPR applicability',
+        content: 'Product must comply with GDPR for EU customers.',
+        source: 'user',
+        status: 'confirmed',
+      },
+    });
+    expect(createKnowledge.statusCode).toBe(201);
+
+    const response = await app.inject({
+      method: 'POST', url: `/projects/${project.id}/product-partner-turn`, headers,
+      payload: { content: 'Repeat known info.' },
+    });
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+    expect(body.extraction.status).toBe('succeeded');
+    expect(body.extraction.candidateCount).toBe(1);
+
+    const pending = await candidatesRepo.listByProject('org-001', project.id, 'pending');
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.category).toBe('risks');
+    await app.close();
+  });
+
+  it('keeps same content under a different category eligible as a distinct candidate', async () => {
+    const gateway = new ModelGateway();
+    let call = 0;
+    gateway.register(adapter('anthropic', 10, async () => {
+      call += 1;
+      if (call === 1) {
+        return {
+          content: envelope('First turn.', [
+            {
+              category: 'business_rules',
+              title: 'Pass scope',
+              content: 'A pass is valid for one event.',
+              basis: 'user_stated',
+            },
+          ]),
+        };
+      }
+      return {
+        content: envelope('Second turn.', [
+          {
+            category: 'risks',
+            title: 'Pass scope',
+            content: 'A pass is valid for one event.',
+            basis: 'assistant_inferred',
+          },
+        ]),
+      };
+    }));
+    const app = testApp(gateway);
+    const project = await createProject(app, 'anthropic');
+
+    await app.inject({
+      method: 'POST', url: `/projects/${project.id}/product-partner-turn`, headers,
+      payload: { content: 'First.' },
+    });
+    const second = await app.inject({
+      method: 'POST', url: `/projects/${project.id}/product-partner-turn`, headers,
+      payload: { content: 'Second.' },
+    });
+    expect(second.statusCode).toBe(201);
+    expect(second.json().extraction.candidateCount).toBe(1);
+
+    const pending = await candidatesRepo.listByProject('org-001', project.id, 'pending');
+    expect(pending).toHaveLength(2);
+    expect(pending.map((c) => c.category).sort()).toEqual(['business_rules', 'risks']);
+    await app.close();
+  });
+
+  it('re-proposes a candidate that was previously rejected', async () => {
+    const gateway = new ModelGateway();
+    gateway.register(adapter('anthropic', 10, async () => ({
+      content: envelope('Repeated proposal.', [
+        {
+          category: 'business_rules',
+          title: 'Pass scope',
+          content: 'A pass is valid for one event.',
+          basis: 'user_stated',
+        },
+      ]),
+    })));
+    const app = testApp(gateway);
+    const project = await createProject(app, 'anthropic');
+
+    const first = await app.inject({
+      method: 'POST', url: `/projects/${project.id}/product-partner-turn`, headers,
+      payload: { content: 'First.' },
+    });
+    expect(first.statusCode).toBe(201);
+    const pendingInitial = await candidatesRepo.listByProject('org-001', project.id, 'pending');
+    expect(pendingInitial).toHaveLength(1);
+
+    await pool.query(
+      `UPDATE knowledge_candidates
+         SET status = 'rejected', reviewer_id = $1, reviewed_at = NOW(), rejection_reason = $2
+       WHERE id = $3`,
+      ['reviewer-001', 'not relevant', pendingInitial[0]!.id],
+    );
+
+    const second = await app.inject({
+      method: 'POST', url: `/projects/${project.id}/product-partner-turn`, headers,
+      payload: { content: 'Second.' },
+    });
+    expect(second.statusCode).toBe(201);
+    expect(second.json().extraction.status).toBe('succeeded');
+    expect(second.json().extraction.candidateCount).toBe(1);
+
+    const pending = await candidatesRepo.listByProject('org-001', project.id, 'pending');
+    expect(pending).toHaveLength(1);
+    const rejected = await candidatesRepo.listByProject('org-001', project.id, 'rejected');
+    expect(rejected).toHaveLength(1);
+    await app.close();
+  });
+
   it('recovers with a single plain-chat call and marks the run failed when the structured call is unusable', async () => {
     let calls = 0;
     const requests: ModelRequest[] = [];

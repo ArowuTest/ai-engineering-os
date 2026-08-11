@@ -3,6 +3,8 @@ import {
   createConversationMessage,
   createKnowledgeExtractionRun,
   createPendingKnowledgeCandidate,
+  dedupeCandidateProposals,
+  fingerprintKnowledgeCandidate,
   parseKnowledgeCandidateProposals,
   parseProductPartnerEnvelope,
   type ConversationMessage,
@@ -225,19 +227,26 @@ export async function executeProductPartnerTurn(input: ExecuteTurnInput): Promis
     };
   }
 
-  // Step 5: build and deduplicate candidate rows
-  const seen = new Set<string>();
-  const candidates = proposals
-    .map((proposal) => createPendingKnowledgeCandidate({
+  // Step 5: suppress duplicates by category/fingerprint
+  // Blocked = current pending candidates for this project + latest canonical Product Knowledge.
+  // A rejected historical candidate does not by itself block re-proposal (only pending rows blocked).
+  const pendingFingerprints = await unitOfWork.run(async ({ knowledgeCandidates }) =>
+    knowledgeCandidates.listPendingFingerprintsByProject(organisationId, projectId),
+  );
+  const canonicalFingerprints = knowledge.map((record) => fingerprintKnowledgeCandidate({
+    category: record.category,
+    title: record.title,
+    content: record.content,
+  }));
+  const blocked = new Set<string>([...pendingFingerprints, ...canonicalFingerprints]);
+
+  const candidates = dedupeCandidateProposals(proposals, blocked).map((proposal) =>
+    createPendingKnowledgeCandidate({
       organisationId, projectId,
       extractionRunId: extractionRun.id,
       ...proposal,
-    }))
-    .filter((candidate) => {
-      if (seen.has(candidate.fingerprint)) return false;
-      seen.add(candidate.fingerprint);
-      return true;
-    });
+    }),
+  );
 
   // Transaction B: candidate rows + candidate audit events + run succeeded atomically
   try {
