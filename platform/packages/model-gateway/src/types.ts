@@ -14,6 +14,7 @@ export interface ProviderCapabilities {
   mcp: boolean;
   localWorkspace: boolean;
   headless: boolean;
+  structuredOutput: boolean;
 }
 
 export type CapabilityName = keyof ProviderCapabilities;
@@ -47,12 +48,19 @@ export interface RoutingPolicy {
   preferredProvider?: ModelProvider;
 }
 
+export interface JsonSchemaResponseContract {
+  type: 'json_schema';
+  name: string;
+  schema: Record<string, unknown>;
+}
+
 export interface ModelRequest {
   taskId: string;
   role: AgentRole;
   messages: ModelMessage[];
   requiredCapabilities: CapabilityName[];
   routing: RoutingPolicy;
+  responseContract?: JsonSchemaResponseContract;
 }
 
 export interface ModelUsage {
