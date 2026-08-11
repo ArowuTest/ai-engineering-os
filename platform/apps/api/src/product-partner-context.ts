@@ -95,6 +95,83 @@ function durableHistory(messages: ConversationMessage[]): ModelMessage[] {
   }));
 }
 
+const CANDIDATE_ONLY_RESPONSE_CONTRACT: JsonSchemaResponseContract = {
+  type: 'json_schema',
+  name: 'candidate_only_v1',
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['candidates'],
+    properties: {
+      candidates: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['category', 'title', 'content', 'basis'],
+          properties: {
+            category: { type: 'string', enum: [...KNOWLEDGE_CANDIDATE_CATEGORIES] },
+            title: { type: 'string', minLength: 1 },
+            content: { type: 'string', minLength: 1 },
+            basis: { type: 'string', enum: [...KNOWLEDGE_CANDIDATE_BASES] },
+          },
+        },
+      },
+    },
+  },
+};
+
+function candidateOnlySystemInstruction(project: Project, knowledge: ProductKnowledge[]): string {
+  const projectData = {
+    id: project.id,
+    name: project.name,
+    description: project.description ?? null,
+    stage: project.stage,
+    preferredProductPartner: project.preferredProductPartner,
+  };
+  return [
+    'You are performing a candidate-only knowledge extraction retry for the Product Partner.',
+    'Do NOT produce a conversational answer. Return only candidates that can be reviewed by a human.',
+    'Base extraction ONLY on the persisted user and assistant messages provided below.',
+    'Do not include candidates that duplicate existing canonical Product Knowledge or that already exist as pending candidates.',
+    `Candidate category must be one of: ${KNOWLEDGE_CANDIDATE_CATEGORIES.join(', ')}.`,
+    'Candidate basis semantics: user_stated means materially stated by the user; assistant_inferred means inferred; assistant_recommended means your recommendation.',
+    `Project context (data): ${JSON.stringify(projectData)}`,
+    `Canonical Product Knowledge (data): ${JSON.stringify(canonicalKnowledge(knowledge))}`,
+  ].join('\n\n');
+}
+
+export interface BuildCandidateOnlyExtractionRequestInput {
+  project: Project;
+  knowledge: ProductKnowledge[];
+  userMessage: ConversationMessage;
+  assistantMessage: ConversationMessage;
+  taskId: string;
+}
+
+export function buildCandidateOnlyExtractionRequest(
+  input: BuildCandidateOnlyExtractionRequestInput,
+): ModelRequest {
+  const provider = preferredProvider(input.project);
+  const routing: ModelRequest['routing'] = {
+    subscriptionFirst: false,
+    allowMeteredApi: true,
+  };
+  if (provider !== undefined) routing.preferredProvider = provider;
+  return {
+    taskId: input.taskId,
+    role: 'product_partner',
+    messages: [
+      { role: 'system', content: candidateOnlySystemInstruction(input.project, input.knowledge) },
+      { role: 'user', content: input.userMessage.content },
+      { role: 'assistant', content: input.assistantMessage.content },
+    ],
+    requiredCapabilities: ['chat', 'structuredOutput'],
+    routing,
+    responseContract: CANDIDATE_ONLY_RESPONSE_CONTRACT,
+  };
+}
+
 export function buildProductPartnerRequest(input: BuildProductPartnerRequestInput): ModelRequest {
   const provider = preferredProvider(input.project);
   const routing: ModelRequest['routing'] = {

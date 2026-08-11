@@ -235,6 +235,79 @@ describe('authentication HTTP boundary', () => {
     await auth.app.close();
   });
 
+  it('scopes knowledge candidate review to product_owner and 403s Contributor/Engineer/Reviewer/Viewer', async () => {
+    const ownerId = await bootstrapOwner();
+    const auth = dependencies();
+    const owner = await login(auth.app, 'platform.owner', 'Owner-password-2026!');
+    const ownerHeaders = { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' };
+    const created = await auth.app.inject({ method: 'POST', url: '/projects', headers: ownerHeaders, payload: { name: 'Review RBAC' } });
+    expect(created.statusCode).toBe(201);
+    const projectId = (created.json() as { id: string }).id;
+
+    // Seed a pending candidate + failed extraction run directly via SQL bound to real message rows.
+    const conversation = await pool.query<{ id: string }>(
+      `SELECT id FROM conversations WHERE project_id = $1`, [projectId],
+    );
+    const conversationId = conversation.rows[0]!.id;
+    const userMessageId = randomUUID();
+    const assistantMessageId = randomUUID();
+    const now = new Date();
+    await pool.query(
+      `INSERT INTO conversation_messages
+        (id, organisation_id, project_id, conversation_id, role, content, created_by, created_at)
+       VALUES ($1, 'org-001', $2, $3, 'user', 'seed user', 'seed', $4),
+              ($5, 'org-001', $2, $3, 'assistant', 'seed assistant', 'seed', $4)`,
+      [userMessageId, projectId, conversationId, now, assistantMessageId],
+    );
+    const runIdOk = randomUUID();
+    const runIdFailed = randomUUID();
+    await pool.query(
+      `INSERT INTO knowledge_extraction_runs
+         (id, organisation_id, project_id, conversation_id, source_user_message_id, source_assistant_message_id,
+          provider, model, route_id, response_contract_version, status, created_at, completed_at, failure_code, failure_message)
+       VALUES ($1, 'org-001', $2, $3, $4, $5, 'anthropic', 'test-model', 'anthropic-test-api',
+               'product_partner_knowledge_v1', 'succeeded', $6, $6, NULL, NULL),
+              ($7, 'org-001', $2, $3, $4, $5, 'anthropic', 'test-model', 'anthropic-test-api',
+               'product_partner_knowledge_v1', 'failed', $6, $6, 'candidate_validation_failed', NULL)`,
+      [runIdOk, projectId, conversationId, userMessageId, assistantMessageId, now, runIdFailed],
+    );
+    const candidateId = randomUUID();
+    await pool.query(
+      `INSERT INTO knowledge_candidates
+         (id, organisation_id, project_id, extraction_run_id, category, title, original_content,
+          basis, status, fingerprint, created_at)
+       VALUES ($1, 'org-001', $2, $3, 'vision', 'Cand', 'Cand content.', 'user_stated', 'pending',
+               'a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4', $4)`,
+      [candidateId, projectId, runIdOk, now],
+    );
+
+    const roles = ['contributor', 'engineer', 'reviewer', 'viewer'] as const;
+    for (const role of roles) {
+      const invite = await auth.authService.createInvitation({
+        organisationId: 'org-001', actorUserId: ownerId,
+        organisationRole: 'member',
+        projectGrants: [{ projectId, role }],
+      });
+      const uid = `role.${role}`;
+      await auth.authService.redeemInvitation({ key: invite.key, userId: uid, password: `Role-${role}-pw-2026!` });
+      const session = await login(auth.app, uid, `Role-${role}-pw-2026!`);
+      const headers = { authorization: `Bearer ${session.token}`, 'x-organisation-id': 'org-001' };
+
+      // All roles may LIST.
+      const list = await auth.app.inject({ method: 'GET', url: `/projects/${projectId}/knowledge-candidates?status=pending`, headers });
+      expect(list.statusCode).toBe(200);
+
+      const accept = await auth.app.inject({ method: 'POST', url: `/projects/${projectId}/knowledge-candidates/${candidateId}/accept`, headers, payload: {} });
+      expect(accept.statusCode).toBe(403);
+      const reject = await auth.app.inject({ method: 'POST', url: `/projects/${projectId}/knowledge-candidates/${candidateId}/reject`, headers, payload: {} });
+      expect(reject.statusCode).toBe(403);
+      const retry = await auth.app.inject({ method: 'POST', url: `/projects/${projectId}/extraction-runs/${runIdFailed}/retry`, headers, payload: {} });
+      expect(retry.statusCode).toBe(403);
+    }
+
+    await auth.app.close();
+  });
+
   it('revokes the current bearer session on logout', async () => {
     await bootstrapOwner();
     const { app } = dependencies();

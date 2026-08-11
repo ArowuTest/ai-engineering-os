@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import type {
   ConversationRepository,
   DatabaseUnitOfWork,
+  KnowledgeCandidateRepository,
   KnowledgeRepository,
   ProjectRepository,
 } from '@engineering-os/database';
@@ -26,11 +27,18 @@ import {
 import { NoEligibleRouteError, ProviderExecutionError, type ModelGateway } from '@engineering-os/model-gateway';
 import { AuthService, AuthServiceError } from './auth-service.js';
 import { executeProductPartnerTurn } from './product-partner-turn-service.js';
+import {
+  acceptCandidate,
+  KnowledgeCandidateServiceError,
+  rejectCandidate,
+  retryExtractionRun,
+} from './knowledge-candidate-service.js';
 
 export interface AppDependencies {
   projects: ProjectRepository;
   knowledge: KnowledgeRepository;
   conversations: ConversationRepository;
+  knowledgeCandidates?: KnowledgeCandidateRepository;
   unitOfWork: DatabaseUnitOfWork;
   modelGateway: ModelGateway;
   authService?: AuthService;
@@ -686,5 +694,125 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     return reply.send(revised);
   });
 
+  app.get('/projects/:id/knowledge-candidates', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const projectId = routeId(request);
+    const project = await projectOrNull(dependencies, identity.organisationId, projectId);
+    if (!project) return reply.code(404).send({ error: 'Project not found' });
+    const query = request.query as { status?: unknown };
+    const status = typeof query.status === 'string' ? query.status : undefined;
+    const rows = await dependencies.unitOfWork.run(async ({ knowledgeCandidates }) =>
+      knowledgeCandidates.listByProject(
+        identity.organisationId,
+        projectId,
+        status === 'pending' || status === 'accepted' || status === 'rejected' ? status : undefined,
+      ),
+    );
+    return reply.send(rows);
+  });
+
+  app.post('/projects/:id/knowledge-candidates/:candidateId/accept', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    requireProductOwner(identity);
+    const projectId = routeId(request);
+    const project = await projectOrNull(dependencies, identity.organisationId, projectId);
+    if (!project) return reply.code(404).send({ error: 'Project not found' });
+    const params = request.params as { candidateId?: unknown };
+    const candidateId = typeof params.candidateId === 'string' ? params.candidateId : '';
+    const body = bodyObject(request.body);
+    const acceptInput: Parameters<typeof acceptCandidate>[1] = {
+      organisationId: identity.organisationId,
+      projectId,
+      candidateId,
+      reviewerId: identity.userId,
+    };
+    if (typeof body.category === 'string') acceptInput.category = body.category;
+    if (typeof body.title === 'string') acceptInput.title = body.title;
+    if (typeof body.content === 'string') acceptInput.content = body.content;
+    if (typeof body.status === 'string') acceptInput.status = body.status as KnowledgeStatus;
+    try {
+      const result = await acceptCandidate(dependencies.unitOfWork, acceptInput);
+      return reply.code(201).send(result);
+    } catch (error) {
+      if (error instanceof KnowledgeCandidateServiceError) {
+        return reply.code(error.statusCode).send({ error: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.post('/projects/:id/knowledge-candidates/:candidateId/reject', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    requireProductOwner(identity);
+    const projectId = routeId(request);
+    const project = await projectOrNull(dependencies, identity.organisationId, projectId);
+    if (!project) return reply.code(404).send({ error: 'Project not found' });
+    const params = request.params as { candidateId?: unknown };
+    const candidateId = typeof params.candidateId === 'string' ? params.candidateId : '';
+    const body = bodyObject(request.body);
+    const rejectInput: Parameters<typeof rejectCandidate>[1] = {
+      organisationId: identity.organisationId,
+      projectId,
+      candidateId,
+      reviewerId: identity.userId,
+    };
+    if (typeof body.reason === 'string') rejectInput.reason = body.reason;
+    try {
+      const result = await rejectCandidate(dependencies.unitOfWork, rejectInput);
+      return reply.send(result);
+    } catch (error) {
+      if (error instanceof KnowledgeCandidateServiceError) {
+        return reply.code(error.statusCode).send({ error: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.post('/projects/:id/extraction-runs/:runId/retry', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    requireProductOwner(identity);
+    const projectId = routeId(request);
+    const project = await projectOrNull(dependencies, identity.organisationId, projectId);
+    if (!project) return reply.code(404).send({ error: 'Project not found' });
+    const params = request.params as { runId?: unknown };
+    const runId = typeof params.runId === 'string' ? params.runId : '';
+    const canonical = await dependencies.knowledge.listByProject(identity.organisationId, projectId);
+    // Build a candidates repository. Prefer explicit dependency; fall back to a UoW-scoped instance.
+    // For getRunById + insertRetryAttempt we use the dependency-provided candidates repo (or create one via UoW-adapter).
+    const candidatesRepo = dependencies.knowledgeCandidates
+      ?? new UoWScopedKnowledgeCandidatesReadonly(dependencies.unitOfWork);
+    try {
+      const result = await retryExtractionRun(dependencies.unitOfWork, {
+        organisationId: identity.organisationId,
+        projectId,
+        runId,
+        requestedBy: identity.userId,
+        project,
+        knowledge: canonical,
+        modelGateway: dependencies.modelGateway,
+        conversations: dependencies.conversations,
+        candidates: candidatesRepo as KnowledgeCandidateRepository,
+      });
+      return reply.code(201).send(result);
+    } catch (error) {
+      if (error instanceof KnowledgeCandidateServiceError) {
+        return reply.code(error.statusCode).send({ error: error.message });
+      }
+      throw error;
+    }
+  });
+
   return app;
+}
+
+// Minimal adapter to satisfy the retry service's `getRunById` need without requiring callers to
+// wire a KnowledgeCandidateRepository. Implements only the surface the service actually calls
+// outside the UoW.
+class UoWScopedKnowledgeCandidatesReadonly {
+  constructor(private readonly unitOfWork: DatabaseUnitOfWork) {}
+  async getRunById(organisationId: string, projectId: string, runId: string) {
+    return this.unitOfWork.run(async ({ knowledgeCandidates }) =>
+      knowledgeCandidates.getRunById(organisationId, projectId, runId),
+    );
+  }
 }

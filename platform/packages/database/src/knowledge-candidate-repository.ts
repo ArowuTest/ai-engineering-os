@@ -286,6 +286,76 @@ export class KnowledgeCandidateRepository {
     if (result.rowCount !== 1) throw new Error('candidate is not pending');
   }
 
+  async getRunForUpdate(
+    organisationId: string,
+    projectId: string,
+    runId: string,
+  ): Promise<StoredKnowledgeExtractionRun | null> {
+    const result = await this.database.query<ExtractionRunRow>(
+      `SELECT ${runColumns}
+       FROM knowledge_extraction_runs
+       WHERE organisation_id = $1 AND project_id = $2 AND id = $3
+       FOR UPDATE`,
+      [organisationId, projectId, runId],
+    );
+    const row = result.rows[0];
+    return row ? mapRun(row) : null;
+  }
+
+  async insertProvenance(input: {
+    id: string;
+    organisationId: string;
+    projectId: string;
+    knowledgeId: string;
+    revision: number;
+    candidateId: string;
+    extractionRunId: string;
+    createdAt: Date;
+  }): Promise<void> {
+    await this.database.query(
+      `INSERT INTO product_knowledge_provenance
+         (id, organisation_id, project_id, knowledge_id, revision,
+          candidate_id, extraction_run_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        input.id,
+        input.organisationId,
+        input.projectId,
+        input.knowledgeId,
+        input.revision,
+        input.candidateId,
+        input.extractionRunId,
+        input.createdAt,
+      ],
+    );
+  }
+
+  async insertRetryAttempt(input: {
+    id: string;
+    organisationId: string;
+    projectId: string;
+    originalRunId: string;
+    retryRunId: string;
+    requestedBy: string;
+    requestedAt: Date;
+  }): Promise<void> {
+    await this.database.query(
+      `INSERT INTO knowledge_extraction_retry_attempts
+         (id, organisation_id, project_id, original_run_id, retry_run_id,
+          requested_by, requested_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        input.id,
+        input.organisationId,
+        input.projectId,
+        input.originalRunId,
+        input.retryRunId,
+        input.requestedBy,
+        input.requestedAt,
+      ],
+    );
+  }
+
   async rejectCandidateDecision(
     organisationId: string,
     projectId: string,
