@@ -117,7 +117,7 @@ Render answer + pending-candidate count
 
 ## 8. Persistence model
 
-Migration `004_product_knowledge_candidates.sql` will introduce two project-scoped entities.
+Migration `005_product_knowledge_candidates.sql` will introduce two project-scoped entities. Migration `004_extensible_execution_routes.sql` is reserved for the forward-only removal of the closed provider checks already applied by `002_product_studio.sql`; applied migration history must not be rewritten.
 
 ### `knowledge_extraction_runs`
 
