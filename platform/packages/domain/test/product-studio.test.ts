@@ -7,6 +7,8 @@ import {
   createKnowledgeRecord,
   createProject,
   DomainValidationError,
+  type MessageProvider,
+  type ProductPartner,
 } from '../src/index.js';
 
 describe('Product Studio project state', () => {
@@ -19,10 +21,13 @@ describe('Product Studio project state', () => {
 
   it('changes Product Partner without changing project identity or stage', () => {
     const project = createProject({ organisationId: 'org-1', name: 'Studio', createdBy: 'user-1' });
-    const changed = changeProjectProductPartner(project, 'anthropic');
+    const changed = changeProjectProductPartner(
+      project,
+      'future-provider.v2' as ProductPartner,
+    );
     expect(changed.id).toBe(project.id);
     expect(changed.stage).toBe('discovery');
-    expect(changed.preferredProductPartner).toBe('anthropic');
+    expect(changed.preferredProductPartner).toBe('future-provider.v2');
   });
 });
 
@@ -37,20 +42,37 @@ describe('Product Studio conversations', () => {
     expect(conversation.organisationId).toBe('org-1');
   });
 
-  it('creates append-only message records with optional provider attribution', () => {
+  it('creates append-only message records with extensible provider attribution', () => {
     const message = createConversationMessage({
       organisationId: 'org-1',
       projectId: '11111111-1111-4111-8111-111111111111',
       conversationId: '22222222-2222-4222-8222-222222222222',
       role: 'assistant',
       content: 'Challenge the monetisation assumption.',
-      provider: 'openai',
+      provider: 'future-provider' as MessageProvider,
       createdBy: 'agent-product',
     });
     expect(message.role).toBe('assistant');
-    expect(message.provider).toBe('openai');
+    expect(message.provider).toBe('future-provider');
     expect(message.content).toBe('Challenge the monetisation assumption.');
   });
+
+  it.each(['', 'OpenAI', 'provider name', 'x'.repeat(65)])(
+    'rejects unsafe message provider attribution %j',
+    (provider) => {
+      expect(() =>
+        createConversationMessage({
+          organisationId: 'org-1',
+          projectId: '11111111-1111-4111-8111-111111111111',
+          conversationId: '22222222-2222-4222-8222-222222222222',
+          role: 'assistant',
+          content: 'Invalid provider attribution.',
+          provider: provider as MessageProvider,
+          createdBy: 'agent-product',
+        }),
+      ).toThrowError(DomainValidationError);
+    },
+  );
 
   it('rejects unsupported message roles', () => {
     expect(() => createConversationMessage({
