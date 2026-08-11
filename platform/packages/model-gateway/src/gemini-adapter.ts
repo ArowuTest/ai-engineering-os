@@ -58,6 +58,7 @@ export function createGeminiAdapter(options: GeminiAdapterOptions): ModelAdapter
         mcp: false,
         localWorkspace: false,
         headless: true,
+        structuredOutput: false,
       },
     },
     async execute(request: ModelRequest) {
