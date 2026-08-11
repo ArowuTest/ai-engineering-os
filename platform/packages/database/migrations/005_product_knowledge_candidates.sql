@@ -52,6 +52,45 @@ CREATE TABLE knowledge_extraction_runs (
 CREATE INDEX knowledge_extraction_runs_project_status_idx
   ON knowledge_extraction_runs (organisation_id, project_id, status, created_at DESC);
 
+CREATE FUNCTION validate_knowledge_extraction_source_roles()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  user_message_role text;
+  assistant_message_role text;
+BEGIN
+  SELECT role
+  INTO user_message_role
+  FROM conversation_messages
+  WHERE organisation_id = NEW.organisation_id
+    AND project_id = NEW.project_id
+    AND conversation_id = NEW.conversation_id
+    AND id = NEW.source_user_message_id;
+
+  SELECT role
+  INTO assistant_message_role
+  FROM conversation_messages
+  WHERE organisation_id = NEW.organisation_id
+    AND project_id = NEW.project_id
+    AND conversation_id = NEW.conversation_id
+    AND id = NEW.source_assistant_message_id;
+
+  IF user_message_role IS DISTINCT FROM 'user'
+    OR assistant_message_role IS DISTINCT FROM 'assistant'
+  THEN
+    RAISE EXCEPTION 'extraction source message roles are invalid';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER knowledge_extraction_runs_source_roles_guard
+BEFORE INSERT ON knowledge_extraction_runs
+FOR EACH ROW
+EXECUTE FUNCTION validate_knowledge_extraction_source_roles();
+
 CREATE FUNCTION enforce_knowledge_extraction_run_transition()
 RETURNS trigger
 LANGUAGE plpgsql
