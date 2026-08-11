@@ -57,8 +57,8 @@ describe('Product Studio conversations', () => {
     expect(message.content).toBe('Challenge the monetisation assumption.');
   });
 
-  it.each(['', 'OpenAI', 'provider name', 'x'.repeat(65)])(
-    'rejects unsafe message provider attribution %j',
+  it.each(['', 'auto', 'OpenAI', 'provider name', 'x'.repeat(65)])(
+    'rejects unsafe or reserved message provider attribution %j',
     (provider) => {
       expect(() =>
         createConversationMessage({
