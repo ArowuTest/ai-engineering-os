@@ -10,7 +10,6 @@ import {
   sendProductPartnerTurnAction,
 } from '../../actions';
 import {
-  getCurrentIdentity,
   getStudio,
   listKnowledgeCandidates,
   listModelRoutes,
@@ -58,8 +57,6 @@ function label(value: string): string {
   return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-type EffectiveRole = 'product_owner' | 'reviewer';
-
 const basisLabel: Record<string, string> = {
   user_stated: 'User stated',
   assistant_inferred: 'Assistant inferred',
@@ -68,32 +65,21 @@ const basisLabel: Record<string, string> = {
 
 export default async function ProductStudioPage({
   params,
-  searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { id } = await params;
-  const resolvedSearchParams = searchParams ? await searchParams : {};
-  const extractionFailedFlag = resolvedSearchParams.extractionFailed === '1';
-  const extractionRunIdParam = typeof resolvedSearchParams.extractionRunId === 'string'
-    ? resolvedSearchParams.extractionRunId
-    : undefined;
-  const [studio, modelRoutes, candidates, identity] = await Promise.all([
+  const [studio, modelRoutes, candidates] = await Promise.all([
     getStudio(id),
     listModelRoutes(),
     listKnowledgeCandidates(id).catch(() => [] as KnowledgeCandidateSummary[]),
-    getCurrentIdentity(),
   ]);
-  const activeOrg = identity?.organisations.find((org) => org.organisationId === studio.project.organisationId);
-  // Effective role is derived exclusively from authenticated API state (never form input).
-  // Without a backend endpoint that exposes project-level role to plain members, we conservatively
-  // treat org 'owner' as Product Owner-capable; every other role gets the read-only queue.
-  // Backend RBAC remains authoritative — accept/reject/retry endpoints 403 without project_owner.
-  const effectiveRole: EffectiveRole = activeOrg?.role === 'owner' ? 'product_owner' : 'reviewer';
-  const canReview = effectiveRole === 'product_owner';
+  // Effective role is the exact viewerProjectRole resolved server-side by resolveIdentity;
+  // never inferred from organisation role or supplied by the browser.
+  const viewerProjectRole = studio.viewerProjectRole;
+  const canReview = viewerProjectRole === 'product_owner';
   const pendingCandidates = candidates.filter((c) => c.status === 'pending');
-  const lastAssistant = [...studio.messages].reverse().find((m) => m.role === 'assistant');
+  const latestFailedRun = studio.latestFailedExtractionRun;
   const missingPreview = studio.completeness.missingCategories.slice(0, 5).map(label).join(', ');
   const availableRoutes = modelRoutes.filter((route) => route.available);
   const liveCapableRoutes = availableRoutes.filter(
@@ -253,12 +239,13 @@ export default async function ProductStudioPage({
             ) : null}
           </div>
 
-          {extractionFailedFlag && extractionRunIdParam ? (
+          {latestFailedRun ? (
             <div className="review-queue-alert">
               <strong>Knowledge extraction failed &mdash; retry available</strong>
               <p>
                 The assistant answer above was saved, but structured Product Knowledge extraction did not
-                complete. {lastAssistant?.provider ? `Last attempt via ${lastAssistant.provider}. ` : ''}
+                complete. Last attempt via {formatProviderLabel(latestFailedRun.provider)}{' '}
+                <code>{latestFailedRun.model}</code> (route <code>{latestFailedRun.routeId}</code>).{' '}
                 {canReview
                   ? 'Retry to re-run candidate extraction from the persisted source turn.'
                   : 'A Product Owner can retry from this project.'}
@@ -266,7 +253,7 @@ export default async function ProductStudioPage({
               {canReview ? (
                 <form action={retryKnowledgeExtractionAction}>
                   <input name="projectId" type="hidden" value={id} />
-                  <input name="runId" type="hidden" value={extractionRunIdParam} />
+                  <input name="runId" type="hidden" value={latestFailedRun.id} />
                   <button className="button-small" type="submit">Retry extraction</button>
                 </form>
               ) : null}
@@ -290,18 +277,24 @@ export default async function ProductStudioPage({
                     <dd>{basisLabel[candidate.basis] ?? candidate.basis}</dd>
                   </div>
                   <div>
-                    <dt>Source run</dt>
-                    <dd><code>{candidate.extractionRunId}</code></dd>
+                    <dt>Provider</dt>
+                    <dd>{formatProviderLabel(candidate.sourceRun.provider)}</dd>
                   </div>
-                  {lastAssistant?.provider ? (
-                    <div>
-                      <dt>Last provider</dt>
-                      <dd>{formatProviderLabel(lastAssistant.provider)}</dd>
-                    </div>
-                  ) : null}
+                  <div>
+                    <dt>Model</dt>
+                    <dd><code>{candidate.sourceRun.model}</code></dd>
+                  </div>
+                  <div>
+                    <dt>Route</dt>
+                    <dd><code>{candidate.sourceRun.routeId}</code></dd>
+                  </div>
+                  <div>
+                    <dt>Source run</dt>
+                    <dd><code>{candidate.sourceRun.id}</code></dd>
+                  </div>
                 </dl>
 
-                {canReview && effectiveRole === 'product_owner' ? (
+                {canReview ? (
                   <div className="review-card-actions">
                     <form action={acceptKnowledgeCandidateAction} className="review-accept-form">
                       <input name="projectId" type="hidden" value={id} />
@@ -315,6 +308,7 @@ export default async function ProductStudioPage({
                             id={`edit-category-${candidate.id}`}
                             name="category"
                             defaultValue={candidate.category}
+                            required
                           />
                         </div>
                         <div className="field">
@@ -324,6 +318,7 @@ export default async function ProductStudioPage({
                             id={`edit-title-${candidate.id}`}
                             name="title"
                             defaultValue={candidate.title}
+                            required
                           />
                         </div>
                         <div className="field">
@@ -333,6 +328,7 @@ export default async function ProductStudioPage({
                             id={`edit-content-${candidate.id}`}
                             name="content"
                             defaultValue={candidate.content}
+                            required
                           />
                         </div>
                       </details>

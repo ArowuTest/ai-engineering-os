@@ -19,11 +19,25 @@ test('lib/api.ts exposes candidate/run types and review client functions', async
   assert.match(api, /export type KnowledgeCandidateBasis\s*=\s*'user_stated'\s*\|\s*'assistant_inferred'\s*\|\s*'assistant_recommended'/);
   assert.match(api, /export type KnowledgeExtractionRunStatus\s*=\s*'received'\s*\|\s*'succeeded'\s*\|\s*'failed'/);
 
-  // Candidate summary carries provenance the queue needs to render
+  // Candidate summary carries provenance the queue needs to render. The exact source extraction
+  // run must be joined onto each candidate so the UI does NOT proxy provider/model/route from
+  // the last assistant message.
   assert.match(
     api,
-    /interface KnowledgeCandidateSummary[\s\S]*?extractionRunId:\s*string;[\s\S]*?category:\s*string;[\s\S]*?title:\s*string;[\s\S]*?content:\s*string;[\s\S]*?basis:\s*KnowledgeCandidateBasis;[\s\S]*?status:\s*KnowledgeCandidateStatus;/,
-    'KnowledgeCandidateSummary must carry queue-critical fields',
+    /interface KnowledgeCandidateSummary[\s\S]*?extractionRunId:\s*string;[\s\S]*?category:\s*string;[\s\S]*?title:\s*string;[\s\S]*?content:\s*string;[\s\S]*?basis:\s*KnowledgeCandidateBasis;[\s\S]*?status:\s*KnowledgeCandidateStatus;[\s\S]*?sourceRun:\s*KnowledgeExtractionRunSummary/,
+    'KnowledgeCandidateSummary must inline sourceRun with the joined extraction-run summary',
+  );
+
+  // Studio read contract exposes the exact viewer project role and durable failed-extraction state.
+  assert.match(
+    api,
+    /interface StudioState[\s\S]*?viewerProjectRole:\s*ProjectRole\s*\|\s*null/,
+    'StudioState must expose viewerProjectRole from authenticated API state',
+  );
+  assert.match(
+    api,
+    /interface StudioState[\s\S]*?latestFailedExtractionRun:\s*KnowledgeExtractionRunSummary\s*\|\s*null/,
+    'StudioState must expose latestFailedExtractionRun derived from persisted runs',
   );
 
   // Client functions for the review workflow
@@ -54,6 +68,20 @@ test('actions.ts wires review server actions without accepting reviewer identity
   assert.doesNotMatch(actions, /formData\.get\('reviewerId'\)/);
   assert.doesNotMatch(actions, /formData\.get\('reviewerRole'\)/);
   assert.doesNotMatch(actions, /formData\.get\('role'\)/);
+
+  // Failure/retry state must be reconstructible from durable server state, so the action
+  // MUST NOT redirect with extraction failure query params as the source of truth.
+  assert.doesNotMatch(actions, /extractionFailed=1/);
+  assert.doesNotMatch(actions, /extractionRunId=/);
+
+  // Accept action must send explicit empty overrides (server-side validation),
+  // not silently drop cleared fields. The current implementation trims empties away — that
+  // behaviour is being replaced with required edit fields validated by the action itself.
+  assert.match(
+    actions,
+    /acceptKnowledgeCandidateAction[\s\S]*?required\(formData,\s*'category'\)[\s\S]*?required\(formData,\s*'title'\)[\s\S]*?required\(formData,\s*'content'\)/,
+    'acceptKnowledgeCandidateAction must require category/title/content (no silent original-fallback for cleared fields)',
+  );
 });
 
 test('Product Studio page renders the Product Knowledge Review Queue with role-aware controls', async () => {
@@ -69,31 +97,44 @@ test('Product Studio page renders the Product Knowledge Review Queue with role-a
   assert.match(page, /candidate\.content/);
   assert.match(page, /candidate\.basis/);
   assert.match(page, /candidate\.status/);
-  assert.match(page, /candidate\.extractionRunId/);
-  // provider/model/route provenance from the most recent extraction turn must be surfaced.
-  // The GET /projects/:id/knowledge-candidates response does not carry per-candidate run
-  // metadata, so the studio surfaces provider/model/routeId via the assistant message
-  // provider label + the extraction run identifier on each card.
-  assert.match(page, /message\.provider|assistant.*provider/);
+
+  // Provenance must come from the joined per-candidate source extraction run — never
+  // from the last-assistant-message provider proxy. Cards must render sourceRun fields
+  // including the exact source run id (no last-assistant proxy).
+  assert.match(page, /candidate\.sourceRun\.id/);
+  assert.match(page, /candidate\.sourceRun\.provider/);
+  assert.match(page, /candidate\.sourceRun\.model/);
+  assert.match(page, /candidate\.sourceRun\.routeId/);
+
+  // The last-assistant provider proxy is forbidden as a provenance signal.
+  assert.doesNotMatch(page, /lastAssistant\?\.provider/);
+  assert.doesNotMatch(page, /lastAssistant\.provider/);
 
   // Product Owner controls
   assert.match(page, /acceptKnowledgeCandidateAction/);
   assert.match(page, /rejectKnowledgeCandidateAction/);
   assert.match(page, /retryKnowledgeExtractionAction/);
 
-  // Edit & Accept fields must be present alongside accept action (editable category/title/content)
+  // Edit & Accept fields must be present alongside accept action AND marked required so the
+  // browser blocks silent empty submissions rather than falling back to the original value.
   assert.match(
     page,
-    /action=\{acceptKnowledgeCandidateAction\}[\s\S]*?name="category"[\s\S]*?name="title"[\s\S]*?name="content"/,
-    'Accept form must expose editable category/title/content fields',
+    /action=\{acceptKnowledgeCandidateAction\}[\s\S]*?name="category"[\s\S]*?required[\s\S]*?name="title"[\s\S]*?required[\s\S]*?name="content"[\s\S]*?required/,
+    'Accept form must expose editable category/title/content fields marked required',
   );
 
-  // Role gate: controls only render when the effective role is product_owner. Role is read
-  // from server-side identity — never from a browser-supplied form value.
-  assert.match(page, /effectiveRole/);
-  assert.match(page, /effectiveRole\s*===\s*'product_owner'/);
+  // Role gate: controls only render when the effective role is product_owner. The role MUST
+  // come from the studio read contract's viewerProjectRole — NOT from organisation role.
+  assert.match(page, /viewerProjectRole/);
+  assert.match(page, /viewerProjectRole\s*===\s*'product_owner'/);
+  assert.doesNotMatch(page, /identity\.organisations[\s\S]{0,80}?role\s*===\s*'owner'/);
   assert.doesNotMatch(page, /name="reviewerId"/);
   assert.doesNotMatch(page, /name="reviewerRole"/);
+
+  // Retry banner is derived from durable studio state, not URL query params.
+  assert.match(page, /latestFailedExtractionRun/);
+  assert.doesNotMatch(page, /extractionFailed/);
+  assert.doesNotMatch(page, /searchParams\.extractionRunId/);
 
   // Compact queue states
   assert.match(page, /candidates ready for review/);

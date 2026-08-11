@@ -58,6 +58,8 @@ export interface StudioState {
   messages: ConversationMessage[];
   knowledge: ProductKnowledge[];
   completeness: ProductCompleteness;
+  viewerProjectRole: ProjectRole | null;
+  latestFailedExtractionRun: KnowledgeExtractionRunSummary | null;
 }
 
 export interface ModelRouteCapabilities {
@@ -136,6 +138,7 @@ export interface KnowledgeCandidateSummary {
   reviewedAt?: string;
   acceptedKnowledgeId?: string;
   rejectionReason?: string;
+  sourceRun: KnowledgeExtractionRunSummary;
 }
 
 export interface KnowledgeExtractionRunSummary {

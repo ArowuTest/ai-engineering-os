@@ -491,12 +491,26 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     const messages = conversation
       ? await dependencies.conversations.listMessages(identity.organisationId, projectId, conversation.id)
       : [];
+    // Dev-mode identity has no auth service; requireProductOwner short-circuits for unauthenticated
+    // callers, so we mirror that with an explicit 'product_owner' viewerProjectRole to keep the
+    // studio read contract equivalent to the RBAC gate.
+    const viewerProjectRole = identity.authenticated
+      ? (identity.projectRole ?? null)
+      : ('product_owner' as ProjectRole);
+    const latestFailedExtractionRun = dependencies.knowledgeCandidates
+      ? await dependencies.knowledgeCandidates.getLatestFailedExtractionRun(
+          identity.organisationId,
+          projectId,
+        )
+      : null;
     return reply.send({
       project,
       conversation,
       messages,
       knowledge: records,
       completeness: calculateProductCompleteness(records),
+      viewerProjectRole,
+      latestFailedExtractionRun,
     });
   });
 
@@ -701,11 +715,12 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     if (!project) return reply.code(404).send({ error: 'Project not found' });
     const query = request.query as { status?: unknown };
     const status = typeof query.status === 'string' ? query.status : undefined;
+    const resolvedStatus = status === 'pending' || status === 'accepted' || status === 'rejected' ? status : undefined;
     const rows = await dependencies.unitOfWork.run(async ({ knowledgeCandidates }) =>
-      knowledgeCandidates.listByProject(
+      knowledgeCandidates.listByProjectWithSourceRun(
         identity.organisationId,
         projectId,
-        status === 'pending' || status === 'accepted' || status === 'rejected' ? status : undefined,
+        resolvedStatus,
       ),
     );
     return reply.send(rows);

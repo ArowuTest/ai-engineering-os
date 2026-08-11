@@ -53,6 +53,10 @@ export interface StoredKnowledgeCandidate extends KnowledgeCandidate {
   rejectionReason?: string;
 }
 
+export interface StoredKnowledgeCandidateWithSourceRun extends StoredKnowledgeCandidate {
+  sourceRun: StoredKnowledgeExtractionRun;
+}
+
 function mapRun(row: ExtractionRunRow): StoredKnowledgeExtractionRun {
   const run: StoredKnowledgeExtractionRun = {
     id: row.id,
@@ -235,6 +239,85 @@ export class KnowledgeCandidateRepository {
       values,
     );
     return result.rows.map(mapCandidate);
+  }
+
+  async listByProjectWithSourceRun(
+    organisationId: string,
+    projectId: string,
+    status?: KnowledgeCandidateStatus,
+  ): Promise<StoredKnowledgeCandidateWithSourceRun[]> {
+    const values: unknown[] = [organisationId, projectId];
+    const statusClause = status === undefined ? '' : ' AND c.status = $3';
+    if (status !== undefined) values.push(status);
+    const result = await this.database.query<CandidateRow & { run_id: string; run_organisation_id: string; run_project_id: string; run_conversation_id: string; run_source_user_message_id: string; run_source_assistant_message_id: string; run_provider: string; run_model: string; run_route_id: string; run_response_contract_version: string; run_status: KnowledgeExtractionRun['status']; run_failure_code: string | null; run_failure_message: string | null; run_created_at: Date; run_completed_at: Date | null }>(
+      `SELECT
+         c.id, c.organisation_id, c.project_id, c.extraction_run_id, c.category, c.title,
+         c.original_content, c.basis, c.status, c.fingerprint, c.reviewer_id, c.reviewed_at,
+         c.accepted_knowledge_id, c.rejection_reason, c.created_at,
+         r.id AS run_id, r.organisation_id AS run_organisation_id, r.project_id AS run_project_id,
+         r.conversation_id AS run_conversation_id,
+         r.source_user_message_id AS run_source_user_message_id,
+         r.source_assistant_message_id AS run_source_assistant_message_id,
+         r.provider AS run_provider, r.model AS run_model, r.route_id AS run_route_id,
+         r.response_contract_version AS run_response_contract_version,
+         r.status AS run_status, r.failure_code AS run_failure_code,
+         r.failure_message AS run_failure_message,
+         r.created_at AS run_created_at, r.completed_at AS run_completed_at
+       FROM knowledge_candidates c
+       JOIN knowledge_extraction_runs r
+         ON r.organisation_id = c.organisation_id
+        AND r.project_id = c.project_id
+        AND r.id = c.extraction_run_id
+       WHERE c.organisation_id = $1 AND c.project_id = $2${statusClause}
+       ORDER BY c.created_at ASC, c.id ASC`,
+      values,
+    );
+    return result.rows.map((row) => ({
+      ...mapCandidate(row),
+      sourceRun: mapRun({
+        id: row.run_id,
+        organisation_id: row.run_organisation_id,
+        project_id: row.run_project_id,
+        conversation_id: row.run_conversation_id,
+        source_user_message_id: row.run_source_user_message_id,
+        source_assistant_message_id: row.run_source_assistant_message_id,
+        provider: row.run_provider,
+        model: row.run_model,
+        route_id: row.run_route_id,
+        response_contract_version: row.run_response_contract_version,
+        status: row.run_status,
+        failure_code: row.run_failure_code,
+        failure_message: row.run_failure_message,
+        created_at: row.run_created_at,
+        completed_at: row.run_completed_at,
+      }),
+    }));
+  }
+
+  // Returns the newest failed extraction run for the project only when no succeeded run
+  // exists with a later created_at. Used by the studio read contract to power a durable
+  // "retry available" banner that survives navigation without depending on URL query params.
+  async getLatestFailedExtractionRun(
+    organisationId: string,
+    projectId: string,
+  ): Promise<StoredKnowledgeExtractionRun | null> {
+    const result = await this.database.query<ExtractionRunRow>(
+      `SELECT ${runColumns}
+       FROM knowledge_extraction_runs
+       WHERE organisation_id = $1 AND project_id = $2 AND status = 'failed'
+         AND NOT EXISTS (
+           SELECT 1 FROM knowledge_extraction_runs later
+           WHERE later.organisation_id = knowledge_extraction_runs.organisation_id
+             AND later.project_id = knowledge_extraction_runs.project_id
+             AND later.status = 'succeeded'
+             AND later.created_at > knowledge_extraction_runs.created_at
+         )
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [organisationId, projectId],
+    );
+    const row = result.rows[0];
+    return row ? mapRun(row) : null;
   }
 
   async listPendingFingerprintsByProject(

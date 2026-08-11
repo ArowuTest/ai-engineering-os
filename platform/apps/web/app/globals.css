@@ -265,7 +265,7 @@ h3 { font-size: 14px; }
 .review-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .review-card h4 { margin: 4px 0 0; font-size: 14px; }
 .review-card p { margin: 0; font-size: 13px; line-height: 1.45; }
-.review-card-provenance { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; font-size: 11px; }
+.review-card-provenance { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 0; font-size: 11px; }
 .review-card-provenance div { display: grid; gap: 2px; }
 .review-card-provenance dt { color: var(--muted); font-weight: 600; }
 .review-card-provenance dd { margin: 0; word-break: break-all; }

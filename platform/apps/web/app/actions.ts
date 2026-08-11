@@ -115,25 +115,20 @@ export async function createProductAction(formData: FormData) {
 
 export async function sendProductPartnerTurnAction(formData: FormData) {
   const projectId = required(formData, 'projectId');
-  const result = await sendProductPartnerTurn(projectId, required(formData, 'content'));
+  await sendProductPartnerTurn(projectId, required(formData, 'content'));
   revalidatePath('/');
   revalidatePath(`/projects/${projectId}`);
-  if (result.extraction.status === 'failed') {
-    redirect(`/projects/${projectId}?extractionRunId=${result.extraction.runId}&extractionFailed=1`);
-  }
+  // Failed extraction state is reconstructible from durable studio.latestFailedExtractionRun
+  // on the next render — no redirect-only query params.
 }
 
 export async function acceptKnowledgeCandidateAction(formData: FormData) {
   const projectId = required(formData, 'projectId');
   const candidateId = required(formData, 'candidateId');
-  const input: { category?: string; title?: string; content?: string } = {};
-  const category = String(formData.get('category') ?? '').trim();
-  const title = String(formData.get('title') ?? '').trim();
-  const content = String(formData.get('content') ?? '').trim();
-  if (category) input.category = category;
-  if (title) input.title = title;
-  if (content) input.content = content;
-  await acceptKnowledgeCandidate(projectId, candidateId, input);
+  const category = required(formData, 'category');
+  const title = required(formData, 'title');
+  const content = required(formData, 'content');
+  await acceptKnowledgeCandidate(projectId, candidateId, { category, title, content });
   revalidatePath('/');
   revalidatePath(`/projects/${projectId}`);
 }
