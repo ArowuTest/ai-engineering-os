@@ -24,15 +24,21 @@ function route(overrides: Partial<ModelRoute> = {}): ModelRoute {
       mcp: true,
       localWorkspace: true,
       headless: true,
-    },
+      structuredOutput: false,
+    } as ModelRoute['capabilities'],
     ...overrides,
   };
 }
 
-function adapter(modelRoute: ModelRoute, content = modelRoute.id): ModelAdapter {
+function adapter(
+  modelRoute: ModelRoute,
+  content = modelRoute.id,
+  execute?: ModelAdapter['execute'],
+): ModelAdapter {
   return {
     route: modelRoute,
-    async execute() {
+    async execute(request) {
+      if (execute) return execute(request);
       return {
         content,
         usage: { inputTokens: 12, outputTokens: 7 },
@@ -177,7 +183,8 @@ describe('ModelGateway', () => {
             mcp: true,
             localWorkspace: true,
             headless: true,
-          },
+            structuredOutput: false,
+          } as ModelRoute['capabilities'],
         }),
       ),
     );
@@ -185,6 +192,65 @@ describe('ModelGateway', () => {
     const response = await gateway.execute(request({ requiredCapabilities: ['chat', 'vision'] }));
     expect(response.provider).toBe('google');
     expect(response.routeId).toBe('gemini-vision-subscription');
+  });
+
+  it('keeps ordinary chat eligible when structured output is not required', async () => {
+    const gateway = new ModelGateway();
+    gateway.register(adapter(route({ id: 'plain-chat' }), 'plain-chat-result'));
+
+    const response = await gateway.execute(
+      request({ requiredCapabilities: ['chat'] }),
+    );
+    expect(response.routeId).toBe('plain-chat');
+  });
+
+  it('requires a route that explicitly advertises structured output', async () => {
+    const gateway = new ModelGateway();
+    gateway.register(adapter(route({ id: 'plain-chat', priority: 1 })));
+    gateway.register(
+      adapter(
+        route({
+          id: 'structured-chat',
+          priority: 50,
+          capabilities: {
+            ...route().capabilities,
+            structuredOutput: true,
+          } as ModelRoute['capabilities'],
+        }),
+        'structured-result',
+      ),
+    );
+
+    const response = await gateway.execute(
+      request({
+        requiredCapabilities: ['chat', 'structuredOutput' as never],
+      }),
+    );
+    expect(response.routeId).toBe('structured-chat');
+    expect(response.content).toBe('structured-result');
+  });
+
+  it('does not infer structured-output eligibility merely because a response contract exists', async () => {
+    const gateway = new ModelGateway();
+    let captured: ModelRequest | undefined;
+    gateway.register(
+      adapter(route({ id: 'plain-chat' }), 'plain', async (modelRequest) => {
+        captured = modelRequest;
+        return { content: 'plain' };
+      }),
+    );
+
+    const withContract = {
+      ...request({ requiredCapabilities: ['chat'] }),
+      responseContract: {
+        type: 'json_schema',
+        name: 'example_v1',
+        schema: { type: 'object', properties: { answer: { type: 'string' } } },
+      },
+    } as ModelRequest;
+
+    await gateway.execute(withContract);
+    expect(captured).toBe(withContract);
   });
 
   it('refuses metered API routes when policy disables them', async () => {
