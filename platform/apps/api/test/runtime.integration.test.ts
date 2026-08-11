@@ -52,6 +52,7 @@ describe('API runtime composition', () => {
         '002_product_studio.sql',
         '003_auth_collaboration.sql',
         '004_extensible_execution_routes.sql',
+        '005_product_knowledge_candidates.sql',
       ]);
     } finally {
       await runtime.close();
