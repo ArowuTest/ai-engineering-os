@@ -1,14 +1,14 @@
 # Routing Foundation + Review-First Product Knowledge Extraction Implementation Plan
 
-> **For execution:** Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans`. Follow TDD: RED → GREEN → REFACTOR for every production change.
+> **Execution workflow:** Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans`. Every production change follows RED → GREEN → REFACTOR.
 
-**Goal:** Remove the current three-provider ceiling without disrupting the existing Product Studio, then implement automatic review-first Product Knowledge extraction through capability-qualified structured-output routes.
+**Goal:** Remove the current three-provider ceiling without breaking Product Studio, then implement automatic review-first Product Knowledge extraction through capability-qualified structured-output routes.
 
-**Architecture:** Preserve the existing provider-neutral `ModelGateway`, durable Product Studio state, PostgreSQL `DatabaseUnitOfWork`, RBAC and audit model. Generalise provider/route identifiers through a forward-only migration, add `structuredOutput` to concrete route capabilities, and keep the current OpenAI/Anthropic/Google API adapters as the first configured routes. Build extraction as a separate non-canonical candidate store with two persistence transitions: conversation + extraction-run marker first, then candidate persistence/run completion. Product Owner acceptance is the only operation that creates canonical Product Knowledge from a candidate.
+**Architecture:** Retain the existing `ModelGateway`, durable Product Studio state, PostgreSQL `DatabaseUnitOfWork`, RBAC and append-only audit model. Generalise provider/route identifiers through a forward-only migration, add `structuredOutput` to concrete route capabilities, and keep the existing OpenAI/Anthropic/Google API adapters as the first configured routes. Extraction uses a non-canonical candidate store with separate conversation and extraction persistence transitions. Product Owner acceptance is the only path from a candidate to canonical Product Knowledge.
 
-**Scope boundary:** This plan does **not** implement personal AI connections, Do Not Share/Online Only/Persistent administration, Agent Bridge, Codex/Claude Code/Antigravity subscription adapters, or ECC Engineering Studio execution. Those are separate later plans built on the execution-route contracts established here.
+**Out of scope:** personal AI connection administration, Do Not Share/Online Only/Persistent sharing, Agent Bridge, Codex/Claude Code/Antigravity subscription adapters, and ECC Engineering Studio execution. Those are separate later plans.
 
-**Primary references:**
+**References:**
 - `docs/product/AI-PRODUCT-ENGINEERING-OS-SRS.md` v1.3
 - `docs/architecture/AI-ENGINEERING-OS-TECHNICAL-ARCHITECTURE.md` v1.3
 - `docs/superpowers/specs/2026-08-11-extensible-ai-execution-routing-and-shared-entitlements-design.md`
@@ -18,26 +18,25 @@
 
 ## Task 1 — Generalise provider identifiers in domain and gateway contracts
 
-**Files:**
-- Modify: `platform/packages/domain/src/project.ts`
-- Modify: `platform/packages/domain/src/product-studio.ts`
-- Modify: `platform/packages/domain/test/project.test.ts`
-- Modify: `platform/packages/domain/test/product-studio.test.ts`
-- Modify: `platform/packages/model-gateway/src/types.ts`
-- Modify: `platform/packages/model-gateway/src/gateway.ts`
-- Modify: `platform/packages/model-gateway/test/gateway.test.ts`
+**Modify:**
+- `platform/packages/domain/src/project.ts`
+- `platform/packages/domain/src/product-studio.ts`
+- `platform/packages/domain/test/project.test.ts`
+- `platform/packages/domain/test/product-studio.test.ts`
+- `platform/packages/model-gateway/src/types.ts`
+- `platform/packages/model-gateway/src/gateway.ts`
+- `platform/packages/model-gateway/test/gateway.test.ts`
 
-### Step 1.1 — Write failing domain tests for extensible provider IDs
+### 1.1 RED — extensible Product Partner/provider attribution
 
-Add tests proving:
-- `createProject(... preferredProductPartner: 'mistral')` succeeds;
-- `changeProjectProductPartner(project, 'future-provider.v2')` succeeds;
-- blank, whitespace, uppercase/unsafe and overlong provider identifiers fail runtime validation;
-- `auto` remains valid only as the Product Partner routing sentinel;
-- `createConversationMessage(... provider: 'future-provider')` succeeds;
-- invalid provider message attribution fails.
+Add domain tests proving:
+- project preference `future-provider` is accepted;
+- `future-provider.v2` can replace the current Product Partner;
+- conversation message attribution `future-provider` is accepted;
+- `auto` remains valid as the Product Partner routing sentinel;
+- blank, uppercase, unsafe and >64-character provider IDs are rejected.
 
-Use one stable provider-ID grammar in both project preference and message attribution:
+Use one runtime provider-ID grammar:
 
 ```text
 ^[a-z0-9][a-z0-9._-]{0,63}$
@@ -50,32 +49,28 @@ cd platform
 npx vitest run packages/domain/test/project.test.ts packages/domain/test/product-studio.test.ts
 ```
 
-Expected RED: current closed `PRODUCT_PARTNERS` / `MESSAGE_PROVIDERS` reject the new provider IDs.
+Expected RED: current closed arrays reject future providers.
 
-### Step 1.2 — Implement minimal extensible domain validation
+### 1.2 GREEN — replace closed domain validity with stable-ID validation
 
 In `project.ts`:
-- retain `auto` as the Product Partner sentinel;
-- replace the closed provider enum validation with the provider-ID grammar above;
-- export initial UI/provider choices separately from the domain validity rule, e.g. `INITIAL_PRODUCT_PARTNERS = ['openai', 'anthropic', 'google'] as const`;
-- keep `ProductPartner` API-compatible as a string-like preference so existing project persistence remains unchanged.
+- keep `auto` as the routing sentinel;
+- validate any other preference with the provider-ID grammar;
+- export `INITIAL_PRODUCT_PARTNERS = ['openai', 'anthropic', 'google'] as const` only as an initial catalogue/UI convenience, not domain validity.
 
 In `product-studio.ts`:
-- remove the closed `MESSAGE_PROVIDERS` validity rule;
-- validate optional provider attribution using the same stable provider-ID grammar;
-- do not make conversation messages depend on an external provider catalogue being online.
+- replace `MESSAGE_PROVIDERS` closed validation with the same stable-ID rule;
+- keep provider attribution optional.
 
-Run the same test command.
+Re-run Task 1.1 command. Expected GREEN.
 
-Expected GREEN: existing OpenAI/Anthropic/Google tests and new future-provider tests pass.
+### 1.3 RED — arbitrary provider + multiple routes/models
 
-### Step 1.3 — Write failing gateway tests for arbitrary providers and multiple route IDs
-
-Add tests proving:
-- a route with `provider: 'future-provider'` registers and executes;
-- multiple models for one provider can coexist under distinct route IDs;
-- duplicate route IDs still fail even when model/provider differ;
-- invalid/blank route IDs, provider IDs or model names are rejected at registration.
+In `gateway.test.ts`, add tests proving:
+- `provider: 'future-provider'` can register and execute;
+- two models for one provider coexist under different route IDs;
+- duplicate route IDs still fail;
+- invalid route ID/provider ID/blank model fail registration.
 
 Run:
 
@@ -84,140 +79,114 @@ cd platform
 npx vitest run packages/model-gateway/test/gateway.test.ts
 ```
 
-Expected RED: `ModelProvider` is still the closed OpenAI/Anthropic/Google union and registration has no stable-ID validation.
-
-### Step 1.4 — Generalise gateway types and registration validation
+### 1.4 GREEN — generalise gateway provider identity
 
 In `types.ts`:
-- change provider identity from a closed union to an extensible stable identifier (`ModelProvider` may remain as a compatibility alias for string provider IDs);
-- retain `ExecutionMode` and `CostType` unchanged;
-- do **not** add connection/runner fields yet.
+- replace the closed `ModelProvider` union with an extensible string provider identifier while retaining the exported name for compatibility;
+- leave `ExecutionMode` and `CostType` unchanged.
 
 In `gateway.ts`:
-- validate route ID/provider/model at `register()`;
-- keep route ID uniqueness as the gateway identity key;
-- preserve eligibility, subscription-first, metered-API and priority behaviour.
+- validate route ID and provider ID with the stable-ID grammar;
+- require nonblank model name;
+- preserve current eligibility/ranking semantics.
 
 Run:
 
 ```bash
 cd platform
 npx vitest run packages/model-gateway/test/gateway.test.ts
-```
-
-Expected GREEN.
-
-### Step 1.5 — Typecheck and commit
-
-Run:
-
-```bash
-cd platform
 npm run typecheck
 ```
 
 Commit:
 
 ```bash
-git add platform/packages/domain platform/packages/model-gateway
+git add packages/domain packages/model-gateway
 git commit -m "refactor: generalise provider and route identifiers"
 ```
 
 ---
 
-## Task 2 — Add forward-only database migration for extensible provider IDs
+## Task 2 — Forward-only migration 004 for extensible provider IDs
 
-**Files:**
-- Create: `platform/packages/database/migrations/004_extensible_execution_routes.sql`
-- Create: `platform/packages/database/test/extensible-execution-routes.integration.test.ts`
-- Do not modify: `platform/packages/database/migrations/002_product_studio.sql`
+**Create:**
+- `platform/packages/database/migrations/004_extensible_execution_routes.sql`
+- `platform/packages/database/test/extensible-execution-routes.integration.test.ts`
 
-### Step 2.1 — Write failing PostgreSQL migration tests
+**Do not modify:**
+- `platform/packages/database/migrations/002_product_studio.sql`
 
-Test against a database that has migrations 001–003 applied. Prove that before migration 004:
-- project `preferred_product_partner = 'future-provider'` is rejected;
-- assistant `conversation_messages.provider = 'future-provider'` is rejected.
+### 2.1 RED — prove old checks are closed and migration 004 is required
 
-Then run normal migration execution and assert:
-- `004_extensible_execution_routes.sql` is recorded once in `schema_migrations`;
-- the same future provider values are accepted afterward;
-- `auto` remains accepted for `projects.preferred_product_partner`;
-- blank/unsafe provider IDs remain rejected;
-- a second `runMigrations()` is idempotent and does not reapply 004.
+The integration test must build/apply migrations 001–003, then prove:
+- `preferred_product_partner = 'future-provider'` fails before 004;
+- `conversation_messages.provider = 'future-provider'` fails before 004.
 
-Run with Docker PostgreSQL:
+After invoking the normal migration runner with 004 present, assert:
+- future provider IDs succeed;
+- `auto` remains valid for project preference;
+- null message provider remains valid;
+- blank/unsafe IDs fail;
+- `schema_migrations` records 004 exactly once;
+- repeated `runMigrations()` is idempotent.
 
-```bash
+Run Docker PostgreSQL:
+
+```powershell
 cd platform
 docker compose up -d postgres
-$env:DATABASE_URL='postgresql://engineering_os:engineering_os@localhost:55432/engineering_os_test' # PowerShell
-npm run test:integration -- packages/database/test/extensible-execution-routes.integration.test.ts
+$env:DATABASE_URL='postgresql://engineering_os:engineering_os@localhost:55432/engineering_os_test'
+npx vitest run packages/database/test/extensible-execution-routes.integration.test.ts --maxWorkers=1 --no-file-parallelism
 ```
 
-On POSIX shells use:
+Expected RED before migration implementation.
 
-```bash
-DATABASE_URL=postgresql://engineering_os:engineering_os@localhost:55432/engineering_os_test npm run test:integration -- packages/database/test/extensible-execution-routes.integration.test.ts
-```
+### 2.2 GREEN — implement migration 004
 
-Expected RED: migration 004 does not exist and the old checks remain closed.
+`004_extensible_execution_routes.sql`:
+- `DROP CONSTRAINT IF EXISTS projects_preferred_product_partner_check`;
+- add a check allowing `auto` or the stable provider-ID regex;
+- `DROP CONSTRAINT IF EXISTS conversation_messages_provider_check`;
+- add a check allowing null or the stable provider-ID regex;
+- preserve data, defaults, indexes and foreign keys;
+- create no provider/connection tables.
 
-### Step 2.2 — Implement migration 004
+Never edit applied migration 002.
 
-`004_extensible_execution_routes.sql` must:
-- drop the auto-generated closed checks from `projects.preferred_product_partner` and `conversation_messages.provider` using their current constraint names with `IF EXISTS`;
-- add new checks using the agreed lower-case stable provider-ID grammar;
-- allow `projects.preferred_product_partner = 'auto'`;
-- allow `conversation_messages.provider IS NULL`;
-- preserve all existing data and indexes;
-- make no provider-registry tables yet.
+Run:
 
-Never rewrite migration 002; deployed migration history is immutable.
-
-### Step 2.3 — Re-run database test and full integration migrations
-
-Run the targeted test, then:
-
-```bash
+```powershell
 cd platform
+npx vitest run packages/database/test/extensible-execution-routes.integration.test.ts --maxWorkers=1 --no-file-parallelism
 npm run test:integration
 ```
 
-Expected GREEN.
-
-### Step 2.4 — Commit
+Commit:
 
 ```bash
-git add platform/packages/database/migrations/004_extensible_execution_routes.sql \
-        platform/packages/database/test/extensible-execution-routes.integration.test.ts
+git add packages/database/migrations/004_extensible_execution_routes.sql packages/database/test/extensible-execution-routes.integration.test.ts
 git commit -m "refactor: remove closed provider database checks"
 ```
 
 ---
 
-## Task 3 — Make route capability explicit for structured output
+## Task 3 — Add explicit structured-output route capability and generic schema contract
 
-**Files:**
-- Modify: `platform/packages/model-gateway/src/types.ts`
-- Modify: `platform/packages/model-gateway/src/gateway.ts`
-- Modify: `platform/packages/model-gateway/test/gateway.test.ts`
-- Modify: `platform/packages/model-gateway/src/openai-adapter.ts`
-- Modify: `platform/packages/model-gateway/src/anthropic-adapter.ts`
-- Modify: `platform/packages/model-gateway/src/gemini-adapter.ts`
-- Modify: `platform/packages/model-gateway/test/provider-adapters.test.ts`
+**Modify:**
+- `platform/packages/model-gateway/src/types.ts`
+- `platform/packages/model-gateway/src/gateway.ts`
+- `platform/packages/model-gateway/test/gateway.test.ts`
+- `platform/packages/model-gateway/src/openai-adapter.ts`
+- `platform/packages/model-gateway/src/anthropic-adapter.ts`
+- `platform/packages/model-gateway/src/gemini-adapter.ts`
+- `platform/packages/model-gateway/test/provider-adapters.test.ts`
 
-### Step 3.1 — Write failing route-capability tests
+### 3.1 RED — capability routing
 
-Extend `ProviderCapabilities` tests to require:
-
-```ts
-structuredOutput: boolean
-```
-
-Add gateway tests proving:
-- ordinary `chat` can use a route with `structuredOutput: false`;
-- a request requiring `['chat', 'structuredOutput']` rejects that route;
-- an otherwise lower-priority route with `structuredOutput: true` is selected when structured output is required.
+Add `structuredOutput` expectations to route fixtures and tests proving:
+- normal chat can use `structuredOutput: false`;
+- `requiredCapabilities: ['chat', 'structuredOutput']` excludes that route;
+- a route with structured output wins when required even if another route has better priority.
 
 Run:
 
@@ -226,21 +195,19 @@ cd platform
 npx vitest run packages/model-gateway/test/gateway.test.ts
 ```
 
-Expected RED: capability does not exist.
+### 3.2 GREEN — capability field
 
-### Step 3.2 — Add `structuredOutput` capability to route contracts
+Add:
 
-Add the boolean to `ProviderCapabilities`. Update all existing route fixtures/adapters explicitly; no implicit default should hide unsupported capability.
+```ts
+structuredOutput: boolean;
+```
 
-For the three current official API adapters, set `structuredOutput: true` only because Task 4 will implement and verify the provider-specific schema contract before the batch is considered complete.
+to `ProviderCapabilities`. Update every current adapter and test fixture explicitly. Do not provide an implicit default.
 
-Run gateway tests.
+### 3.3 RED — generic structured response contract
 
-Expected GREEN.
-
-### Step 3.3 — Add a generic structured response request contract
-
-In `types.ts`, add:
+Add tests for a request contract shaped as:
 
 ```ts
 export interface JsonSchemaResponseContract {
@@ -250,41 +217,53 @@ export interface JsonSchemaResponseContract {
 }
 ```
 
-Add optional `responseContract?: JsonSchemaResponseContract` to `ModelRequest`.
+and optional:
 
-Keep `AdapterExecutionResult.content` as the provider-neutral response body. For a structured request, adapters return the provider's schema-constrained JSON text in `content`; Product Studio owns the product-specific envelope parser. This avoids teaching the gateway about Product Knowledge.
+```ts
+responseContract?: JsonSchemaResponseContract;
+```
 
-Add a gateway test proving the request passes unchanged to the selected adapter and that `structuredOutput` is required by the caller, not inferred from `responseContract` silently.
+on `ModelRequest`.
 
-Run targeted gateway tests.
+Prove the gateway passes the contract unchanged to the selected adapter. Capability remains caller-requested; merely attaching a schema must not silently bypass route eligibility.
 
-### Step 3.4 — Commit
+### 3.4 GREEN — contract implementation
+
+Keep `AdapterExecutionResult.content` as the provider-neutral response body. Structured adapters return schema-constrained JSON text in `content`; Product Studio parses the product-specific envelope.
+
+Run:
 
 ```bash
-git add platform/packages/model-gateway
+cd platform
+npx vitest run packages/model-gateway/test/gateway.test.ts
+npm run typecheck
+```
+
+Commit:
+
+```bash
+git add packages/model-gateway
 git commit -m "feat: add structured output route capability"
 ```
 
 ---
 
-## Task 4 — Implement structured-output translation in the three current API adapters
+## Task 4 — Translate structured-output requests in current API adapters
 
-**Files:**
-- Modify: `platform/packages/model-gateway/src/openai-adapter.ts`
-- Modify: `platform/packages/model-gateway/src/anthropic-adapter.ts`
-- Modify: `platform/packages/model-gateway/src/gemini-adapter.ts`
-- Modify: `platform/packages/model-gateway/test/provider-adapters.test.ts`
+**Modify:**
+- `platform/packages/model-gateway/src/openai-adapter.ts`
+- `platform/packages/model-gateway/src/anthropic-adapter.ts`
+- `platform/packages/model-gateway/src/gemini-adapter.ts`
+- `platform/packages/model-gateway/test/provider-adapters.test.ts`
 
-### Step 4.1 — Write failing adapter contract tests
+### 4.1 RED — provider translation tests
 
-For each adapter, inject the existing fake client and execute a `ModelRequest` with a small test JSON schema. Assert the provider call receives the provider-native schema option and the returned `content` contains the schema-constrained JSON text.
+Using existing injected fake clients, assert the same generic test JSON schema is mapped to:
+- OpenAI Responses API JSON Schema response format;
+- Anthropic Messages `output_config.format` JSON Schema format;
+- Google Gemini Interactions `response_format` JSON Schema format.
 
-The expected provider translations are:
-- OpenAI Responses API: JSON Schema structured response format for the request;
-- Anthropic Messages API: `output_config.format` using JSON Schema;
-- Google Gemini Interactions: `response_format` using JSON Schema.
-
-Also test ordinary chat requests without `responseContract` remain byte-for-byte compatible with current behaviour.
+Also prove ordinary chat requests without `responseContract` remain compatible.
 
 Run:
 
@@ -293,76 +272,69 @@ cd platform
 npx vitest run packages/model-gateway/test/provider-adapters.test.ts
 ```
 
-Expected RED: adapters ignore the response contract.
+### 4.2 GREEN — minimal adapter translation
 
-### Step 4.2 — Implement provider translations minimally
-
-Modify only adapter request construction. Do not add Product Knowledge-specific prompts or parsing to provider adapters.
+Modify only provider request construction. Do not add Product Knowledge parsing to adapters.
 
 Each adapter must:
-- map the generic schema contract to its provider SDK request;
-- return safe `ProviderExecutionError` on unusable/blank output;
-- continue normal usage normalisation;
-- avoid logging schema payloads or credentials.
+- advertise `structuredOutput: true` only after its translation test passes;
+- return schema-constrained text through `content`;
+- preserve usage normalisation;
+- return safe `ProviderExecutionError` for unusable output;
+- never log credentials.
 
-### Step 4.3 — Re-run adapter + gateway tests
+Run:
 
 ```bash
 cd platform
 npx vitest run packages/model-gateway/test/provider-adapters.test.ts packages/model-gateway/test/gateway.test.ts
+npm run typecheck
 ```
 
-Expected GREEN.
-
-### Step 4.4 — Commit
+Commit:
 
 ```bash
-git add platform/packages/model-gateway
+git add packages/model-gateway
 git commit -m "feat: support structured output across API adapters"
 ```
 
 ---
 
-## Task 5 — Add extraction candidate domain model and response-envelope validation
+## Task 5 — Candidate domain model + Product Partner envelope
 
-**Files:**
-- Create: `platform/packages/domain/src/knowledge-candidate.ts`
-- Create: `platform/packages/domain/test/knowledge-candidate.test.ts`
-- Modify: `platform/packages/domain/src/index.ts`
-- Modify: `platform/apps/api/src/product-partner-context.ts`
-- Modify: `platform/apps/api/test/product-partner-context.test.ts`
+**Create:**
+- `platform/packages/domain/src/knowledge-candidate.ts`
+- `platform/packages/domain/test/knowledge-candidate.test.ts`
 
-### Step 5.1 — Write failing candidate-domain tests
+**Modify:**
+- `platform/packages/domain/src/index.ts`
+- `platform/apps/api/src/product-partner-context.ts`
+- `platform/apps/api/test/product-partner-context.test.ts`
 
-Define and test:
+### 5.1 RED — candidate invariants and fingerprint
+
+Define/test:
 
 ```ts
-KnowledgeCandidateBasis =
-  | 'user_stated'
-  | 'assistant_inferred'
-  | 'assistant_recommended';
-
-KnowledgeCandidateStatus = 'pending' | 'accepted' | 'rejected';
-KnowledgeExtractionRunStatus = 'received' | 'succeeded' | 'failed';
+type KnowledgeCandidateBasis = 'user_stated' | 'assistant_inferred' | 'assistant_recommended';
+type KnowledgeCandidateStatus = 'pending' | 'accepted' | 'rejected';
+type KnowledgeExtractionRunStatus = 'received' | 'succeeded' | 'failed';
 ```
 
-Add a canonical machine category list for extraction based on the SRS while retaining current Product Studio identifiers (`vision`, `objectives`, `users`, `business_model`, `functional_requirements`, `non_functional_requirements`, `user_journeys`, `business_rules`, `integrations`, `security`, `data`, `risks`) and the additional approved SRS categories without introducing semantic aliases.
+Create one canonical extraction category list using current Product Studio identifiers plus non-duplicate SRS categories. Do not create aliases such as both `security` and `security_requirements`.
 
-Tests must prove:
-- valid candidate input is trimmed/normalised;
-- invalid basis/category/blank title/content is rejected;
-- deterministic fingerprint is stable for whitespace/case-only textual variation;
-- materially different content changes the fingerprint;
-- candidate initial status is always `pending`;
-- AI input cannot create a candidate already marked accepted/rejected.
+Test:
+- category/basis/title/content validation;
+- initial candidate status always `pending`;
+- stable SHA-256 fingerprint across case/whitespace-only variation;
+- changed content changes fingerprint;
+- AI input cannot manufacture an accepted/rejected candidate.
 
-Fingerprint algorithm for V1:
+Fingerprint source:
 
 ```text
-sha256(lower(category) + U+001F + collapseWhitespace(lower(title)) + U+001F + collapseWhitespace(lower(content)))
+lower(category) + U+001F + collapseWhitespace(lower(title)) + U+001F + collapseWhitespace(lower(content))
 ```
-
-The project boundary is enforced by DB query/index scope rather than encoded into the fingerprint itself.
 
 Run:
 
@@ -371,32 +343,26 @@ cd platform
 npx vitest run packages/domain/test/knowledge-candidate.test.ts
 ```
 
-Expected RED.
+### 5.2 GREEN — domain constructors/parsers
 
-### Step 5.2 — Implement candidate domain objects
-
-Create constructors/validators for:
-- extraction runs;
-- pending candidates;
-- review transition inputs;
+Implement:
+- extraction-run constructor;
+- pending-candidate constructor;
+- review transition validation;
 - fingerprinting;
-- Product Partner structured envelope parsing.
+- structured envelope parser that validates a nonblank top-level `answer` separately from candidate validation.
 
-Separate top-level answer parsing from candidate validation so a valid nonblank `answer` can survive invalid `candidates` data as required by the failure-isolation design.
+This separation is required so usable answer + bad candidates can keep the answer and fail only extraction.
 
-Expose the new domain module from `src/index.ts`.
+### 5.3 RED — Product Partner structured request
 
-### Step 5.3 — Write failing Product Partner request tests
-
-Update `product-partner-context.test.ts` to assert normal live Product Partner requests now include:
+Update `product-partner-context.test.ts` to require:
 
 ```ts
 requiredCapabilities: ['chat', 'structuredOutput']
 ```
 
-and the Product Partner response contract uses a versioned JSON schema, e.g. `product_partner_knowledge_v1`, whose top level requires `answer` and `candidates` and whose candidate `basis`/`category` values are enumerated.
-
-Keep routing preference semantics unchanged for now: API routes remain allowed and Product Studio does not yet depend on personal connections.
+and a versioned response contract named `product_partner_knowledge_v1` with required `answer` + `candidates` and enumerated category/basis values.
 
 Run:
 
@@ -405,107 +371,104 @@ cd platform
 npx vitest run apps/api/test/product-partner-context.test.ts packages/domain/test/knowledge-candidate.test.ts
 ```
 
-Expected RED before modifying the request builder.
-
-### Step 5.4 — Implement the structured Product Partner request
+### 5.4 GREEN — request builder
 
 In `product-partner-context.ts`:
-- add the versioned JSON schema contract;
-- update the system instruction so the schema fields mean what the domain validator expects;
-- require `chat` + `structuredOutput`;
-- preserve canonical Product Knowledge and durable history context construction.
+- add the JSON Schema contract;
+- update system instruction for `answer`, candidate semantics and basis labels;
+- require `chat + structuredOutput`;
+- preserve current bounded canonical Product Knowledge + durable conversation context.
 
-### Step 5.5 — Commit
+Run targeted tests + typecheck.
+
+Commit:
 
 ```bash
-git add platform/packages/domain platform/apps/api/src/product-partner-context.ts \
-        platform/apps/api/test/product-partner-context.test.ts
+git add packages/domain apps/api/src/product-partner-context.ts apps/api/test/product-partner-context.test.ts
 git commit -m "feat: define Product Knowledge extraction contract"
 ```
 
 ---
 
-## Task 6 — Add candidate/run PostgreSQL persistence as migration 005
+## Task 6 — Migration 005 + candidate/run repository
 
-**Files:**
-- Create: `platform/packages/database/migrations/005_product_knowledge_candidates.sql`
-- Create: `platform/packages/database/src/knowledge-candidate-repository.ts`
-- Modify: `platform/packages/database/src/index.ts`
-- Modify: `platform/packages/database/src/unit-of-work.ts`
-- Create: `platform/packages/database/test/knowledge-candidates.integration.test.ts`
+**Create:**
+- `platform/packages/database/migrations/005_product_knowledge_candidates.sql`
+- `platform/packages/database/src/knowledge-candidate-repository.ts`
+- `platform/packages/database/test/knowledge-candidates.integration.test.ts`
 
-### Step 6.1 — Write failing migration/repository integration tests
+**Modify:**
+- `platform/packages/database/src/index.ts`
+- `platform/packages/database/src/unit-of-work.ts`
+
+### 6.1 RED — persistence invariants
 
 Test:
-- migration 005 creates `knowledge_extraction_runs` and `knowledge_candidates`;
-- both tables require organisation/project scope and valid foreign-key relationships;
-- cross-organisation/project reads return nothing;
-- a run starts `received` and can transition only to `succeeded` or `failed`;
-- candidate original category/title/content/basis/fingerprint/run provenance cannot be rewritten after insertion;
-- review fields can transition pending → accepted/rejected exactly once;
-- a project-scoped partial unique index prevents duplicate **pending** fingerprints;
-- concurrent review attempts allow only one terminal decision;
-- deleting a project cascades its runs/candidates but candidate acceptance links safely to canonical knowledge.
+- tenant/project/conversation/message foreign-key scope;
+- run state `received → succeeded|failed` only;
+- immutable candidate source fields after insert;
+- `pending → accepted|rejected` once only;
+- pending fingerprint uniqueness scoped by organisation/project/category;
+- project/status listing isolation;
+- `SELECT ... FOR UPDATE` review path resolves concurrent decisions once;
+- project deletion cascades candidate/run rows safely.
 
-Run against Docker PostgreSQL.
+Run:
 
-Expected RED: migration/repository do not exist.
+```powershell
+cd platform
+npx vitest run packages/database/test/knowledge-candidates.integration.test.ts --maxWorkers=1 --no-file-parallelism
+```
 
-### Step 6.2 — Implement migration 005
+### 6.2 GREEN — migration 005
 
-Create:
-
-`knowledge_extraction_runs`
-- UUID primary key;
-- organisation/project/conversation IDs;
-- source user/assistant message IDs;
-- provider/model/route strings validated nonblank;
-- `response_contract_version`;
-- status `received | succeeded | failed`;
+Create `knowledge_extraction_runs` with:
+- UUID PK;
+- organisation/project/conversation/source message IDs;
+- provider/model/route ID;
+- contract version;
+- status `received|succeeded|failed`;
 - safe failure code/message;
-- created/completed timestamps;
-- tenant/project/conversation/message foreign keys.
+- created/completed timestamps.
 
-`knowledge_candidates`
-- UUID primary key;
+Create `knowledge_candidates` with:
+- UUID PK;
 - organisation/project/run IDs;
-- category/title/original_content/basis;
-- status `pending | accepted | rejected`;
-- normalized fingerprint;
-- reviewed_by/reviewed_at;
-- accepted_knowledge_id;
-- rejection_reason;
-- created_at;
-- project/run foreign keys.
+- category/title/original content/basis;
+- status `pending|accepted|rejected`;
+- fingerprint;
+- reviewer/time;
+- accepted canonical knowledge ID;
+- rejection reason;
+- created timestamp.
 
 Add:
-- project/status listing indexes;
-- partial unique pending-fingerprint index scoped by organisation/project/category/fingerprint;
-- DB trigger/function preventing updates to immutable candidate source fields while allowing review-state columns.
+- project/status indexes;
+- partial unique index for pending fingerprint;
+- DB trigger preventing updates to source fields while allowing review-state fields.
 
-### Step 6.3 — Implement `KnowledgeCandidateRepository`
+### 6.3 GREEN — repository API
 
-Required methods:
-- `createRun(run)`;
-- `getRunById(orgId, projectId, runId)`;
-- `markRunSucceeded(...)`;
-- `markRunFailed(...)`;
-- `insertCandidate(candidate)`;
-- `listByProject(orgId, projectId, status?)`;
-- `getCandidateForUpdate(orgId, projectId, candidateId)` using `SELECT ... FOR UPDATE` in a transaction;
-- `acceptCandidateDecision(...)`;
-- `rejectCandidateDecision(...)`.
+Implement `KnowledgeCandidateRepository` methods:
+- `createRun`;
+- `getRunById`;
+- `markRunSucceeded`;
+- `markRunFailed`;
+- `insertCandidate`;
+- `listByProject`;
+- `getCandidateForUpdate`;
+- `acceptCandidateDecision`;
+- `rejectCandidateDecision`.
 
-Repository methods must take explicit tenant/project keys and must not accept provider credentials or opaque SDK objects.
+Every query takes explicit organisation/project scope.
 
-### Step 6.4 — Add repository to `DatabaseUnitOfWork`
+Add the repository to `TransactionRepositories` in `unit-of-work.ts` and export it from `index.ts`.
 
-Expose the same transaction-scoped repository instance in `TransactionRepositories` so run/candidate decisions can commit atomically with Product Knowledge and audit.
+Run:
 
-### Step 6.5 — Run integration suite and commit
-
-```bash
+```powershell
 cd platform
+npx vitest run packages/database/test/knowledge-candidates.integration.test.ts --maxWorkers=1 --no-file-parallelism
 npm run test:integration
 npm run typecheck
 ```
@@ -513,102 +476,78 @@ npm run typecheck
 Commit:
 
 ```bash
-git add platform/packages/database
+git add packages/database
 git commit -m "feat: persist Product Knowledge extraction candidates"
 ```
 
 ---
 
-## Task 7 — Refactor Product Partner turn orchestration for failure-isolated extraction
+## Task 7 — Failure-isolated live Product Partner extraction
 
-**Files:**
-- Create: `platform/apps/api/src/product-partner-turn-service.ts`
-- Modify: `platform/apps/api/src/app.ts`
-- Modify: `platform/apps/api/test/live-product-partner.integration.test.ts`
-- Add/modify test helpers in the same test module as needed
+**Create:**
+- `platform/apps/api/src/product-partner-turn-service.ts`
 
-### Step 7.1 — Write failing happy-path integration test
+**Modify:**
+- `platform/apps/api/src/app.ts`
+- `platform/apps/api/test/live-product-partner.integration.test.ts`
 
-Update fake model adapters to advertise `structuredOutput: true` and return a valid JSON envelope containing an answer plus candidates.
+### 7.1 RED — normal one-operation extraction
 
-Assert one POST to `/projects/:id/product-partner-turn`:
-- performs one model execution in the normal path;
-- persists user and assistant conversation messages;
-- assistant message contains only the human-readable envelope `answer`, not raw JSON;
-- creates one succeeded extraction run;
+Update test fake adapters to advertise structured output and return valid JSON envelope.
+
+Assert one live turn:
+- invokes model once on normal path;
+- stores user message once;
+- stores assistant `answer` only, never raw envelope JSON;
+- creates `received` then `succeeded` extraction run;
 - creates pending candidates;
-- does **not** create canonical Product Knowledge from those candidates;
-- returns execution metadata plus extraction summary (`runId`, status, candidateCount/pendingCount).
+- creates **zero** canonical Product Knowledge from AI output;
+- returns execution metadata + extraction `{runId,status,candidateCount}`.
 
-Expected RED.
+### 7.2 GREEN — focused turn service and Transaction A/B
 
-### Step 7.2 — Extract turn orchestration into a focused service
-
-Move the multi-step live Product Partner workflow out of the large Fastify route into `product-partner-turn-service.ts` with explicit dependencies:
-- projects/conversations/knowledge/candidate repositories or service access;
-- `DatabaseUnitOfWork`;
-- `ModelGateway`;
-- audit event creation.
-
-Keep HTTP identity/RBAC and response mapping in `app.ts`.
+Move orchestration out of the large route into `product-partner-turn-service.ts`.
 
 Normal flow:
 1. build structured request;
-2. execute one eligible route;
-3. parse usable `answer` and raw candidates;
-4. create user message, assistant message and `received` extraction-run marker;
-5. **Transaction A:** persist both messages + their audit events + extraction run atomically;
-6. validate candidate set and suppress duplicates;
-7. **Transaction B:** persist all remaining candidates + candidate audit events + mark run succeeded atomically;
+2. execute eligible route;
+3. parse usable answer + raw candidates;
+4. build user/assistant messages + extraction run;
+5. **Transaction A:** messages + mandatory audits + `received` run marker;
+6. validate/deduplicate candidate set;
+7. **Transaction B:** candidate rows + candidate audit events + run `succeeded` atomically;
 8. return answer/execution/extraction summary.
 
-### Step 7.3 — Write failing invalid-candidate isolation test
+HTTP identity/RBAC stays in `app.ts`.
 
-Return a valid envelope with a usable nonblank `answer` but an invalid candidate category/basis/content.
+### 7.3 RED/GREEN — usable answer + invalid candidates
 
-Assert:
-- HTTP turn succeeds with the assistant answer;
-- user and assistant messages persist;
-- extraction run is `failed` with a safe code/message;
+Test invalid candidate with valid answer. Expected:
+- HTTP turn succeeds;
+- conversation persists;
+- extraction run becomes failed with safe code;
 - no invalid candidate persists;
-- no canonical Product Knowledge changes.
+- no canonical mutation.
 
-### Step 7.4 — Implement candidate-validation failure isolation
+Implement failure transition after Transaction A.
 
-After Transaction A, catch domain validation/persistence errors for extraction, mark the run failed in a separate audited transaction, and return the successful answer with `extraction.status = 'failed'`.
+### 7.4 RED/GREEN — candidate insert fault
 
-Never return hidden model reasoning or raw provider errors as failure messages.
+Inject failure during candidate insertion. Prove Transaction B rolls back all candidate rows but Transaction A remains committed. Mark run failed separately.
 
-### Step 7.5 — Write failing candidate-persistence fault test
+### 7.5 RED/GREEN — structured call fails before usable answer
 
-Inject a failure during candidate insertion and prove:
-- conversation Transaction A remains committed;
-- candidate Transaction B rolls back all candidate inserts for that run;
-- run ends failed;
-- canonical knowledge remains untouched.
+Test at most one recovery call with plain `chat` request:
+- original user message persisted once;
+- recovered assistant answer persisted once;
+- extraction run failed/retryable;
+- no duplicate conversation message.
 
-### Step 7.6 — Implement atomic candidate transaction
+Implement exceptional one-call recovery path only when no usable answer exists.
 
-Insert candidate set and mark run succeeded inside one UoW transaction. If any insert fails, rollback the set and update the run to failed in the separate failure transition.
+Run:
 
-### Step 7.7 — Write failing structured-generation recovery test
-
-Simulate a structured-output execution failure **before** a usable answer exists. Assert:
-- service performs at most one plain-chat recovery request;
-- recovered answer is persisted once;
-- original user message is persisted once;
-- extraction run is failed/retryable;
-- no duplicate conversation message is appended.
-
-### Step 7.8 — Implement one-call recovery path
-
-Build a second request from the same canonical context with `requiredCapabilities: ['chat']` and no structured response contract. Use it only when the first operation produced no usable answer.
-
-The recovery call must be visible in execution/audit metadata; do not make it the normal path.
-
-### Step 7.9 — Run integration tests and commit
-
-```bash
+```powershell
 cd platform
 npx vitest run apps/api/test/live-product-partner.integration.test.ts --maxWorkers=1 --no-file-parallelism
 npm run typecheck
@@ -617,166 +556,162 @@ npm run typecheck
 Commit:
 
 ```bash
-git add platform/apps/api/src platform/apps/api/test/live-product-partner.integration.test.ts
+git add apps/api/src apps/api/test/live-product-partner.integration.test.ts
 git commit -m "feat: extract Product Knowledge candidates from live turns"
 ```
 
 ---
 
-## Task 8 — Implement duplicate suppression against pending and canonical knowledge
+## Task 8 — Deterministic duplicate suppression
 
-**Files:**
-- Modify: `platform/apps/api/src/product-partner-turn-service.ts`
-- Modify: `platform/apps/api/test/live-product-partner.integration.test.ts`
-- Modify if needed: `platform/packages/domain/src/knowledge-candidate.ts`
-- Modify if needed: `platform/packages/database/src/knowledge-candidate-repository.ts`
+**Modify:**
+- `platform/apps/api/src/product-partner-turn-service.ts`
+- `platform/apps/api/test/live-product-partner.integration.test.ts`
+- `platform/packages/domain/src/knowledge-candidate.ts`
+- `platform/packages/domain/test/knowledge-candidate.test.ts`
+- `platform/packages/database/src/knowledge-candidate-repository.ts`
+- `platform/packages/database/test/knowledge-candidates.integration.test.ts`
 
-### Step 8.1 — Write failing duplicate tests
+### 8.1 RED
 
-Cover:
-- duplicate candidate twice in one provider envelope → one pending row;
-- same normalized candidate already pending → no second pending row;
-- same normalized statement already represented by current canonical Product Knowledge → no pending row;
-- same text in a materially different category remains distinct;
-- rejected historical candidate does not by itself block a newly re-proposed candidate unless canonical/pending duplicate exists.
+Test:
+- duplicate candidates in one envelope → one pending row;
+- duplicate of current pending candidate → no new row;
+- duplicate of current canonical Product Knowledge → no new row;
+- same content in a different category remains distinct;
+- rejected historical candidate does not by itself block re-proposal.
 
-Expected RED.
+### 8.2 GREEN
 
-### Step 8.2 — Implement deterministic suppression
+Before insert:
+- deduplicate response candidates by category/fingerprint;
+- compare with pending fingerprints;
+- compute equivalent fingerprints for latest canonical Product Knowledge;
+- retain DB partial unique index as race backstop.
 
-Before candidate insertion:
-- deduplicate the response set by category/fingerprint;
-- compare against pending candidate fingerprints for the project;
-- calculate comparable fingerprints for latest canonical Product Knowledge;
-- let the DB partial unique index remain the race-condition backstop.
+No vectors, embeddings or second model call.
 
-Do not add embeddings, vectors or another model call.
+Run:
 
-### Step 8.3 — Run tests and commit
-
-```bash
+```powershell
 cd platform
-npx vitest run apps/api/test/live-product-partner.integration.test.ts packages/domain/test/knowledge-candidate.test.ts --maxWorkers=1 --no-file-parallelism
+npx vitest run packages/domain/test/knowledge-candidate.test.ts apps/api/test/live-product-partner.integration.test.ts packages/database/test/knowledge-candidates.integration.test.ts --maxWorkers=1 --no-file-parallelism
 ```
 
 Commit:
 
 ```bash
-git add platform/apps/api platform/packages/domain platform/packages/database
+git add packages/domain packages/database apps/api
 git commit -m "feat: suppress duplicate knowledge candidates"
 ```
 
 ---
 
-## Task 9 — Add candidate review, promotion, rejection and retry API
+## Task 9 — Review/accept/reject/retry API with RBAC and atomic audit
 
-**Files:**
-- Modify: `platform/apps/api/src/app.ts`
-- Create: `platform/apps/api/src/knowledge-candidate-service.ts`
-- Create: `platform/apps/api/test/knowledge-candidates.integration.test.ts`
-- Modify: `platform/apps/api/test/auth-http.integration.test.ts`
-- Modify: `platform/packages/database/src/knowledge-candidate-repository.ts`
+**Create:**
+- `platform/apps/api/src/knowledge-candidate-service.ts`
+- `platform/apps/api/test/knowledge-candidates.integration.test.ts`
 
-### Step 9.1 — Write failing candidate-list/RBAC tests
+**Modify:**
+- `platform/apps/api/src/app.ts`
+- `platform/apps/api/test/auth-http.integration.test.ts`
+- `platform/packages/database/src/knowledge-candidate-repository.ts`
 
-For `GET /projects/:id/knowledge-candidates?status=pending` prove:
-- Product Owner, Contributor, Engineer, Reviewer and Viewer with project access can read;
-- users outside the project cannot read;
-- tenant/project isolation is enforced;
-- query status is validated.
+### 9.1 RED — list and RBAC
 
-For accept/reject prove:
-- only `product_owner` can mutate candidate review state;
-- Contributor/Engineer/Reviewer/Viewer receive 403;
-- unauthenticated/invalid session behaviour remains consistent with existing auth.
+For:
 
-### Step 9.2 — Write failing acceptance atomicity test
+```text
+GET /projects/:id/knowledge-candidates?status=pending
+```
 
-POST `/projects/:id/knowledge-candidates/:candidateId/accept` with optional edited `category`, `title`, `content`.
+prove all project readers can see scoped candidates while non-members/cross-tenant users cannot.
 
-Assert one transaction:
+For accept/reject/retry prove only `product_owner` succeeds; Contributor/Engineer/Reviewer/Viewer get 403.
+
+### 9.2 RED — acceptance atomicity
+
+For:
+
+```text
+POST /projects/:id/knowledge-candidates/:candidateId/accept
+```
+
+with optional edited category/title/content, assert one UoW transaction:
 - locks pending candidate;
-- creates canonical Product Knowledge revision 1 with status `confirmed` and explicit extraction-candidate provenance source;
-- marks candidate accepted;
-- links accepted canonical knowledge ID;
-- stores reviewer/time;
-- appends candidate acceptance + canonical creation audit evidence;
-- leaves original AI candidate source fields unchanged.
+- creates canonical Product Knowledge revision 1 as `confirmed`;
+- records explicit extraction-candidate provenance;
+- marks candidate accepted + canonical ID + reviewer/time;
+- appends acceptance + canonical-creation audit.
 
-Fault-inject audit failure and assert **all** of acceptance rolls back.
+Fault-inject audit failure and assert all changes roll back. Original AI candidate source fields stay immutable.
 
-### Step 9.3 — Implement candidate acceptance service
+### 9.3 GREEN — acceptance service
 
-`knowledge-candidate-service.ts` owns review use cases rather than bloating `app.ts`.
+Implement in `knowledge-candidate-service.ts`; return 409 if candidate already decided.
 
-Use `DatabaseUnitOfWork`; do not accept/reject through independent repository calls outside the transaction.
+### 9.4 RED/GREEN — rejection
 
-If the candidate is not pending, return a deterministic conflict (409) rather than silently repeating the decision.
+For:
 
-### Step 9.4 — Write failing rejection test
+```text
+POST /projects/:id/knowledge-candidates/:candidateId/reject
+```
 
-POST `/projects/:id/knowledge-candidates/:candidateId/reject` with optional reason.
+assert terminal rejection + reviewer/time/optional reason + audit, with zero canonical mutation. Implement row-lock transaction and 409 on repeat decision.
 
-Assert:
-- candidate becomes rejected exactly once;
-- reviewer/time/reason are stored;
-- audit is atomic;
-- canonical Product Knowledge is unchanged.
+### 9.5 RED/GREEN — extraction-only retry
 
-### Step 9.5 — Implement rejection
+For:
 
-Use row lock/equivalent transaction and return 409 for an already decided candidate.
+```text
+POST /projects/:id/extraction-runs/:runId/retry
+```
 
-### Step 9.6 — Write failing retry tests
+assert:
+- failed run only;
+- persisted source user/assistant turn used;
+- current canonical context used;
+- candidate-only structured request performed;
+- no user/assistant conversation message appended;
+- new retry attempt/provenance recorded;
+- duplicate suppression applied;
+- retry requested/completed/failed audited.
 
-POST `/projects/:id/extraction-runs/:runId/retry`:
-- Product Owner only;
-- only failed runs retry;
-- loads persisted source user/assistant turn and current canonical project context;
-- performs extraction-only structured request;
-- does not append a new user or assistant conversation message;
-- creates a new extraction attempt linked/provenanced to the same source turn or safely reuses run lineage according to repository contract;
-- persists candidates with duplicate suppression;
-- audits retry requested/completed/failure.
+Implement a dedicated candidate-only schema request; do not regenerate conversation answer.
 
-### Step 9.7 — Implement extraction-only retry
+Run:
 
-Add a dedicated request builder/service path using a candidate-only schema. Do not ask the model to regenerate the conversational answer merely to retry extraction.
-
-### Step 9.8 — Run API + auth integration tests and commit
-
-```bash
+```powershell
 cd platform
-npx vitest run apps/api/test/knowledge-candidates.integration.test.ts \
-                apps/api/test/auth-http.integration.test.ts \
-                apps/api/test/live-product-partner.integration.test.ts \
-                --maxWorkers=1 --no-file-parallelism
+npx vitest run apps/api/test/knowledge-candidates.integration.test.ts apps/api/test/auth-http.integration.test.ts apps/api/test/live-product-partner.integration.test.ts --maxWorkers=1 --no-file-parallelism
 npm run typecheck
 ```
 
 Commit:
 
 ```bash
-git add platform/apps/api platform/packages/database
+git add apps/api packages/database
 git commit -m "feat: add Product Knowledge candidate review API"
 ```
 
 ---
 
-## Task 10 — Generalise Product Studio web types and route status without widening the initial UI
+## Task 10 — Generalise Product Studio web contracts and route eligibility
 
-**Files:**
-- Modify: `platform/apps/web/lib/api.ts`
-- Modify: `platform/apps/web/app/projects/[id]/page.tsx`
-- Modify: `platform/apps/web/app/actions.ts`
-- Modify if needed: `platform/apps/web/app/globals.css`
-- Create: `platform/test/web-provider-contract.test.mjs`
+**Create:**
+- `platform/test/web-provider-contract.test.mjs`
 
-### Step 10.1 — Write failing static web contract test
+**Modify:**
+- `platform/apps/web/lib/api.ts`
+- `platform/apps/web/app/projects/[id]/page.tsx`
 
-Create a fast Node contract test proving web source no longer declares provider fields as the closed union `'openai' | 'anthropic' | 'google'`, while the visible Product Partner choices still include the three initial providers plus Auto.
+### 10.1 RED — static contract
 
-Also assert `ModelRouteSummary` exposes route capabilities including `structuredOutput`.
+Test source/API contracts no longer declare provider fields as the closed `'openai'|'anthropic'|'google'` union, while initial selector options remain Auto/OpenAI/Claude/Gemini.
+
+Assert `ModelRouteSummary` exposes capabilities including `chat` and `structuredOutput`.
 
 Run:
 
@@ -785,24 +720,19 @@ cd platform
 node --test test/web-provider-contract.test.mjs
 ```
 
-Expected RED.
-
-### Step 10.2 — Generalise web API contracts
+### 10.2 GREEN — web types and provider labels
 
 In `lib/api.ts`:
-- make provider attribution/route provider a stable string identifier;
-- keep Product Partner preference as string with `auto` convention;
-- add route capabilities to `ModelRouteSummary`;
-- add extraction summary to `ProductPartnerTurnResult`;
-- add candidate/run/review API types and client functions needed by Task 11.
+- use string provider IDs;
+- expose route capabilities;
+- add extraction summary to live-turn result.
 
-In `page.tsx`:
-- replace exhaustive `Record<ProductPartner, string>` assumptions with an initial option list plus fallback label function;
-- keep visible selector choices OpenAI/Claude/Gemini/Auto for this release;
-- compute `liveAvailable` using an available matching route that has both `chat` and `structuredOutput` for Product Partner turns;
-- render unknown/future provider attribution safely instead of indexing a closed label map.
+In Product Studio page:
+- use a fixed initial option array for Auto/OpenAI/Claude/Gemini;
+- use fallback provider-label formatting for future provider message attribution;
+- consider a Product Partner live only if a matching available route has both `chat` and `structuredOutput`.
 
-### Step 10.3 — Re-run contract + typecheck
+Run:
 
 ```bash
 cd platform
@@ -810,79 +740,74 @@ node --test test/web-provider-contract.test.mjs
 npm run typecheck
 ```
 
-Expected GREEN.
-
-### Step 10.4 — Commit
+Commit:
 
 ```bash
-git add platform/apps/web platform/test/web-provider-contract.test.mjs
+git add apps/web test/web-provider-contract.test.mjs
 git commit -m "refactor: make Product Studio route-capability aware"
 ```
 
 ---
 
-## Task 11 — Add Product Studio Review Queue UI
+## Task 11 — Product Studio Review Queue UI
 
-**Files:**
-- Modify: `platform/apps/web/lib/api.ts`
-- Modify: `platform/apps/web/app/actions.ts`
-- Modify: `platform/apps/web/app/projects/[id]/page.tsx`
-- Modify: `platform/apps/web/app/globals.css`
-- Create: `platform/test/product-knowledge-review-ui.test.mjs`
+**Create:**
+- `platform/test/product-knowledge-review-ui.test.mjs`
 
-### Step 11.1 — Write failing UI source/contract tests
+**Modify:**
+- `platform/apps/web/lib/api.ts`
+- `platform/apps/web/app/actions.ts`
+- `platform/apps/web/app/projects/[id]/page.tsx`
+- `platform/apps/web/app/globals.css`
 
-The test should assert the Product Studio source contains a Review Queue surface and actions wired to:
-- list pending candidates;
-- Accept;
-- Edit & Accept;
-- Reject;
-- retry failed extraction.
+### 11.1 RED — UI contract
 
-Keep this a deterministic source/contract test unless a browser harness is already configured for the web workspace; do not add a new browser-test framework only for this slice.
+Static source/contract test must find:
+- Review Queue surface;
+- pending candidate list API usage;
+- Accept action;
+- Edit & Accept fields/action;
+- Reject action;
+- retry failed extraction action.
 
-### Step 11.2 — Add server actions
+Use the existing Node test layer; do not introduce a new browser framework solely for this slice.
 
-In `actions.ts` add:
+### 11.2 GREEN — web API + actions
+
+Add candidate/run types and client functions:
+- list candidates;
+- accept candidate;
+- reject candidate;
+- retry extraction.
+
+Add server actions:
 - `acceptKnowledgeCandidateAction`;
 - `rejectKnowledgeCandidateAction`;
 - `retryKnowledgeExtractionAction`.
 
-All actions revalidate the current Product Studio route. Do not allow client-submitted reviewer identity; API identity supplies it.
+Reviewer identity comes from API authentication, never form input.
 
-### Step 11.3 — Render Review Queue in Product Knowledge panel
+### 11.3 GREEN — Review Queue rendering
 
-Load candidate queue alongside studio/model routes.
+Load candidate/recent extraction state with studio/model routes.
 
-Each candidate card shows:
+Cards show:
 - category/title/content;
-- basis label;
+- basis;
 - provider/model/route provenance;
-- source-turn reference;
-- pending/review state.
+- source turn;
+- review status.
 
-For Product Owners show:
-- Accept;
-- editable fields + Edit & Accept;
-- Reject with optional reason;
-- Retry for failed extraction runs.
+Product Owners receive Accept, Edit & Accept, Reject and retry controls. Other roles see read-only queue. Obtain effective role from authorised API state; never trust a browser-supplied role.
 
-For all other project roles render read-only state. Obtain effective project role from an authorised API response rather than trusting browser-supplied role values.
-
-### Step 11.4 — Show extraction result without replacing answer
-
-After a successful turn, the page should naturally re-fetch and display pending count. The conversation remains visible even when the latest extraction run failed; show compact state such as:
+Successful assistant answer remains visible even if extraction failed. Show compact states such as:
 - `3 candidates ready for review`;
 - `No new candidates`;
 - `Knowledge extraction failed — retry available`.
 
-Do not replace the assistant answer with extraction failure UI.
+Style only the Review Queue additions in `globals.css`; preserve current three-region Product Studio layout.
 
-### Step 11.5 — Style within existing Product Studio layout
-
-Add focused classes to `globals.css`; preserve the current three-region layout and responsive behaviour. Do not redesign unrelated screens.
-
-### Step 11.6 — Build/typecheck and commit
+Run:
 
 ```bash
 cd platform
@@ -894,141 +819,140 @@ npm run build --workspace @engineering-os/web
 Commit:
 
 ```bash
-git add platform/apps/web platform/test/product-knowledge-review-ui.test.mjs
+git add apps/web test/product-knowledge-review-ui.test.mjs
 git commit -m "feat: add Product Knowledge review queue UI"
 ```
 
 ---
 
-## Task 12 — Full regression, Docker PostgreSQL verification and merge gate
+## Task 12 — Clean-volume regression and exact CI-equivalent verification
 
-**Files:**
-- Modify only if verification reveals a real defect: files directly implicated by failing tests
-- No speculative cleanup
+### 12.1 Fresh Docker PostgreSQL
 
-### Step 12.1 — Start from a clean Docker PostgreSQL volume
-
-From `platform/`:
-
-```bash
+```powershell
+cd platform
 docker compose down -v
 docker compose up -d postgres
+$env:DATABASE_URL='postgresql://engineering_os:engineering_os@localhost:55432/engineering_os_test'
 ```
 
-Wait until PostgreSQL reports healthy. Use the repository test URL:
+Confirm the container is healthy before tests.
 
-```text
-postgresql://engineering_os:engineering_os@localhost:55432/engineering_os_test
-```
+### 12.2 Platform gates
 
-### Step 12.2 — Run platform tests in required order
-
-```bash
+```powershell
 cd platform
+npm ci --ignore-scripts
 npm test
 npm run typecheck
 npm run build --workspace @engineering-os/web
-npm audit --omit=dev
+npm audit signatures
+npm audit --omit=dev --audit-level=high
 ```
 
-Expected:
-- unit tests green;
-- serial PostgreSQL integration tests green including migrations 004/005;
-- typecheck green;
-- Next.js production build green;
-- no new runtime vulnerability introduced by this slice.
+Expected: all green; no new high-severity runtime vulnerability from this slice.
 
-### Step 12.3 — Run repository/ECC compatibility gates
+### 12.3 ECC compatibility gates — exact CI commands
 
-From repository root run the existing repository verification commands used by CI, including the ECC structural/static compatibility tests. Use the commands from `.github/workflows/ci.yml` rather than inventing a parallel local gate.
+From repository root:
 
-Expected: all product/ECC gates that apply to `main`/`feature/**`/`chore/**` pass.
+```powershell
+npm ci --ignore-scripts
+node scripts/ci/validate-agents.js
+node scripts/ci/validate-hooks.js
+node scripts/ci/validate-commands.js
+node scripts/ci/validate-skills.js
+node scripts/ci/validate-install-manifests.js
+node scripts/ci/validate-rules.js
+node scripts/ci/validate-workflow-security.js
+node scripts/ci/validate-derivative-ecc-catalog.js --text
+npm run command-registry:check
+node scripts/ci/check-unicode-safety.js
+node scripts/ci/validate-no-personal-paths.js
+npm run security:ioc-scan
+```
 
-### Step 12.4 — Manual smoke against real API/web + Docker PostgreSQL
+Expected: all green.
 
-Run API and web against Docker PostgreSQL and verify:
-1. create/login as Product Owner;
-2. create/open a project;
-3. send a live Product Partner turn through a configured **test/staging** route or deterministic adapter environment;
-4. assistant answer persists;
-5. pending candidates appear separately;
-6. refresh/restart preserves answer and queue;
-7. accept one candidate → canonical `confirmed` Product Knowledge appears;
-8. reject another → no canonical mutation;
-9. switch Product Partner → canonical knowledge and queue remain;
-10. Viewer can see queue but cannot accept/reject;
-11. extraction failure leaves conversation visible and retryable.
+### 12.4 Local product smoke
 
-Do not make live paid-provider calls in CI. Any optional manual real-provider smoke must use explicitly configured credentials and remain outside automated CI.
+Run API + web against Docker PostgreSQL and verify:
+1. Product Owner logs in and opens/creates project;
+2. live structured Product Partner turn stores human-readable answer;
+3. pending candidates appear separately;
+4. refresh/restart preserves conversation + queue;
+5. accept candidate → canonical `confirmed` Product Knowledge;
+6. reject candidate → no canonical mutation;
+7. switch Product Partner → state persists;
+8. Viewer reads queue but cannot accept/reject;
+9. extraction failure keeps answer visible and exposes retry;
+10. retry does not duplicate conversation messages.
 
-### Step 12.5 — Optional Neon shared/staging validation
+Automated CI must use fake/deterministic adapters, not paid live-provider calls.
 
-Only if an already-authorised Neon test/staging connection is available, run migrations and the non-destructive integration/smoke subset there. Do not claim Neon validation if no connection is configured.
+### 12.5 Neon validation rule
 
-### Step 12.6 — Diff/security review
+If an already-authorised Neon test/staging connection exists, run migrations and non-destructive integration smoke there. If no connection is configured, record Neon as **not executed**; never claim it passed.
 
-Run:
+### 12.6 Diff/security gate
 
-```bash
+From repo root:
+
+```powershell
 git diff --check
 git status --short
 git diff main...HEAD -- platform docs/product docs/architecture docs/superpowers
 ```
 
 Confirm:
-- migrations 001–003 untouched;
-- no accidental ECC-core changes outside approved adapter/docs scope;
-- no secrets/provider credentials committed;
-- no personal connection/Agent Bridge scope accidentally implemented;
-- review-first candidate state cannot bypass Product Owner acceptance.
+- migrations 001–003 unchanged;
+- only forward migrations 004/005 added;
+- no accidental ECC core edits;
+- no credentials/secrets;
+- no Agent Bridge/personal-entitlement implementation leaked into this branch;
+- no API/model path can create canonical knowledge without Product Owner acceptance.
 
-### Step 12.7 — Final verification commit if needed
+### 12.7 Remote SHA gate
 
-Only if verification required legitimate fixes, commit those fixes separately with a focused message. Do not create an empty “verification” commit.
+Push the implementation branch and verify **the exact pushed SHA** in `Engineering OS CI`. Old badge/history is insufficient.
 
-### Step 12.8 — Push and remote CI gate
-
-Push the implementation branch, then verify the exact pushed SHA in GitHub Actions. Do not infer green CI from an old badge or prior SHA.
-
-The slice is merge-ready only when local verification and the exact remote SHA are green.
+Only then is the slice merge-ready.
 
 ---
 
-## Acceptance checklist
+## Merge acceptance checklist
 
-Before merge, prove all of the following:
+- [ ] Future stable provider IDs pass domain/gateway/DB validation.
+- [ ] OpenAI/Anthropic/Google existing API routes remain compatible.
+- [ ] Multiple route IDs/models coexist per provider.
+- [ ] Migration 002 untouched; migration 004 removes closed checks forward-only.
+- [ ] `structuredOutput` is explicit per route.
+- [ ] Product Partner normal path requires `chat + structuredOutput`.
+- [ ] One normal structured model operation yields answer + zero/more candidates.
+- [ ] Conversation remains durable if extraction persistence fails.
+- [ ] Migration 005 stores extraction runs + non-canonical candidates.
+- [ ] Invalid/failed extraction cannot create canonical Product Knowledge.
+- [ ] Duplicate suppression checks pending + canonical state without another model call.
+- [ ] Only Product Owner can accept/reject/retry.
+- [ ] Acceptance atomically creates `confirmed` canonical knowledge + decision + audit.
+- [ ] Rejection never mutates canonical knowledge.
+- [ ] Concurrent review resolves once.
+- [ ] Retry is extraction-only and adds no duplicate conversation messages.
+- [ ] Product Studio still presents Auto/OpenAI/Claude/Gemini initially.
+- [ ] Web/API provider types no longer impose a three-provider ceiling.
+- [ ] Review Queue shows provenance and extraction failure state.
+- [ ] Docker clean-volume tests pass.
+- [ ] Typecheck + production Next.js build pass.
+- [ ] Authentication/collaboration regressions pass.
+- [ ] ECC compatibility/security gates pass.
+- [ ] No provider credential, subscription secret or hidden reasoning appears in API/UI/audit contracts.
 
-- [ ] Core provider contracts accept future stable provider IDs.
-- [ ] Existing OpenAI/Anthropic/Google API routes still work.
-- [ ] Multiple route IDs/models can coexist for one provider.
-- [ ] Applied migration 002 is unchanged; migration 004 generalises provider checks forward-only.
-- [ ] `structuredOutput` is an explicit per-route capability.
-- [ ] Product Partner extraction requires `chat + structuredOutput`.
-- [ ] Normal successful turn uses one structured model operation.
-- [ ] Conversation persists independently of candidate persistence success.
-- [ ] Migration 005 persists extraction runs and non-canonical candidates.
-- [ ] Invalid/failed extraction never creates canonical Product Knowledge.
-- [ ] Pending/canonical duplicate suppression works without another model call.
-- [ ] Only Product Owner can accept/reject candidates.
-- [ ] Acceptance atomically creates `confirmed` canonical knowledge + candidate decision + audit.
-- [ ] Rejection never mutates canonical Product Knowledge.
-- [ ] Concurrent candidate review resolves once.
-- [ ] Retry is extraction-only and does not duplicate conversation messages.
-- [ ] Product Studio remains usable with the initial OpenAI/Claude/Gemini/Auto selector.
-- [ ] Web/API types no longer impose the three-provider ceiling.
-- [ ] Review Queue renders candidate provenance and failure state.
-- [ ] Docker PostgreSQL clean-volume regression passes.
-- [ ] TypeScript and Next.js production build pass.
-- [ ] Existing authentication/collaboration regressions pass.
-- [ ] ECC/platform verification gates pass.
-- [ ] No provider credentials, user subscription secrets or hidden reasoning appear in source/log/audit contracts.
+## Follow-on plans — deliberately separate
 
-## Follow-on plans after this slice
+After this slice is green, create and execute separate plans for:
 
-Create separate plans, in this order, after this slice is green:
+1. **AI connection + project delegation administration** — `ai_connections`, shares, Do Not Share/Online Only/Persistent, usage limits, RBAC, audit.
+2. **Agent Bridge + subscription harness adapters** — scoped runner auth/health and officially supported Codex/Claude Code/Antigravity routes.
+3. **ECC-backed Engineering Studio execution** — approved ECC agent/skill enumeration, harness/session adapters, worktrees, checkpoints and independent review.
 
-1. `AI connection + project delegation administration` — `ai_connections`, project shares, Do Not Share/Online Only/Persistent, owner limits, RBAC, audit.
-2. `Agent Bridge + subscription harness adapters` — scoped runner auth/health and provider-supported Codex/Claude Code/Antigravity routes.
-3. `ECC-backed Engineering Studio execution` — approved ECC agent/skill registry integration, harness/session adapters, worktrees, checkpoints and independent review.
-
-Do not fold those three larger subsystems into this extraction implementation branch.
+Do not fold those subsystems into this extraction branch.
