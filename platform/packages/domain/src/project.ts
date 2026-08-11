@@ -6,7 +6,6 @@ import {
 } from './validation.js';
 
 export const INITIAL_PRODUCT_PARTNERS = ['openai', 'anthropic', 'google'] as const;
-export const PRODUCT_PARTNERS = ['auto', ...INITIAL_PRODUCT_PARTNERS] as const;
 export type ProductPartner = string;
 
 export const PROJECT_STAGES = [
