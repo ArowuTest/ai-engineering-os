@@ -73,7 +73,10 @@ describe('004_extensible_execution_routes migration', () => {
 
     const first = await runMigrations(pool);
     const second = await runMigrations(pool);
-    expect(first).toEqual(['004_extensible_execution_routes.sql']);
+    expect(first).toEqual([
+      '004_extensible_execution_routes.sql',
+      '005_product_knowledge_candidates.sql',
+    ]);
     expect(second).toEqual([]);
 
     await expect(
