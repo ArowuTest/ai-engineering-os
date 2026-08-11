@@ -5,7 +5,7 @@ export const SESSION_COOKIE = 'engineering_os_session';
 export const ORGANISATION_COOKIE = 'engineering_os_organisation';
 export const INVITATION_FLASH_COOKIE = 'engineering_os_invitation_flash';
 
-export type ProductPartner = 'auto' | 'openai' | 'anthropic' | 'google';
+export type ProductPartner = 'auto' | string;
 export type KnowledgeStatus =
   | 'proposed'
   | 'inferred'
@@ -48,7 +48,7 @@ export interface ConversationMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
-  provider?: 'openai' | 'anthropic' | 'google';
+  provider?: string;
   createdAt: string;
 }
 
@@ -60,26 +60,52 @@ export interface StudioState {
   completeness: ProductCompleteness;
 }
 
+export interface ModelRouteCapabilities {
+  chat: boolean;
+  tools: boolean;
+  vision: boolean;
+  files: boolean;
+  mcp: boolean;
+  localWorkspace: boolean;
+  headless: boolean;
+  structuredOutput: boolean;
+}
+
 export interface ModelRouteSummary {
   id: string;
-  provider: 'openai' | 'anthropic' | 'google';
+  provider: string;
   model: string;
   executionMode: string;
   costType: string;
   available: boolean;
+  capabilities: {
+    chat: boolean;
+    tools: boolean;
+    vision: boolean;
+    files: boolean;
+    mcp: boolean;
+    localWorkspace: boolean;
+    headless: boolean;
+    structuredOutput: boolean;
+  };
 }
 
 export interface ProductPartnerTurnResult {
   userMessage: ConversationMessage;
   assistantMessage: ConversationMessage;
   execution: {
-    provider: 'openai' | 'anthropic' | 'google';
+    provider: string;
     model: string;
     routeId: string;
     executionMode: string;
     costType: string;
     inputTokens?: number;
     outputTokens?: number;
+  };
+  extraction: {
+    runId: string;
+    status: 'succeeded' | 'failed';
+    candidateCount: number;
   };
 }
 

@@ -10,12 +10,29 @@ import { getStudio, listModelRoutes, type KnowledgeStatus, type ProductPartner }
 
 export const dynamic = 'force-dynamic';
 
-const partnerLabels: Record<ProductPartner, string> = {
+const partnerOptions: Array<{ value: ProductPartner; label: string }> = [
+  { value: 'auto', label: 'Auto select' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'anthropic', label: 'Claude' },
+  { value: 'google', label: 'Gemini' },
+];
+
+const knownProviderLabels: Record<string, string> = {
   auto: 'Auto select',
   openai: 'OpenAI',
   anthropic: 'Claude',
   google: 'Gemini',
 };
+
+function formatProviderLabel(provider: string): string {
+  const known = knownProviderLabels[provider];
+  if (known) return known;
+  return provider
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ') || provider;
+}
 
 const statusOptions: KnowledgeStatus[] = [
   'proposed', 'inferred', 'confirmed', 'approved', 'superseded', 'rejected',
@@ -35,11 +52,14 @@ export default async function ProductStudioPage({ params }: { params: Promise<{ 
   const [studio, modelRoutes] = await Promise.all([getStudio(id), listModelRoutes()]);
   const missingPreview = studio.completeness.missingCategories.slice(0, 5).map(label).join(', ');
   const availableRoutes = modelRoutes.filter((route) => route.available);
+  const liveCapableRoutes = availableRoutes.filter(
+    (route) => route.capabilities.chat && route.capabilities.structuredOutput,
+  );
   const selectedPartner = studio.project.preferredProductPartner;
   const liveAvailable = selectedPartner === 'auto'
-    ? availableRoutes.length > 0
-    : availableRoutes.some((route) => route.provider === selectedPartner);
-  const selectedPartnerLabel = partnerLabels[selectedPartner];
+    ? liveCapableRoutes.length > 0
+    : liveCapableRoutes.some((route) => route.provider === selectedPartner);
+  const selectedPartnerLabel = formatProviderLabel(selectedPartner);
 
   return (
     <main className="studio-shell">
@@ -68,8 +88,8 @@ export default async function ProductStudioPage({ params }: { params: Promise<{ 
               defaultValue={studio.project.preferredProductPartner}
               name="preferredProductPartner"
             >
-              {Object.entries(partnerLabels).map(([value, text]) => (
-                <option key={value} value={value}>{text}</option>
+              {partnerOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
               ))}
             </select>
             <button className="button-small" type="submit">Switch</button>
@@ -87,10 +107,10 @@ export default async function ProductStudioPage({ params }: { params: Promise<{ 
           </div>
           <div className="provider-status-row" aria-label="Live provider connections">
             {(['openai', 'anthropic', 'google'] as const).map((provider) => {
-              const route = availableRoutes.find((candidate) => candidate.provider === provider);
+              const route = liveCapableRoutes.find((candidate) => candidate.provider === provider);
               return (
                 <span className={`provider-status ${route ? 'connected' : 'disconnected'}`} key={provider}>
-                  {partnerLabels[provider]} <b>{route ? route.model : 'Not configured'}</b>
+                  {formatProviderLabel(provider)} <b>{route ? route.model : 'Not configured'}</b>
                 </span>
               );
             })}
@@ -112,7 +132,7 @@ export default async function ProductStudioPage({ params }: { params: Promise<{ 
               <article className={`message message-${message.role}`} key={message.id}>
                 {message.content}
                 <span className="message-meta">
-                  {message.role}{message.provider ? ` / ${partnerLabels[message.provider]}` : ''}
+                  {message.role}{message.provider ? ` / ${formatProviderLabel(message.provider)}` : ''}
                 </span>
               </article>
             ))
