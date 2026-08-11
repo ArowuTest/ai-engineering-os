@@ -28,6 +28,7 @@ function systemInstruction(messages: ModelMessage[]): string | undefined {
     .join('\n\n');
   return value || undefined;
 }
+
 function conversationTurns(messages: ModelMessage[]) {
   return messages
     .filter((message) => message.role === 'user' || message.role === 'assistant')
@@ -35,6 +36,24 @@ function conversationTurns(messages: ModelMessage[]) {
       role: message.role === 'assistant' ? 'model' : 'user',
       content: message.content,
     }));
+}
+
+function interactionRequest(model: string, request: ModelRequest): Record<string, unknown> {
+  const input: Record<string, unknown> = {
+    model,
+    system_instruction: systemInstruction(request.messages),
+    input: conversationTurns(request.messages),
+  };
+
+  if (request.responseContract) {
+    input.response_format = {
+      type: 'text',
+      mime_type: 'application/json',
+      schema: request.responseContract.schema,
+    };
+  }
+
+  return input;
 }
 
 export function createGeminiAdapter(options: GeminiAdapterOptions): ModelAdapter {
@@ -58,16 +77,12 @@ export function createGeminiAdapter(options: GeminiAdapterOptions): ModelAdapter
         mcp: false,
         localWorkspace: false,
         headless: true,
-        structuredOutput: false,
+        structuredOutput: true,
       },
     },
     async execute(request: ModelRequest) {
       try {
-        const result = await client.interactions.create({
-          model,
-          system_instruction: systemInstruction(request.messages),
-          input: conversationTurns(request.messages),
-        });
+        const result = await client.interactions.create(interactionRequest(model, request));
         const content = result.output_text?.trim();
         if (!content) throw new ProviderExecutionError('google');
         const usage = normaliseUsage(result.usage?.total_input_tokens, result.usage?.total_output_tokens);
