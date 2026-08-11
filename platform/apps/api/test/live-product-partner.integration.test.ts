@@ -41,7 +41,7 @@ function adapter(
         mcp: false,
         localWorkspace: false,
         headless: true,
-        structuredOutput: false,
+        structuredOutput: true,
       },
     },
     execute,
