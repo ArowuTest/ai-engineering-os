@@ -216,14 +216,11 @@ export function parseProductPartnerEnvelope(raw: string): ProductPartnerEnvelope
   if (!isPlainObject(parsed)) {
     throw new DomainValidationError('response', 'Product Partner response must be an object');
   }
-  assertExactKeys(parsed, ['answer', 'candidates'], 'response');
 
-  const answer = requireNonBlank(parsed.answer, 'answer');
-  if (!Array.isArray(parsed.candidates)) {
-    throw new DomainValidationError('candidates', 'candidates must be an array');
-  }
-
-  return { answer, candidates: parsed.candidates };
+  return {
+    answer: requireNonBlank(parsed.answer, 'answer'),
+    candidates: parsed.candidates,
+  };
 }
 
 export function parseKnowledgeCandidateProposals(value: unknown): KnowledgeCandidateProposal[] {
