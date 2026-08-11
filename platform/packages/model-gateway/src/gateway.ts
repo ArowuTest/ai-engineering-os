@@ -25,6 +25,9 @@ function requireStableIdentifier(value: string, field: string): void {
 function validateRoute(route: ModelRoute): void {
   requireStableIdentifier(route.id, 'route id');
   requireStableIdentifier(route.provider, 'provider');
+  if (route.provider === 'auto') {
+    throw new Error('provider cannot use the reserved auto routing sentinel');
+  }
   if (route.model.trim().length === 0) {
     throw new Error('model must be a non-blank string');
   }
