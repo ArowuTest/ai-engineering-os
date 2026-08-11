@@ -1,4 +1,4 @@
-export type ModelProvider = 'openai' | 'anthropic' | 'google';
+export type ModelProvider = string;
 export type ExecutionMode = 'subscription' | 'api' | 'manual';
 export type CostType =
   | 'included_subscription'
@@ -28,6 +28,7 @@ export interface ModelRoute {
   priority: number;
   capabilities: ProviderCapabilities;
 }
+
 export type AgentRole =
   | 'product_partner'
   | 'engineer'
@@ -58,6 +59,7 @@ export interface ModelUsage {
   inputTokens?: number;
   outputTokens?: number;
 }
+
 export interface AdapterExecutionResult {
   content: string;
   usage?: ModelUsage;
