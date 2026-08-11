@@ -55,6 +55,7 @@ export function createAnthropicAdapter(options: AnthropicAdapterOptions): ModelA
         mcp: false,
         localWorkspace: false,
         headless: true,
+        structuredOutput: false,
       },
     },
     async execute(request: ModelRequest) {
