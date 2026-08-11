@@ -59,7 +59,11 @@ function requireRole(value: unknown): ConversationRole {
 }
 
 function requireProvider(value: unknown): MessageProvider {
-  return requireStableIdentifier(value, 'provider');
+  const provider = requireStableIdentifier(value, 'provider');
+  if (provider === 'auto') {
+    throw new DomainValidationError('provider', 'provider cannot use the reserved auto routing sentinel');
+  }
+  return provider;
 }
 
 export function createConversation(input: CreateConversationInput): ProductConversation {
