@@ -97,7 +97,7 @@ describe('Product Knowledge candidate domain', () => {
     expect(changed).not.toBe(first);
   });
 
-  it('parses the answer independently from candidate validation', () => {
+  it('parses the answer independently from candidate semantic validation', () => {
     const envelope = parseProductPartnerEnvelope(JSON.stringify({
       answer: 'The product should clarify entitlement scope.',
       candidates: [{
@@ -109,6 +109,16 @@ describe('Product Knowledge candidate domain', () => {
     }));
 
     expect(envelope.answer).toBe('The product should clarify entitlement scope.');
+    expect(() => parseKnowledgeCandidateProposals(envelope.candidates)).toThrow(DomainValidationError);
+  });
+
+  it('preserves a valid answer even when candidates is not an array', () => {
+    const envelope = parseProductPartnerEnvelope(JSON.stringify({
+      answer: 'The conversational answer is still usable.',
+      candidates: { malformed: true },
+    }));
+
+    expect(envelope.answer).toBe('The conversational answer is still usable.');
     expect(() => parseKnowledgeCandidateProposals(envelope.candidates)).toThrow(DomainValidationError);
   });
 
