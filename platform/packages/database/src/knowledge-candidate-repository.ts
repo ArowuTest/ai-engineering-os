@@ -330,6 +330,27 @@ export class KnowledgeCandidateRepository {
     );
   }
 
+  async hasActiveRetryAttempt(
+    organisationId: string,
+    projectId: string,
+    originalRunId: string,
+  ): Promise<boolean> {
+    const result = await this.database.query<{ exists: number }>(
+      `SELECT 1 AS exists
+       FROM knowledge_extraction_retry_attempts a
+       JOIN knowledge_extraction_runs r
+         ON r.id = a.retry_run_id
+        AND r.organisation_id = a.organisation_id
+        AND r.project_id = a.project_id
+       WHERE a.organisation_id = $1 AND a.project_id = $2
+         AND a.original_run_id = $3
+         AND r.status = 'received'
+       LIMIT 1`,
+      [organisationId, projectId, originalRunId],
+    );
+    return result.rowCount === 1;
+  }
+
   async insertRetryAttempt(input: {
     id: string;
     organisationId: string;

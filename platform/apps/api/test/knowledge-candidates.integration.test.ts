@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { hashPassword } from '@engineering-os/domain';
+import {
+  createPendingKnowledgeCandidate,
+  fingerprintKnowledgeCandidate,
+  hashPassword,
+} from '@engineering-os/domain';
+import { ProviderExecutionError } from '@engineering-os/model-gateway';
 import {
   AuditRepository,
   ConversationRepository,
@@ -20,6 +25,10 @@ import {
   type ModelRequest,
 } from '@engineering-os/model-gateway';
 import { buildApp } from '../src/app.js';
+import {
+  KnowledgeCandidateServiceError,
+  retryExtractionRun,
+} from '../src/knowledge-candidate-service.js';
 import { AuthService } from '../src/auth-service.js';
 import {
   closeDatabase,
@@ -540,6 +549,406 @@ describe('knowledge candidate review API', () => {
         payload: {},
       });
       expect(bad.statusCode).toBe(409);
+    } finally {
+      await retryApp.close();
+    }
+  });
+
+  it('ignores a client-supplied status on accept: canonical is always confirmed', async () => {
+    await bootstrapOwner();
+    const gateway = new ModelGateway();
+    gateway.register(adapter('anthropic', async () => ({
+      content: envelope('Answer.', [
+        { category: 'vision', title: 'Governance', content: 'Governed content.', basis: 'user_stated' },
+      ]),
+    })));
+    const { app } = makeAuthApp(gateway);
+    try {
+      const owner = await login(app, 'platform.owner', 'Owner-password-2026!');
+      const projectId = await createProjectViaOwner(app, owner.token);
+      const turn = await app.inject({
+        method: 'POST', url: `/projects/${projectId}/product-partner-turn`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+        payload: { content: 'Discover.' },
+      });
+      expect(turn.statusCode).toBe(201);
+      const pending = await candidatesRepo.listByProject('org-001', projectId, 'pending');
+      const candidateId = pending[0]!.id;
+
+      const accept = await app.inject({
+        method: 'POST',
+        url: `/projects/${projectId}/knowledge-candidates/${candidateId}/accept`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+        payload: { status: 'proposed' },
+      });
+      expect(accept.statusCode).toBe(201);
+      const body = accept.json() as { knowledge: { id: string; status: string; revision: number } };
+      expect(body.knowledge.status).toBe('confirmed');
+      expect(body.knowledge.revision).toBe(1);
+
+      const canonical = await knowledgeRepo.getById('org-001', projectId, body.knowledge.id);
+      expect(canonical?.status).toBe('confirmed');
+      expect(canonical?.revision).toBe(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('retry with invalid candidate schema emits durable retry_failed audit (no silent swallow)', async () => {
+    await bootstrapOwner();
+
+    // Turn 1 fails (invalid category).
+    const primary = new ModelGateway();
+    primary.register(adapter('anthropic', async () => ({
+      content: envelope('Ans.', [
+        { category: 'not_a_real_category', title: 'X', content: 'y', basis: 'user_stated' },
+      ]),
+    })));
+    const { app: primaryApp } = makeAuthApp(primary);
+    let projectId: string;
+    let failedRunId: string;
+    try {
+      const owner = await login(primaryApp, 'platform.owner', 'Owner-password-2026!');
+      projectId = await createProjectViaOwner(primaryApp, owner.token);
+      const turn = await primaryApp.inject({
+        method: 'POST', url: `/projects/${projectId}/product-partner-turn`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+        payload: { content: 'discover.' },
+      });
+      const tb = turn.json();
+      failedRunId = tb.extraction.runId;
+    } finally {
+      await primaryApp.close();
+    }
+
+    // Retry gateway returns candidate-only with an invalid category (parse fails).
+    const retryGateway = new ModelGateway();
+    retryGateway.register(adapter('anthropic', async () => ({
+      content: candidateOnly([
+        { category: 'not_a_real_category', title: 'Broken retry', content: 'x', basis: 'user_stated' },
+      ]),
+    })));
+    const { app: retryApp } = makeAuthApp(retryGateway);
+    try {
+      const owner = await login(retryApp, 'platform.owner', 'Owner-password-2026!');
+      const retry = await retryApp.inject({
+        method: 'POST', url: `/projects/${projectId!}/extraction-runs/${failedRunId!}/retry`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+        payload: {},
+      });
+      expect(retry.statusCode).toBe(201);
+      const rb = retry.json() as { status: string; candidateCount: number; retryRunId: string };
+      expect(rb.status).toBe('failed');
+      expect(rb.candidateCount).toBe(0);
+
+      const events = await audit.listByProject('org-001', projectId!);
+      const types = events.map((e) => e.eventType);
+      expect(types).toContain('knowledge_extraction_run.retry_requested');
+      expect(types).toContain('knowledge_extraction_run.retry_failed');
+      const failedEvent = events.find((e) => e.eventType === 'knowledge_extraction_run.retry_failed');
+      expect(failedEvent).toBeDefined();
+      expect((failedEvent!.metadata as { failureCode?: string }).failureCode)
+        .toBe('candidate_validation_failed');
+
+      // Retry run must be persisted with status='failed' (durable failure record).
+      const row = await pool.query(
+        `SELECT status, failure_code FROM knowledge_extraction_runs WHERE id = $1`,
+        [rb.retryRunId],
+      );
+      expect(row.rows[0].status).toBe('failed');
+      expect(row.rows[0].failure_code).toBe('candidate_validation_failed');
+    } finally {
+      await retryApp.close();
+    }
+  });
+
+  it('retry surfaces an error (does not silently swallow) if retry_failed audit itself fails', async () => {
+    await bootstrapOwner();
+
+    const primary = new ModelGateway();
+    primary.register(adapter('anthropic', async () => ({
+      content: envelope('Ans.', [
+        { category: 'not_a_real_category', title: 'X', content: 'y', basis: 'user_stated' },
+      ]),
+    })));
+    const { app: primaryApp } = makeAuthApp(primary);
+    let projectId: string;
+    let failedRunId: string;
+    try {
+      const owner = await login(primaryApp, 'platform.owner', 'Owner-password-2026!');
+      projectId = await createProjectViaOwner(primaryApp, owner.token);
+      const turn = await primaryApp.inject({
+        method: 'POST', url: `/projects/${projectId}/product-partner-turn`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+        payload: { content: 'audit swallow probe.' },
+      });
+      failedRunId = turn.json().extraction.runId;
+    } finally {
+      await primaryApp.close();
+    }
+
+    const retryGateway = new ModelGateway();
+    retryGateway.register(adapter('anthropic', async () => ({
+      content: candidateOnly([
+        { category: 'not_a_real_category', title: 'B', content: 'y', basis: 'user_stated' },
+      ]),
+    })));
+    const { app: retryApp } = makeAuthApp(retryGateway);
+    try {
+      const owner = await login(retryApp, 'platform.owner', 'Owner-password-2026!');
+      await pool.query(`
+        CREATE FUNCTION reject_retry_failed_audit() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.event_type = 'knowledge_extraction_run.retry_failed' THEN
+            RAISE EXCEPTION 'forced retry_failed audit failure';
+          END IF;
+          RETURN NEW;
+        END;
+        $$;
+        CREATE TRIGGER reject_retry_failed_audit_trigger
+          BEFORE INSERT ON audit_events
+          FOR EACH ROW EXECUTE FUNCTION reject_retry_failed_audit();
+      `);
+      try {
+        const retry = await retryApp.inject({
+          method: 'POST', url: `/projects/${projectId!}/extraction-runs/${failedRunId!}/retry`,
+          headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+          payload: {},
+        });
+        expect(retry.statusCode).toBe(500);
+      } finally {
+        await pool.query(`
+          DROP TRIGGER IF EXISTS reject_retry_failed_audit_trigger ON audit_events;
+          DROP FUNCTION IF EXISTS reject_retry_failed_audit();
+        `);
+      }
+    } finally {
+      await retryApp.close();
+    }
+  });
+
+  it('retry with provider execution error still audits retry_requested + retry_failed', async () => {
+    await bootstrapOwner();
+
+    const primary = new ModelGateway();
+    primary.register(adapter('anthropic', async () => ({
+      content: envelope('Ans.', [
+        { category: 'not_a_real_category', title: 'X', content: 'y', basis: 'user_stated' },
+      ]),
+    })));
+    const { app: primaryApp } = makeAuthApp(primary);
+    let projectId: string;
+    let failedRunId: string;
+    try {
+      const owner = await login(primaryApp, 'platform.owner', 'Owner-password-2026!');
+      projectId = await createProjectViaOwner(primaryApp, owner.token);
+      const turn = await primaryApp.inject({
+        method: 'POST', url: `/projects/${projectId}/product-partner-turn`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+        payload: { content: 'discover.' },
+      });
+      failedRunId = turn.json().extraction.runId;
+    } finally {
+      await primaryApp.close();
+    }
+
+    const providerErrorGateway = new ModelGateway();
+    providerErrorGateway.register(adapter('anthropic', async () => {
+      throw new ProviderExecutionError('anthropic', 'raw-provider-detail-should-not-leak');
+    }));
+    const { app: retryApp } = makeAuthApp(providerErrorGateway);
+    try {
+      const owner = await login(retryApp, 'platform.owner', 'Owner-password-2026!');
+      const retry = await retryApp.inject({
+        method: 'POST', url: `/projects/${projectId!}/extraction-runs/${failedRunId!}/retry`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+        payload: {},
+      });
+      expect(retry.statusCode).toBe(502);
+      const errBody = retry.json() as { error: string };
+      expect(errBody.error).toBe('Live Product Partner execution failed');
+      expect(JSON.stringify(errBody)).not.toContain('raw-provider-detail-should-not-leak');
+
+      const events = await audit.listByProject('org-001', projectId!);
+      const types = events.map((e) => e.eventType);
+      expect(types).toContain('knowledge_extraction_run.retry_requested');
+      expect(types).toContain('knowledge_extraction_run.retry_failed');
+      const failed = events.find((e) => e.eventType === 'knowledge_extraction_run.retry_failed')!;
+      const meta = failed.metadata as { failureCode?: string; originalRunId?: string };
+      expect(meta.failureCode).toBe('provider_execution_error');
+      expect(meta.originalRunId).toBe(failedRunId!);
+    } finally {
+      await retryApp.close();
+    }
+  });
+
+  it('concurrent retries of the same failed run: only one attempt succeeds, the other is 409', async () => {
+    await bootstrapOwner();
+
+    const primary = new ModelGateway();
+    primary.register(adapter('anthropic', async () => ({
+      content: envelope('Ans.', [
+        { category: 'not_a_real_category', title: 'X', content: 'y', basis: 'user_stated' },
+      ]),
+    })));
+    const { app: primaryApp } = makeAuthApp(primary);
+    let projectId: string;
+    let failedRunId: string;
+    try {
+      const owner = await login(primaryApp, 'platform.owner', 'Owner-password-2026!');
+      projectId = await createProjectViaOwner(primaryApp, owner.token);
+      const turn = await primaryApp.inject({
+        method: 'POST', url: `/projects/${projectId}/product-partner-turn`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+        payload: { content: 'concurrent discover.' },
+      });
+      failedRunId = turn.json().extraction.runId;
+    } finally {
+      await primaryApp.close();
+    }
+
+    // Slow-adapter gateway forces both concurrent retries to reach the write UoW at the same time.
+    let started = 0;
+    let release: () => void = () => {};
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const slowGateway = new ModelGateway();
+    slowGateway.register(adapter('anthropic', async () => {
+      started += 1;
+      if (started >= 2) release();
+      await barrier;
+      return {
+        content: candidateOnly([
+          { category: 'objectives', title: 'Concurrent target', content: 'A concurrent target.', basis: 'assistant_recommended' },
+        ]),
+      };
+    }));
+
+    // Call the service directly so both attempts really overlap on the DB.
+    const projectsRepo = new ProjectRepository(pool);
+    const project = (await projectsRepo.getById('org-001', projectId!))!;
+    const canonical = await knowledgeRepo.listByProject('org-001', projectId!);
+    const unitOfWork = new DatabaseUnitOfWork(pool);
+    const conversationsRepo = new ConversationRepository(pool);
+
+    async function runOne() {
+      try {
+        return await retryExtractionRun(unitOfWork, {
+          organisationId: 'org-001',
+          projectId: projectId!,
+          runId: failedRunId!,
+          requestedBy: 'race.actor',
+          project,
+          knowledge: canonical,
+          modelGateway: slowGateway,
+          conversations: conversationsRepo,
+          candidates: candidatesRepo,
+        });
+      } catch (e) {
+        return e;
+      }
+    }
+
+    const [a, b] = await Promise.all([runOne(), runOne()]);
+    expect(started).toBeGreaterThanOrEqual(2);
+
+    const outcomes = [a, b];
+    const successes = outcomes.filter((o) => !(o instanceof Error) && (o as { status?: string }).status === 'succeeded');
+    const conflicts = outcomes.filter((o) => o instanceof KnowledgeCandidateServiceError && (o as KnowledgeCandidateServiceError).statusCode === 409);
+    expect(successes).toHaveLength(1);
+    expect(conflicts).toHaveLength(1);
+
+    const attempts = await pool.query(
+      `SELECT retry_run_id FROM knowledge_extraction_retry_attempts WHERE original_run_id = $1`,
+      [failedRunId!],
+    );
+    expect(attempts.rowCount).toBe(1);
+  });
+
+  it('retry suppresses a candidate that matches an existing pending candidate by shared fingerprint', async () => {
+    await bootstrapOwner();
+
+    const primary = new ModelGateway();
+    primary.register(adapter('anthropic', async () => ({
+      content: envelope('Ans.', [
+        { category: 'not_a_real_category', title: 'X', content: 'y', basis: 'user_stated' },
+      ]),
+    })));
+    const { app: primaryApp } = makeAuthApp(primary);
+    let projectId: string;
+    let failedRunId: string;
+    try {
+      const owner = await login(primaryApp, 'platform.owner', 'Owner-password-2026!');
+      projectId = await createProjectViaOwner(primaryApp, owner.token);
+      const turn = await primaryApp.inject({
+        method: 'POST', url: `/projects/${projectId}/product-partner-turn`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+        payload: { content: 'discover pending dedup.' },
+      });
+      failedRunId = turn.json().extraction.runId;
+    } finally {
+      await primaryApp.close();
+    }
+
+    // Seed an existing pending candidate on some prior run tied to the same conversation/messages.
+    // Create a "prior" received-then-succeeded run to hang the pending candidate off of.
+    const conv = await conversations.getByProject('org-001', projectId!);
+    const msgs = await conversations.listMessages('org-001', projectId!, conv!.id);
+    const userMsg = msgs.find((m) => m.role === 'user')!;
+    const assistantMsg = msgs.find((m) => m.role === 'assistant')!;
+
+    const priorRunId = randomUUID();
+    const now = new Date();
+    await pool.query(
+      `INSERT INTO knowledge_extraction_runs
+         (id, organisation_id, project_id, conversation_id, source_user_message_id, source_assistant_message_id,
+          provider, model, route_id, response_contract_version, status, created_at, completed_at)
+       VALUES ($1, 'org-001', $2, $3, $4, $5, 'anthropic', 'test-model', 'anthropic-test-api',
+               'product_partner_knowledge_v1', 'succeeded', $6, $6)`,
+      [priorRunId, projectId, conv!.id, userMsg.id, assistantMsg.id, now],
+    );
+    const pendingCandidate = createPendingKnowledgeCandidate({
+      organisationId: 'org-001',
+      projectId: projectId!,
+      extractionRunId: priorRunId,
+      category: 'objectives',
+      title: 'Adoption target',
+      content: 'Reach 10k monthly active users.',
+      basis: 'assistant_recommended',
+    });
+    await candidatesRepo.insertCandidate(pendingCandidate);
+
+    // Confirm shared fingerprint fn matches what the service will compute for the retry proposal.
+    const proposalFingerprint = fingerprintKnowledgeCandidate({
+      category: 'objectives',
+      title: 'Adoption target',
+      content: 'Reach 10k monthly active users.',
+    });
+    expect(proposalFingerprint).toBe(pendingCandidate.fingerprint);
+
+    const retryGateway = new ModelGateway();
+    retryGateway.register(adapter('anthropic', async () => ({
+      content: candidateOnly([
+        { category: 'objectives', title: 'Adoption target', content: 'Reach 10k monthly active users.', basis: 'assistant_recommended' },
+      ]),
+    })));
+    const { app: retryApp } = makeAuthApp(retryGateway);
+    try {
+      const owner = await login(retryApp, 'platform.owner', 'Owner-password-2026!');
+      const retry = await retryApp.inject({
+        method: 'POST', url: `/projects/${projectId!}/extraction-runs/${failedRunId!}/retry`,
+        headers: { authorization: `Bearer ${owner.token}`, 'x-organisation-id': 'org-001' },
+        payload: {},
+      });
+      expect(retry.statusCode).toBe(201);
+      const rb = retry.json() as { status: string; candidateCount: number };
+      expect(rb.status).toBe('succeeded');
+      // Existing pending candidate suppressed the equivalent proposal.
+      expect(rb.candidateCount).toBe(0);
+
+      // Only the seeded pending candidate remains; no duplicate was inserted.
+      const remaining = await candidatesRepo.listByProject('org-001', projectId!, 'pending');
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]!.id).toBe(pendingCandidate.id);
     } finally {
       await retryApp.close();
     }

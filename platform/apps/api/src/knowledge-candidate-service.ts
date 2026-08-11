@@ -7,7 +7,6 @@ import {
   dedupeCandidateProposals,
   fingerprintKnowledgeCandidate,
   parseKnowledgeCandidateProposals,
-  type KnowledgeStatus,
   type Project,
   type ProductKnowledge,
 } from '@engineering-os/domain';
@@ -17,7 +16,7 @@ import type {
   KnowledgeCandidateRepository,
   StoredKnowledgeCandidate,
 } from '@engineering-os/database';
-import type { ModelGateway } from '@engineering-os/model-gateway';
+import { ProviderExecutionError, type ModelGateway } from '@engineering-os/model-gateway';
 import { buildCandidateOnlyExtractionRequest } from './product-partner-context.js';
 
 const RETRY_RESPONSE_CONTRACT_VERSION = 'candidate_only_v1';
@@ -37,7 +36,6 @@ export interface AcceptCandidateInput {
   category?: string;
   title?: string;
   content?: string;
-  status?: KnowledgeStatus;
 }
 
 export interface AcceptCandidateResult {
@@ -90,6 +88,8 @@ export async function acceptCandidate(
     }
 
     const now = new Date();
+    // Accepted canonical revision 1 is always confirmed. Governance-critical: the client
+    // cannot override the acceptance status via the API.
     const knowledgeRecord = createKnowledgeRecord({
       organisationId: input.organisationId,
       projectId: input.projectId,
@@ -97,7 +97,7 @@ export async function acceptCandidate(
       title: input.title ?? locked.title,
       content: input.content ?? locked.content,
       source: 'extraction_candidate',
-      status: input.status ?? 'confirmed',
+      status: 'confirmed',
       createdBy: input.reviewerId,
     });
 
@@ -210,7 +210,7 @@ export async function retryExtractionRun(
   unitOfWork: DatabaseUnitOfWork,
   input: RetryExtractionRunInput,
 ): Promise<RetryExtractionRunResult> {
-  // Load and validate original run.
+  // Load and pre-validate the original run outside any UoW.
   const original = await input.candidates.getRunById(
     input.organisationId, input.projectId, input.runId,
   );
@@ -219,7 +219,6 @@ export async function retryExtractionRun(
     throw new KnowledgeCandidateServiceError(409, 'extraction run is not failed');
   }
 
-  // Fetch source messages from the persisted conversation.
   const messages = await input.conversations.listMessages(
     input.organisationId, input.projectId, original.conversationId,
   );
@@ -229,7 +228,24 @@ export async function retryExtractionRun(
     throw new KnowledgeCandidateServiceError(404, 'source messages not found');
   }
 
-  // Candidate-only structured request.
+  // Emit a preflight retry_requested audit before any external work so retries always leave a trace.
+  await unitOfWork.run(async ({ audit }) => {
+    await audit.append(createAuditEvent({
+      organisationId: input.organisationId,
+      projectId: input.projectId,
+      eventType: 'knowledge_extraction_run.retry_requested',
+      actorType: 'user',
+      actorId: input.requestedBy,
+      subjectType: 'knowledge_extraction_run',
+      subjectId: original.id,
+      metadata: {
+        originalRunId: original.id,
+        phase: 'preflight',
+        responseContractVersion: RETRY_RESPONSE_CONTRACT_VERSION,
+      },
+    }));
+  });
+
   const request = buildCandidateOnlyExtractionRequest({
     project: input.project,
     knowledge: input.knowledge,
@@ -238,9 +254,24 @@ export async function retryExtractionRun(
     taskId: `candidate-only-retry:${input.projectId}:${original.id}`,
   });
 
-  const response = await input.modelGateway.execute(request);
+  let response;
+  try {
+    response = await input.modelGateway.execute(request);
+  } catch (error) {
+    const failureCode = error instanceof ProviderExecutionError
+      ? 'provider_execution_error'
+      : 'provider_error';
+    await auditRetryFailedStrict(
+      unitOfWork,
+      input.organisationId,
+      input.projectId,
+      original.id,
+      input.requestedBy,
+      { originalRunId: original.id, failureCode, phase: 'preflight' },
+    );
+    throw error;
+  }
 
-  // Retry-requested audit + new run row + retry attempt row in one transaction.
   const retryRun = createKnowledgeExtractionRun({
     organisationId: input.organisationId,
     projectId: input.projectId,
@@ -255,7 +286,21 @@ export async function retryExtractionRun(
 
   const agentId = `product-partner:${response.provider}`;
 
+  // Serialize concurrent retries: lock the original run and reject if an in-flight retry attempt exists.
   await unitOfWork.run(async ({ knowledgeCandidates, audit }) => {
+    const locked = await knowledgeCandidates.getRunForUpdate(
+      input.organisationId, input.projectId, original.id,
+    );
+    if (!locked) throw new KnowledgeCandidateServiceError(404, 'extraction run not found');
+    if (locked.status !== 'failed') {
+      throw new KnowledgeCandidateServiceError(409, 'extraction run is not failed');
+    }
+    const active = await knowledgeCandidates.hasActiveRetryAttempt(
+      input.organisationId, input.projectId, original.id,
+    );
+    if (active) {
+      throw new KnowledgeCandidateServiceError(409, 'a retry attempt is already in progress');
+    }
     await knowledgeCandidates.createRun(retryRun);
     await knowledgeCandidates.insertRetryAttempt({
       id: randomUUID(),
@@ -276,12 +321,12 @@ export async function retryExtractionRun(
       subjectId: retryRun.id,
       metadata: {
         originalRunId: original.id,
+        phase: 'attempt',
         responseContractVersion: RETRY_RESPONSE_CONTRACT_VERSION,
       },
     }));
   });
 
-  // Parse candidates from candidate-only response.
   let proposals;
   try {
     const parsed = JSON.parse(response.content);
@@ -290,7 +335,15 @@ export async function retryExtractionRun(
     }
     proposals = parseKnowledgeCandidateProposals((parsed as { candidates: unknown }).candidates);
   } catch {
-    await markRunFailedSafely(unitOfWork, input.organisationId, input.projectId, retryRun.id, 'candidate_validation_failed', input.requestedBy, agentId, original.id);
+    await markRetryRunFailedStrict(
+      unitOfWork,
+      input.organisationId,
+      input.projectId,
+      retryRun.id,
+      'candidate_validation_failed',
+      input.requestedBy,
+      original.id,
+    );
     return {
       originalRunId: original.id,
       retryRunId: retryRun.id,
@@ -299,7 +352,6 @@ export async function retryExtractionRun(
     };
   }
 
-  // Dedup against pending fingerprints + current canonical.
   const pendingFingerprints = await unitOfWork.run(async ({ knowledgeCandidates }) =>
     knowledgeCandidates.listPendingFingerprintsByProject(input.organisationId, input.projectId),
   );
@@ -350,7 +402,15 @@ export async function retryExtractionRun(
       }));
     });
   } catch {
-    await markRunFailedSafely(unitOfWork, input.organisationId, input.projectId, retryRun.id, 'candidate_insert_failed', input.requestedBy, agentId, original.id);
+    await markRetryRunFailedStrict(
+      unitOfWork,
+      input.organisationId,
+      input.projectId,
+      retryRun.id,
+      'candidate_insert_failed',
+      input.requestedBy,
+      original.id,
+    );
     return {
       originalRunId: original.id,
       retryRunId: retryRun.id,
@@ -367,32 +427,55 @@ export async function retryExtractionRun(
   };
 }
 
-async function markRunFailedSafely(
+// Marks a retry run as failed AND emits retry_failed audit in one atomic transaction.
+// Deliberately NOT swallowed: a failed audit must surface (500) rather than leaving a run
+// stuck in `received` with no signal.
+async function markRetryRunFailedStrict(
   unitOfWork: DatabaseUnitOfWork,
   organisationId: string,
   projectId: string,
-  runId: string,
+  retryRunId: string,
   failureCode: string,
   requestedBy: string,
-  _agentId: string,
   originalRunId: string,
 ): Promise<void> {
-  try {
-    await unitOfWork.run(async ({ knowledgeCandidates, audit }) => {
-      await knowledgeCandidates.markRunFailed(organisationId, projectId, runId, failureCode, null, new Date());
-      await audit.append(createAuditEvent({
-        organisationId,
-        projectId,
-        eventType: 'knowledge_extraction_run.retry_failed',
-        actorType: 'user',
-        actorId: requestedBy,
-        subjectType: 'knowledge_extraction_run',
-        subjectId: runId,
-        metadata: { originalRunId, failureCode },
-      }));
-    });
-  } catch {
-    // best effort
-  }
+  await unitOfWork.run(async ({ knowledgeCandidates, audit }) => {
+    await knowledgeCandidates.markRunFailed(
+      organisationId, projectId, retryRunId, failureCode, null, new Date(),
+    );
+    await audit.append(createAuditEvent({
+      organisationId,
+      projectId,
+      eventType: 'knowledge_extraction_run.retry_failed',
+      actorType: 'user',
+      actorId: requestedBy,
+      subjectType: 'knowledge_extraction_run',
+      subjectId: retryRunId,
+      metadata: { originalRunId, failureCode },
+    }));
+  });
+}
+
+// Emits retry_failed audit when no retry run row has been created yet (subject = original run).
+async function auditRetryFailedStrict(
+  unitOfWork: DatabaseUnitOfWork,
+  organisationId: string,
+  projectId: string,
+  originalRunId: string,
+  requestedBy: string,
+  metadata: Record<string, unknown>,
+): Promise<void> {
+  await unitOfWork.run(async ({ audit }) => {
+    await audit.append(createAuditEvent({
+      organisationId,
+      projectId,
+      eventType: 'knowledge_extraction_run.retry_failed',
+      actorType: 'user',
+      actorId: requestedBy,
+      subjectType: 'knowledge_extraction_run',
+      subjectId: originalRunId,
+      metadata,
+    }));
+  });
 }
 

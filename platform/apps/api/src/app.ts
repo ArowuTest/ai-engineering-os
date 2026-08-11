@@ -729,7 +729,6 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     if (typeof body.category === 'string') acceptInput.category = body.category;
     if (typeof body.title === 'string') acceptInput.title = body.title;
     if (typeof body.content === 'string') acceptInput.content = body.content;
-    if (typeof body.status === 'string') acceptInput.status = body.status as KnowledgeStatus;
     try {
       const result = await acceptCandidate(dependencies.unitOfWork, acceptInput);
       return reply.code(201).send(result);
