@@ -116,6 +116,68 @@ export interface CurrentIdentity {
   organisations: Array<{ organisationId: string; role: OrganisationRole }>;
 }
 
+export type KnowledgeCandidateStatus = 'pending' | 'accepted' | 'rejected';
+export type KnowledgeCandidateBasis = 'user_stated' | 'assistant_inferred' | 'assistant_recommended';
+export type KnowledgeExtractionRunStatus = 'received' | 'succeeded' | 'failed';
+
+export interface KnowledgeCandidateSummary {
+  id: string;
+  organisationId: string;
+  projectId: string;
+  extractionRunId: string;
+  category: string;
+  title: string;
+  content: string;
+  basis: KnowledgeCandidateBasis;
+  status: KnowledgeCandidateStatus;
+  fingerprint: string;
+  createdAt: string;
+  reviewerId?: string;
+  reviewedAt?: string;
+  acceptedKnowledgeId?: string;
+  rejectionReason?: string;
+}
+
+export interface KnowledgeExtractionRunSummary {
+  id: string;
+  organisationId: string;
+  projectId: string;
+  conversationId: string;
+  sourceUserMessageId: string;
+  sourceAssistantMessageId: string;
+  provider: string;
+  model: string;
+  routeId: string;
+  responseContractVersion: string;
+  status: KnowledgeExtractionRunStatus;
+  createdAt: string;
+  completedAt?: string;
+  failureCode?: string;
+  failureMessage?: string;
+}
+
+export interface AcceptKnowledgeCandidateInput {
+  category?: string;
+  title?: string;
+  content?: string;
+}
+
+export interface AcceptKnowledgeCandidateResult {
+  candidate: KnowledgeCandidateSummary;
+  knowledge: ProductKnowledge;
+}
+
+export interface RejectKnowledgeCandidateInput {
+  reason?: string;
+}
+
+export interface RetryKnowledgeExtractionResult {
+  originalRunId: string;
+  retryRunId: string;
+  status: 'succeeded' | 'failed';
+  candidateCount: number;
+}
+
 export interface LoginResult {
   sessionId: string;
   token: string;
@@ -212,6 +274,17 @@ export function getCurrentIdentityWithToken(token: string): Promise<CurrentIdent
   });
 }
 
+export async function getCurrentIdentity(): Promise<CurrentIdentity | null> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(SESSION_COOKIE)?.value;
+  if (!token) return null;
+  try {
+    return await getCurrentIdentityWithToken(token);
+  } catch {
+    return null;
+  }
+}
+
 export function logoutUser(): Promise<void> {
   return apiFetch<void>('/auth/logout', { method: 'POST' });
 }
@@ -285,6 +358,46 @@ export function sendProductPartnerTurn(
     method: 'POST',
     body: JSON.stringify({ content }),
   });
+}
+
+export function listKnowledgeCandidates(
+  projectId: string,
+): Promise<KnowledgeCandidateSummary[]> {
+  return apiFetch<KnowledgeCandidateSummary[]>(
+    `/projects/${projectId}/knowledge-candidates?status=pending`,
+  );
+}
+
+export function acceptKnowledgeCandidate(
+  projectId: string,
+  candidateId: string,
+  input: AcceptKnowledgeCandidateInput = {},
+): Promise<AcceptKnowledgeCandidateResult> {
+  return apiFetch<AcceptKnowledgeCandidateResult>(
+    `/projects/${projectId}/knowledge-candidates/${candidateId}/accept`,
+    { method: 'POST', body: JSON.stringify(input) },
+  );
+}
+
+export function rejectKnowledgeCandidate(
+  projectId: string,
+  candidateId: string,
+  input: RejectKnowledgeCandidateInput = {},
+): Promise<{ candidate: KnowledgeCandidateSummary }> {
+  return apiFetch<{ candidate: KnowledgeCandidateSummary }>(
+    `/projects/${projectId}/knowledge-candidates/${candidateId}/reject`,
+    { method: 'POST', body: JSON.stringify(input) },
+  );
+}
+
+export function retryKnowledgeExtraction(
+  projectId: string,
+  runId: string,
+): Promise<RetryKnowledgeExtractionResult> {
+  return apiFetch<RetryKnowledgeExtractionResult>(
+    `/projects/${projectId}/extraction-runs/${runId}/retry`,
+    { method: 'POST' },
+  );
 }
 
 export function listPeople(): Promise<AdminPerson[]> {

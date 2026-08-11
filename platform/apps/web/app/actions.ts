@@ -4,6 +4,7 @@ import { cookies } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import {
+  acceptKnowledgeCandidate,
   addKnowledge,
   appendMessage,
   cancelInvitation,
@@ -17,6 +18,8 @@ import {
   logoutUser,
   ORGANISATION_COOKIE,
   redeemInvitation,
+  rejectKnowledgeCandidate,
+  retryKnowledgeExtraction,
   reviseKnowledge,
   revokeOrganisationAccess,
   revokeProjectAccess,
@@ -112,8 +115,41 @@ export async function createProductAction(formData: FormData) {
 
 export async function sendProductPartnerTurnAction(formData: FormData) {
   const projectId = required(formData, 'projectId');
-  await sendProductPartnerTurn(projectId, required(formData, 'content'));
+  const result = await sendProductPartnerTurn(projectId, required(formData, 'content'));
   revalidatePath('/');
+  revalidatePath(`/projects/${projectId}`);
+  if (result.extraction.status === 'failed') {
+    redirect(`/projects/${projectId}?extractionRunId=${result.extraction.runId}&extractionFailed=1`);
+  }
+}
+
+export async function acceptKnowledgeCandidateAction(formData: FormData) {
+  const projectId = required(formData, 'projectId');
+  const candidateId = required(formData, 'candidateId');
+  const input: { category?: string; title?: string; content?: string } = {};
+  const category = String(formData.get('category') ?? '').trim();
+  const title = String(formData.get('title') ?? '').trim();
+  const content = String(formData.get('content') ?? '').trim();
+  if (category) input.category = category;
+  if (title) input.title = title;
+  if (content) input.content = content;
+  await acceptKnowledgeCandidate(projectId, candidateId, input);
+  revalidatePath('/');
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function rejectKnowledgeCandidateAction(formData: FormData) {
+  const projectId = required(formData, 'projectId');
+  const candidateId = required(formData, 'candidateId');
+  const reason = String(formData.get('reason') ?? '').trim();
+  await rejectKnowledgeCandidate(projectId, candidateId, reason ? { reason } : {});
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function retryKnowledgeExtractionAction(formData: FormData) {
+  const projectId = required(formData, 'projectId');
+  const runId = required(formData, 'runId');
+  await retryKnowledgeExtraction(projectId, runId);
   revalidatePath(`/projects/${projectId}`);
 }
 

@@ -251,3 +251,25 @@ h3 { font-size: 14px; }
   .person-main, .invitation-row { flex-direction: column; }
   .project-access-row { grid-template-columns: 1fr; }
 }
+
+.review-queue { display: grid; gap: 12px; border: 1px solid var(--line); border-radius: 14px; padding: 14px; background: #fbfcfd; }
+.review-queue-header .eyebrow { color: var(--accent); }
+.review-queue-header h3 { margin: 4px 0; font-size: 15px; }
+.review-queue-status { margin: 0; color: var(--muted); font-size: 12px; }
+.review-queue-readonly { margin: 4px 0 0; color: var(--warning); font-size: 11px; }
+.review-queue-alert { border: 1px solid #f0c6a3; background: #fff5eb; border-radius: 10px; padding: 12px; display: grid; gap: 8px; }
+.review-queue-alert strong { color: var(--warning); font-size: 13px; }
+.review-queue-alert p { margin: 0; color: #6c5230; font-size: 12px; }
+.review-queue-list { display: grid; gap: 10px; }
+.review-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px; background: white; display: grid; gap: 8px; }
+.review-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.review-card h4 { margin: 4px 0 0; font-size: 14px; }
+.review-card p { margin: 0; font-size: 13px; line-height: 1.45; }
+.review-card-provenance { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; font-size: 11px; }
+.review-card-provenance div { display: grid; gap: 2px; }
+.review-card-provenance dt { color: var(--muted); font-weight: 600; }
+.review-card-provenance dd { margin: 0; word-break: break-all; }
+.review-card-actions { display: grid; gap: 8px; border-top: 1px dashed var(--line); padding-top: 10px; }
+.review-accept-form details summary { cursor: pointer; font-size: 12px; color: var(--accent); margin-bottom: 6px; }
+.review-reject-form { display: flex; gap: 6px; align-items: center; }
+.review-reject-form .input { flex: 1; }
