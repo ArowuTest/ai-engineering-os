@@ -3,6 +3,7 @@ import {
   createConversationMessage,
   createKnowledgeRecord,
   createProject,
+  KNOWLEDGE_CANDIDATE_CATEGORIES,
 } from '@engineering-os/domain';
 import { buildProductPartnerRequest } from '../src/product-partner-context.js';
 
@@ -43,7 +44,7 @@ const messages = [
 ];
 
 describe('Product Partner context', () => {
-  it('builds governed context and preserves durable history in order', () => {
+  it('builds governed context, durable history, and the structured extraction contract', () => {
     const request = buildProductPartnerRequest({
       project,
       knowledge,
@@ -52,18 +53,38 @@ describe('Product Partner context', () => {
     });
 
     expect(request.role).toBe('product_partner');
-    expect(request.requiredCapabilities).toEqual(['chat']);
+    expect(request.requiredCapabilities).toEqual(['chat', 'structuredOutput']);
     expect(request.routing).toEqual({
       subscriptionFirst: false,
       allowMeteredApi: true,
       preferredProvider: 'anthropic',
     });
+    expect(request.responseContract).toMatchObject({
+      type: 'json_schema',
+      name: 'product_partner_knowledge_v1',
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['answer', 'candidates'],
+      },
+    });
+
+    const schemaText = JSON.stringify(request.responseContract?.schema);
+    expect(schemaText).toContain('user_stated');
+    expect(schemaText).toContain('assistant_inferred');
+    expect(schemaText).toContain('assistant_recommended');
+    for (const category of KNOWLEDGE_CANDIDATE_CATEGORIES) {
+      expect(schemaText).toContain(category);
+    }
 
     const system = request.messages[0]?.content ?? '';
     expect(request.messages[0]?.role).toBe('system');
     expect(system).toContain('Enterprise Livestream');
     expect(system).toContain('Canonical Product Knowledge');
     expect(system).toContain('do not invent approved requirements');
+    expect(system).toContain('user_stated');
+    expect(system).toContain('assistant_inferred');
+    expect(system).toContain('assistant_recommended');
     expect(system).toContain('Serve promoters, telcos and consumers at enterprise scale.');
     expect(system).toContain('"status":"inferred"');
     expect(system).toContain('"source":"product_partner"');
