@@ -69,16 +69,15 @@ function toSummary(record: AIConnectionRecord): AIConnectionSummary {
   return summary;
 }
 
-const PERSONAL_STRATEGY_PRIORITY: AIConnectionCredentialStrategy[] = [
+const PERSONAL_ALLOWED_STRATEGIES: readonly AIConnectionCredentialStrategy[] = [
   'runner_managed',
   'none',
-  'environment',
 ];
 
 function pickPersonalStrategy(
   policy: TrustedConnectionFamilyPolicy,
 ): AIConnectionCredentialStrategy | null {
-  for (const candidate of PERSONAL_STRATEGY_PRIORITY) {
+  for (const candidate of PERSONAL_ALLOWED_STRATEGIES) {
     if (policy.credentialStrategies.includes(candidate)) return candidate;
   }
   return null;
@@ -88,15 +87,14 @@ function pickOrganisationStrategy(
   policy: TrustedConnectionFamilyPolicy,
   hasSecretRef: boolean,
 ): AIConnectionCredentialStrategy | null {
-  if (hasSecretRef && policy.credentialStrategies.includes('external_secret_ref')) {
-    return 'external_secret_ref';
+  if (hasSecretRef) {
+    return policy.credentialStrategies.includes('external_secret_ref')
+      ? 'external_secret_ref'
+      : null;
   }
-  if (!hasSecretRef) {
-    for (const candidate of ['none', 'environment', 'runner_managed'] as const) {
-      if (policy.credentialStrategies.includes(candidate)) return candidate;
-    }
-  }
-  return null;
+  const nonSecret = policy.credentialStrategies.filter((s) => s !== 'external_secret_ref');
+  if (nonSecret.length !== 1) return null;
+  return nonSecret[0] ?? null;
 }
 
 export class AIConnectionService {

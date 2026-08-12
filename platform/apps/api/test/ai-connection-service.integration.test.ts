@@ -417,6 +417,148 @@ describe('AIConnectionService', () => {
     );
   });
 
+  it('rejects personal registration when policy only offers environment strategy', async () => {
+    const actor = await seedUser('env.only.actor');
+    await seedMember('org-001', actor.id, 'member');
+    const registry = createConnectionFamilyPolicyRegistry([
+      {
+        id: 'personal-env-only',
+        providerId: 'test',
+        displayName: 'Personal env-only',
+        executionMode: 'subscription',
+        harnessId: 'test-harness',
+        allowedOwnership: ['personal'],
+        credentialStrategies: ['environment'],
+        delegatable: false,
+        requiresRunner: false,
+        persistentSupported: false,
+      },
+    ]);
+    const service = makeService(registry);
+    await expectServiceError(
+      service.registerPersonalConnection({
+        organisationId: 'org-001',
+        actorUserId: actor.id,
+        connectionFamilyId: 'personal-env-only',
+      }),
+      'policy_blocked',
+    );
+  });
+
+  it('permits personal registration when the sole strategy is runner_managed or none', async () => {
+    const actorRunner = await seedUser('personal.runner');
+    const actorNone = await seedUser('personal.none');
+    await seedMember('org-001', actorRunner.id, 'member');
+    await seedMember('org-001', actorNone.id, 'member');
+    const registry = createConnectionFamilyPolicyRegistry([
+      {
+        id: 'personal-runner',
+        providerId: 'test',
+        displayName: 'Personal runner-only',
+        executionMode: 'subscription',
+        harnessId: 'test-harness',
+        allowedOwnership: ['personal'],
+        credentialStrategies: ['runner_managed'],
+        delegatable: false,
+        requiresRunner: false,
+        persistentSupported: false,
+      },
+      {
+        id: 'personal-none',
+        providerId: 'test',
+        displayName: 'Personal none-only',
+        executionMode: 'subscription',
+        harnessId: 'test-harness',
+        allowedOwnership: ['personal'],
+        credentialStrategies: ['none'],
+        delegatable: false,
+        requiresRunner: false,
+        persistentSupported: false,
+      },
+    ]);
+    const service = makeService(registry);
+    const runner = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: actorRunner.id, connectionFamilyId: 'personal-runner',
+    });
+    expect(runner.credentialStrategy).toBe('runner_managed');
+    const none = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: actorNone.id, connectionFamilyId: 'personal-none',
+    });
+    expect(none.credentialStrategy).toBe('none');
+  });
+
+  it('rejects organisation registration without secretRefId when policy allows multiple non-secret strategies', async () => {
+    const admin = await seedUser('multi.strat.admin');
+    await seedMember('org-001', admin.id, 'admin');
+    const registry = createConnectionFamilyPolicyRegistry([
+      {
+        id: 'org-multi-nonsecret',
+        providerId: 'test',
+        displayName: 'Org multi non-secret',
+        executionMode: 'api',
+        allowedOwnership: ['organisation'],
+        credentialStrategies: ['none', 'environment'],
+        delegatable: false,
+        requiresRunner: false,
+        persistentSupported: false,
+      },
+      {
+        id: 'org-runner-env',
+        providerId: 'test',
+        displayName: 'Org runner+env',
+        executionMode: 'api',
+        allowedOwnership: ['organisation'],
+        credentialStrategies: ['runner_managed', 'environment'],
+        delegatable: false,
+        requiresRunner: false,
+        persistentSupported: false,
+      },
+    ]);
+    const service = makeService(registry);
+    await expectServiceError(
+      service.registerOrganisationConnection({
+        organisationId: 'org-001', actorUserId: admin.id, connectionFamilyId: 'org-multi-nonsecret',
+      }),
+      'policy_blocked',
+    );
+    await expectServiceError(
+      service.registerOrganisationConnection({
+        organisationId: 'org-001', actorUserId: admin.id, connectionFamilyId: 'org-runner-env',
+      }),
+      'policy_blocked',
+    );
+    const persisted = await pool.query(
+      `SELECT id FROM ai_connections WHERE organisation_id = 'org-001'`,
+    );
+    expect(persisted.rowCount).toBe(0);
+  });
+
+  it('permits organisation registration when policy allows exactly one non-secret strategy', async () => {
+    const admin = await seedUser('single.strat.admin');
+    await seedMember('org-001', admin.id, 'admin');
+    const service = makeService();
+    const summary = await service.registerOrganisationConnection({
+      organisationId: 'org-001', actorUserId: admin.id, connectionFamilyId: 'test-org-none',
+    });
+    expect(summary.credentialStrategy).toBe('none');
+    expect(summary.credentialConfigured).toBe(false);
+  });
+
+  it('rejects organisation registration with secretRefId when external_secret_ref is not allowed', async () => {
+    const admin = await seedUser('extsec.admin');
+    await seedMember('org-001', admin.id, 'admin');
+    const service = makeService();
+    await expectServiceError(
+      service.registerOrganisationConnection({
+        organisationId: 'org-001',
+        actorUserId: admin.id,
+        connectionFamilyId: 'test-org-none',
+        secretRefId: 'vault:should-not-attach',
+      }),
+      'policy_blocked',
+    );
+  });
+
   it('rolls back registration when audit append fails inside the transaction', async () => {
     const actor = await seedUser('rollback.reg');
     await seedMember('org-001', actor.id, 'member');
