@@ -286,7 +286,7 @@ describe('AI connections HTTP boundary', () => {
 
     // Register a delegatable personal family via direct DB seed (production policies
     // don't currently expose one; we exercise HTTP wiring by using the codex family,
-    // which is not delegatable → sharing must be rejected with 400 policy_blocked).
+    // which is not delegatable â†’ sharing must be rejected with 400 policy_blocked).
     const registered = await app.inject({
       method: 'POST', url: '/ai-connections/personal', headers,
       payload: { connectionFamilyId: 'codex-subscription' },
@@ -298,7 +298,7 @@ describe('AI connections HTTP boundary', () => {
       method: 'POST', url: `/projects/${projectId}/ai-connections/${connectionId}/share`,
       headers, payload: { mode: 'persistent' },
     });
-    // Production policy has delegatable=false for codex → policy_blocked (400)
+    // Production policy has delegatable=false for codex â†’ policy_blocked (400)
     expect([400, 403]).toContain(nonDelegatable.statusCode);
     await app.close();
   });
@@ -355,7 +355,7 @@ describe('AI connections HTTP boundary', () => {
       });
       expect(response.statusCode, JSON.stringify(payload)).toBe(400);
       // Must be a body-shape validation rejection (has `field`), not a downstream
-      // service `policy_blocked` — proving the request never reached the service.
+      // service `policy_blocked` â€” proving the request never reached the service.
       const body = response.json() as { error?: string; field?: string };
       expect(body.field, JSON.stringify(payload)).toBeDefined();
       expect(body.error, JSON.stringify(payload)).not.toBe('policy_blocked');
@@ -416,6 +416,46 @@ describe('AI connections HTTP boundary', () => {
     await app.close();
   });
 
+  it('rejects calendar-invalid offset-bearing usage dates at the HTTP boundary instead of rolling them forward', async () => {
+    const ownerId = await seedUser('invalid.date.owner', 'Invalid-date-owner-2026!');
+    await seedOrgMembership('org-001', ownerId, 'owner');
+    const projectId = await seedProject('org-001', 'Invalid Date Project');
+    await pool.query(
+      `INSERT INTO project_memberships
+        (organisation_id, project_id, user_id, role, status, created_by, created_at, updated_at)
+       VALUES ($1, $2, $3, 'contributor', 'active', 'test', $4, $4)`,
+      ['org-001', projectId, ownerId, new Date()],
+    );
+    const { app } = makeDependencies(makeDelegatableRegistry());
+    const token = await login(app, 'invalid.date.owner', 'Invalid-date-owner-2026!');
+    const headers = { authorization: `Bearer ${token}`, 'x-organisation-id': 'org-001' };
+
+    const registered = await app.inject({
+      method: 'POST', url: '/ai-connections/personal', headers,
+      payload: { connectionFamilyId: 'test-personal-delegatable' },
+    });
+    expect(registered.statusCode).toBe(201);
+    const connectionId = (registered.json() as { id: string }).id;
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/projects/${projectId}/ai-connections/${connectionId}/share`,
+      headers,
+      payload: { availableFrom: '2026-02-30T09:30:00Z' },
+    });
+    expect(response.statusCode).toBe(400);
+    expect((response.json() as { field?: string }).field).toBe('availableFrom');
+
+    const persisted = await pool.query(
+      `SELECT COUNT(*)::int AS n
+         FROM ai_connection_project_shares
+        WHERE organisation_id = $1 AND project_id = $2 AND connection_id = $3`,
+      ['org-001', projectId, connectionId],
+    );
+    expect(persisted.rows[0].n).toBe(0);
+    await app.close();
+  });
+
   it('owner PATCH with explicit null bounds clears both window ends and preserves share mode', async () => {
     const ownerId = await seedUser('window.clear.owner', 'Window-clear-owner-2026!');
     await seedOrgMembership('org-001', ownerId, 'owner');
@@ -465,7 +505,7 @@ describe('AI connections HTTP boundary', () => {
 
     // Owner PATCHes explicit nulls to clear both bounds. hasWindow must be
     // detected (fields present, not merely absent) so the service is invoked
-    // with an empty usage policy — clearing both ends.
+    // with an empty usage policy â€” clearing both ends.
     const cleared = await app.inject({
       method: 'PATCH',
       url: `/projects/${projectId}/ai-connections/${connectionId}/share`,
@@ -474,7 +514,7 @@ describe('AI connections HTTP boundary', () => {
     });
     expect(cleared.statusCode).toBe(204);
 
-    // Read back the active share directly from the pool — bounds must be
+    // Read back the active share directly from the pool â€” bounds must be
     // cleared and mode must still be online_only.
     const after = await pool.query(
       `SELECT mode, available_from, available_until
@@ -488,7 +528,7 @@ describe('AI connections HTTP boundary', () => {
     expect(after.rows[0].available_from).toBeNull();
     expect(after.rows[0].available_until).toBeNull();
 
-    // The GET pool endpoint must also project the cleared state — owner
+    // The GET pool endpoint must also project the cleared state â€” owner
     // requester tier share metadata should omit both bounds.
     const readback = await app.inject({
       method: 'GET', url: `/projects/${projectId}/ai-connections`, headers,
@@ -510,8 +550,8 @@ describe('AI connections HTTP boundary', () => {
     expect(ownerEntry!.share!.availableFrom).toBeUndefined();
     expect(ownerEntry!.share!.availableUntil).toBeUndefined();
 
-    // A different member — one who has active project membership AND org
-    // membership — must still be rejected when trying to clear another user's
+    // A different member â€” one who has active project membership AND org
+    // membership â€” must still be rejected when trying to clear another user's
     // window. We seed project membership defensively so the assertion cannot
     // be satisfied by an unrelated project-visibility rejection if the
     // service's check order is ever reshuffled; the authority gate
@@ -601,13 +641,19 @@ describe('AI connections HTTP boundary', () => {
     await app.close();
   });
 
-  it('createRuntimeApp composes real AIConnectionService and persists across restart', async () => {
-    // Prepare bootstrap owner via direct seed so we can login through runtime.
+  it('createRuntimeApp composes real AIConnectionService and persists connection/share/audit state across restart', async () => {
+    let persistedProjectId = '';
+    let persistedPersonalConnectionId = '';
+    let persistedOrganisationConnectionId = '';
+    let auditEventIdsBeforeRestart: string[] = [];
+    const availableFrom = '2026-08-13T09:30:00.000Z';
+    const availableUntil = '2026-09-13T09:30:00.000Z';
+
     const runtime1 = createRuntimeApp({ DATABASE_URL: databaseUrl, ALLOW_DEV_IDENTITY_HEADERS: 'false' });
     try {
-      // Seed org + owner using pool from harness (points at same DB).
       const ownerId = await seedUser('runtime.owner', 'Runtime-owner-2026!');
       await seedOrgMembership('org-001', ownerId, 'owner');
+      persistedProjectId = await seedProject('org-001', 'Runtime Persistence Project');
 
       const login1 = await runtime1.app.inject({
         method: 'POST', url: '/auth/login',
@@ -618,17 +664,46 @@ describe('AI connections HTTP boundary', () => {
       const headers1 = { authorization: `Bearer ${token1}`, 'x-organisation-id': 'org-001' };
 
       const registered = await runtime1.app.inject({
-        method: 'POST', url: '/ai-connections/personal',
-        headers: headers1, payload: { connectionFamilyId: 'codex-subscription' },
+        method: 'POST', url: '/ai-connections/personal', headers: headers1,
+        payload: { connectionFamilyId: 'codex-subscription' },
       });
       expect(registered.statusCode).toBe(201);
-      const connectionId = (registered.json() as { id: string }).id;
-      expect(connectionId).toBeTypeOf('string');
+      persistedPersonalConnectionId = (registered.json() as { id: string }).id;
+
+      const organisationConnection = await runtime1.app.inject({
+        method: 'POST', url: '/admin/ai-connections', headers: headers1,
+        payload: { connectionFamilyId: 'openai-api', secretRefId: 'vault:runtime-openai' },
+      });
+      expect(organisationConnection.statusCode).toBe(201);
+      persistedOrganisationConnectionId = (organisationConnection.json() as { id: string }).id;
+
+      // Production subscription families intentionally remain non-delegatable until
+      // Agent Bridge. Seed one valid durable share row directly to prove restart
+      // hydration without weakening production policy in this slice.
+      await pool.query(
+        `INSERT INTO ai_connection_project_shares
+          (id, organisation_id, project_id, connection_id, connection_ownership,
+           mode, available_from, available_until, created_by, created_at, updated_at, revoked_at)
+         VALUES ($1, 'org-001', $2, $3, 'personal', 'online_only', $4, $5, $6, $7, $7, NULL)`,
+        [
+          '00000000-0000-4000-8000-000000000901',
+          persistedProjectId,
+          persistedPersonalConnectionId,
+          new Date(availableFrom),
+          new Date(availableUntil),
+          ownerId,
+          new Date('2026-08-12T18:30:00.000Z'),
+        ],
+      );
+
+      auditEventIdsBeforeRestart = (await new AuditRepository(pool).listByOrganisation('org-001'))
+        .filter((event) => event.eventType.startsWith('ai.connection.'))
+        .map((event) => event.id);
+      expect(auditEventIdsBeforeRestart.length).toBeGreaterThanOrEqual(2);
     } finally {
       await runtime1.close();
     }
 
-    // Fresh runtime, re-login, verify persisted state is visible.
     const runtime2 = createRuntimeApp({ DATABASE_URL: databaseUrl, ALLOW_DEV_IDENTITY_HEADERS: 'false' });
     try {
       const login2 = await runtime2.app.inject({
@@ -643,9 +718,26 @@ describe('AI connections HTTP boundary', () => {
       });
       expect(listed.statusCode).toBe(200);
       const list = listed.json() as Array<Record<string, unknown>>;
-      expect(list.length).toBeGreaterThanOrEqual(1);
-      expect(list[0]).not.toHaveProperty('secretRefId');
-      expect(list[0]?.connectionFamilyId).toBe('codex-subscription');
+      expect(list.some((item) => item.id === persistedPersonalConnectionId && item.connectionFamilyId === 'codex-subscription')).toBe(true);
+      expect(list.some((item) => item.id === persistedOrganisationConnectionId && item.connectionFamilyId === 'openai-api')).toBe(true);
+      expect(JSON.stringify(list)).not.toMatch(/secretRefId|vault:runtime-openai/);
+
+      const persistedShare = await pool.query(
+        `SELECT mode, available_from, available_until, revoked_at
+           FROM ai_connection_project_shares
+          WHERE organisation_id = $1 AND project_id = $2 AND connection_id = $3`,
+        ['org-001', persistedProjectId, persistedPersonalConnectionId],
+      );
+      expect(persistedShare.rowCount).toBe(1);
+      expect(persistedShare.rows[0].mode).toBe('online_only');
+      expect(new Date(persistedShare.rows[0].available_from).toISOString()).toBe(availableFrom);
+      expect(new Date(persistedShare.rows[0].available_until).toISOString()).toBe(availableUntil);
+      expect(persistedShare.rows[0].revoked_at).toBeNull();
+
+      const auditEventIdsAfterRestart = (await new AuditRepository(pool).listByOrganisation('org-001'))
+        .filter((event) => event.eventType.startsWith('ai.connection.'))
+        .map((event) => event.id);
+      expect(auditEventIdsAfterRestart).toEqual(auditEventIdsBeforeRestart);
     } finally {
       await runtime2.close();
     }

@@ -1,4 +1,4 @@
-﻿# AI Connection Delegation Administration Implementation Plan
+# AI Connection Delegation Administration Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -129,29 +129,29 @@ The HTTP/public read model derives from these records but never includes `secret
 - Produces `AIConnectionCredentialStrategy = 'runner_managed' | 'environment' | 'external_secret_ref' | 'none'`.
 - Produces `AIConnectionUsagePolicy { availableFrom?: Date; availableUntil?: Date }`.
 - Produces `TrustedConnectionFamilyPolicy` and `ConnectionFamilyPolicyRegistry.get(id)`; registry returns `null` for unknown families.
-- [ ] **Step 1: Write failing domain tests**
+- [x] **Step 1: Write failing domain tests**
 
 Test that stable IDs accept `moonshot`, `xai`, and future hyphenated IDs; personal ownership requires an owner user; organisation ownership forbids one; usage windows require `availableUntil > availableFrom`; share mode accepts only `online_only|persistent`; secret-like fields are not part of public connection input/output types.
 
-- [ ] **Step 2: Write failing policy-registry tests**
+- [x] **Step 2: Write failing policy-registry tests**
 
 Create a registry fixture with `future-subscription` and prove: policy metadata determines provider/harness/execution kind; unknown family returns null; a caller-supplied `delegatable` value is ignored because no such field exists in the lookup input; production personal harness families are fail-closed for collaborative delegation until their harness slice verifies them.
 
-- [ ] **Step 3: Run RED**
+- [x] **Step 3: Run RED**
 
 Run: `cd platform && npx vitest run packages/domain/test/ai-connection.test.ts apps/api/test/ai-connection-policy.test.ts`
 Expected: FAIL because the new module/registry does not exist.
 
-- [ ] **Step 4: Implement minimal contracts and registry**
+- [x] **Step 4: Implement minimal contracts and registry**
 
 Use the existing stable-ID validation pattern from `domain/src/validation.ts`. The production registry must be code-defined and readonly. Include known families for OpenAI API, Anthropic API, Google API and the future subscription harness identities, but keep subscription delegation false until the actual harness adapter is verified. Do not add Kimi/Grok to the initial UI selector; extensibility is demonstrated by open identifiers and registry construction tests.
 
-- [ ] **Step 5: Run GREEN + typecheck**
+- [x] **Step 5: Run GREEN + typecheck**
 
 Run: `cd platform && npx vitest run packages/domain/test/ai-connection.test.ts apps/api/test/ai-connection-policy.test.ts && npx tsc --noEmit --project tsconfig.base.json`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 `git add platform/packages/domain platform/apps/api/src/ai-connection-policy.ts platform/apps/api/test/ai-connection-policy.test.ts && git commit -m "feat: define AI connection policy contracts"`
 
@@ -275,7 +275,7 @@ Run the complete `ai-connection-service.integration.test.ts`; expected PASS.
 
 **Interfaces:**
 - `listProjectExecutionPool({organisationId, projectId, requesterUserId, now})` returns ordered entries with `tier: 'requester' | 'project_pool' | 'organisation'`, `eligible`, and stable `reasons`.
-- Ineligibility reasons include `connection_unavailable`, `policy_not_delegatable`, `owner_offline`, `runner_unavailable`, `usage_window_not_started`, `usage_window_expired`, `share_revoked`, and `persistent_not_supported`.
+- Ineligibility reasons include `connection_unavailable`, `policy_not_delegatable`, `owner_offline`, `runner_unavailable`, `usage_window_not_started`, `usage_window_expired`, and `persistent_not_supported`. Revoked share rows are historical records and are omitted from the active execution pool rather than emitted as an ineligible entry.
 - Existing `ModelGateway` API routes remain a separate `apiFallbackRoutes` list rather than being represented as somebody's personal connection.
 
 - [ ] **Step 1: Add RED pool tests**
@@ -378,7 +378,7 @@ Run static contract, direct web typecheck, and `npm run build --workspace @engin
 
 **Files:**
 - Modify only if a failing verification exposes a real defect; no opportunistic refactor.
-- Evidence stays outside the repository under `C:\Users\sanus\Desktop\AI-Engineering-OS-SDD-archive\2026-08-12-ai-connection-delegation-administration\`.
+- Evidence stays outside the repository under `<EXTERNAL_SDD_ARCHIVE_ROOT>/2026-08-12-ai-connection-delegation-administration/`.
 
 - [ ] **Step 1: Fresh Docker PostgreSQL verification**
 
@@ -404,6 +404,7 @@ Against the real Fastify API + production Next build with Docker PostgreSQL, ver
 
 Fresh reviewer inspects `main...HEAD` against AI-CONN-FR-001..017 and this plan. Merge gate is zero Critical/Important findings. Minor findings must be recorded explicitly.
 
+**Task 8 verification evidence (2026-08-12):** Steps 1–6 are complete. A new Compose project/volume was used for the fresh-DB gate because the remote safety layer blocked destructive volume deletion; the prior volume was preserved. Full results: 33 static + 131 unit + 185 integration tests, typecheck/build/audits green, ECC/security green, production smoke PASS, runtime restart persistence confirmed, and final whole-branch review 0 Critical / 0 Important. Production subscription sharing correctly remains fail-closed until Agent Bridge; trusted-policy integration tests prove the share-state-machine behaviors.
 - [ ] **Step 7: Push feature branch for exact CI, then local merge**
 
 Push `feature/ai-connection-delegation-administration`; require exact feature SHA Platform Verification + ECC success. Switch primary checkout to `main`, confirm `origin/main` unchanged from fork point or fast-forward safely, merge with an explicit merge commit, verify merged tree matches reviewed feature tree, rerun merged-main platform verification, then `git push origin main`.

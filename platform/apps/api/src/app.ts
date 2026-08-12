@@ -15,6 +15,7 @@ import {
   createKnowledgeRecord,
   createProject,
   DomainValidationError,
+  parseAIConnectionDateTime,
   reviseKnowledgeRecord,
   requireOrganisationRole,
   requireProjectRole,
@@ -863,9 +864,11 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     const value = body[field];
     if (value === undefined || value === null) return undefined;
     if (typeof value !== 'string') throw new DomainValidationError(field);
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) throw new DomainValidationError(field);
-    return parsed;
+    try {
+      return new Date(parseAIConnectionDateTime(value));
+    } catch {
+      throw new DomainValidationError(field);
+    }
   }
 
   app.get('/ai-connection-families', async (request, reply) => {

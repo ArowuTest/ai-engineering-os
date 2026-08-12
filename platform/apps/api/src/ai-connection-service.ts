@@ -330,6 +330,34 @@ export class AIConnectionService {
       }
       if (record.status === 'revoked') throw new AIConnectionServiceError('conflict');
 
+      // Removing a personal connection must also remove every active project
+      // entitlement backed by that connection. Keep the share history, and do
+      // the entire cascade + audits in this same transaction so no active share
+      // survives a committed connection revocation.
+      const activeShares = await aiConnections.listActiveProjectSharesForConnection(
+        input.organisationId,
+        record.id,
+      );
+      for (const share of activeShares) {
+        await aiConnections.revokeProjectShare(input.organisationId, share.id, now);
+        await audit.append(createAuditEvent({
+          organisationId: input.organisationId,
+          eventType: 'ai.connection.project_share.revoked',
+          actorType: 'user',
+          actorId: input.actorUserId,
+          subjectType: 'ai_connection_project_share',
+          subjectId: share.id,
+          metadata: {
+            connectionId: record.id,
+            projectId: share.projectId,
+            connectionFamilyId: record.connectionFamilyId,
+            providerId: record.providerId,
+            previousMode: share.mode,
+            reason: 'connection_revoked',
+          },
+        }));
+      }
+
       await aiConnections.setConnectionStatus(input.organisationId, record.id, 'revoked', now);
       await audit.append(createAuditEvent({
         organisationId: input.organisationId,
@@ -343,6 +371,7 @@ export class AIConnectionService {
           connectionFamilyId: record.connectionFamilyId,
           providerId: record.providerId,
           previousStatus: record.status,
+          revokedProjectShareCount: activeShares.length,
         },
       }));
     });
@@ -569,6 +598,9 @@ export class AIConnectionService {
       );
       if (!existing) throw new AIConnectionServiceError('not_found');
 
+      // The usage-policy object is a complete replacement, not a per-field merge.
+      // An omitted bound therefore clears that bound for the owner; the restrict-only
+      // checks below prevent non-owner administrators from clearing an existing bound.
       const nextFrom = input.usagePolicy.availableFrom;
       const nextUntil = input.usagePolicy.availableUntil;
       if (!isConnectionOwner) {

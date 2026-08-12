@@ -289,7 +289,7 @@ export default async function AIConnectionsPage() {
                               Active share · {activeShare.mode}
                             </small>
                           ) : (
-                            <small>Not shared with this project</small>
+                            <small>Do Not Share · not shared with this project</small>
                           )}
                         </div>
 
@@ -460,6 +460,25 @@ export default async function AIConnectionsPage() {
                             </span>
                           )}
                         </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <h5>API fallback routes</h5>
+                {pool.apiFallbackRoutes.length === 0 ? (
+                  <p className="empty-inline">No API fallback routes are currently available.</p>
+                ) : (
+                  <ul className="ai-connection-pool-list">
+                    {pool.apiFallbackRoutes.map((route) => (
+                      <li className="ai-connection-pool-entry" key={route.routeId}>
+                        <div>
+                          <strong>{route.providerId}</strong>
+                          <span>{route.model} · {route.executionMode} · {route.costType}</span>
+                        </div>
+                        <span className={route.available ? 'badge badge-success' : 'badge badge-warning'}>
+                          {route.available ? 'Available' : 'Unavailable'}
+                        </span>
                       </li>
                     ))}
                   </ul>

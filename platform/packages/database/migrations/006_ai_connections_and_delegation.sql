@@ -26,7 +26,6 @@ CREATE TABLE ai_connections (
       AND length(trim(secret_ref_id)) > 0)
     OR (credential_strategy <> 'external_secret_ref' AND secret_ref_id IS NULL)
   ),
-  UNIQUE (organisation_id, id),
   UNIQUE (organisation_id, id, ownership)
 );
 

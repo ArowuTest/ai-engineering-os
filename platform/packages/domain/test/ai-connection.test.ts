@@ -62,6 +62,32 @@ describe('AI connection domain contracts', () => {
     ).toThrowError(DomainValidationError);
   });
 
+  it('couples secretRefId to external_secret_ref at the domain boundary', () => {
+    expect(() =>
+      createAIConnectionRecord({
+        organisationId: 'org-1',
+        ownership: 'organisation',
+        providerId: 'openai',
+        connectionFamilyId: 'openai-api',
+        credentialStrategy: 'external_secret_ref',
+        createdBy: 'user-admin',
+      }),
+    ).toThrowError(DomainValidationError);
+
+    expect(() =>
+      createAIConnectionRecord({
+        organisationId: 'org-1',
+        ownership: 'personal',
+        ownerUserId: 'user-1',
+        providerId: 'openai',
+        connectionFamilyId: 'openai-subscription',
+        credentialStrategy: 'runner_managed',
+        secretRefId: 'must-not-be-here',
+        createdBy: 'user-1',
+      }),
+    ).toThrowError(DomainValidationError);
+  });
+
   it('creates a valid personal connection when ownerUserId is provided', () => {
     const record = createAIConnectionRecord({
       organisationId: 'org-1',

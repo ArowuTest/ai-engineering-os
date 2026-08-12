@@ -233,6 +233,22 @@ export class AIConnectionRepository {
     return result.rows.map(mapShare);
   }
 
+  async listActiveProjectSharesForConnection(
+    organisationId: string,
+    connectionId: string,
+  ): Promise<AIConnectionProjectShareRecord[]> {
+    const result = await this.database.query<AIConnectionShareRow>(
+      `SELECT ${SHARE_COLUMNS}
+       FROM ai_connection_project_shares
+       WHERE organisation_id = $1
+         AND connection_id = $2
+         AND revoked_at IS NULL
+       ORDER BY created_at ASC, id ASC`,
+      [organisationId, connectionId],
+    );
+    return result.rows.map(mapShare);
+  }
+
   async revokeProjectShare(organisationId: string, id: string, when: Date): Promise<void> {
     const result = await this.database.query(
       `UPDATE ai_connection_project_shares

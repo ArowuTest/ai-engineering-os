@@ -1940,6 +1940,71 @@ describe('AIConnectionService', () => {
     }
   });
 
+  it('revokeConnection cascade-revokes active project shares and audits the removed project entitlement', async () => {
+    const owner = await seedUser('revoke.cascade.owner');
+    await seedMember('org-001', owner.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    const service = makeService(makePoolRegistry());
+    const conn = await service.registerPersonalConnection({
+      organisationId: 'org-001',
+      actorUserId: owner.id,
+      connectionFamilyId: 'pool-personal-online',
+    });
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001',
+      actorUserId: owner.id,
+      projectId,
+      connectionId: conn.id,
+    });
+
+    const before = await pool.query(
+      `SELECT id, revoked_at
+         FROM ai_connection_project_shares
+        WHERE organisation_id = $1 AND project_id = $2 AND connection_id = $3`,
+      ['org-001', projectId, conn.id],
+    );
+    expect(before.rowCount).toBe(1);
+    expect(before.rows[0].revoked_at).toBeNull();
+    const shareId = before.rows[0].id as string;
+
+    await service.revokeConnection({
+      organisationId: 'org-001',
+      actorUserId: owner.id,
+      connectionId: conn.id,
+      now: new Date('2026-08-12T18:00:00.000Z'),
+    });
+
+    const connection = await pool.query(
+      `SELECT status, revoked_at FROM ai_connections WHERE organisation_id = $1 AND id = $2`,
+      ['org-001', conn.id],
+    );
+    expect(connection.rows[0].status).toBe('revoked');
+    expect(connection.rows[0].revoked_at).not.toBeNull();
+
+    const share = await pool.query(
+      `SELECT revoked_at FROM ai_connection_project_shares WHERE organisation_id = $1 AND id = $2`,
+      ['org-001', shareId],
+    );
+    expect(share.rows[0].revoked_at).not.toBeNull();
+
+    const audits = await new AuditRepository(pool).listByOrganisation('org-001');
+    expect(
+      audits.some(
+        (event) =>
+          event.eventType === 'ai.connection.project_share.revoked' &&
+          event.subjectId === shareId &&
+          event.metadata.connectionId === conn.id &&
+          event.metadata.projectId === projectId,
+      ),
+    ).toBe(true);
+    expect(
+      audits.some(
+        (event) => event.eventType === 'ai.connection.revoked' && event.subjectId === conn.id,
+      ),
+    ).toBe(true);
+  });
+
   it('listProjectExecutionPool: pool read does not mutate state (no audit, no share writes)', async () => {
     const owner = await seedUser('pool.owner.pure');
     const requester = await seedUser('pool.req.pure');

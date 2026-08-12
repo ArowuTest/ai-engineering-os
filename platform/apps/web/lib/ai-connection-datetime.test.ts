@@ -38,6 +38,17 @@ describe('parseAIConnectionDateTime', () => {
     );
   });
 
+  it('preserves negative-offset and DST-boundary authored instants', () => {
+    expect(parseAIConnectionDateTime('2026-08-13T09:30:00-05:00')).toBe(
+      '2026-08-13T14:30:00.000Z',
+    );
+    // Explicit offsets are authoritative even when the wall-clock happens to
+    // sit on a regional DST transition; no host-local reinterpretation occurs.
+    expect(parseAIConnectionDateTime('2026-03-08T02:30:00-05:00')).toBe(
+      '2026-03-08T07:30:00.000Z',
+    );
+  });
+
   it('trims surrounding whitespace before parsing', () => {
     expect(parseAIConnectionDateTime('  2026-08-13T09:30  ')).toBe(
       '2026-08-13T09:30:00.000Z',
@@ -65,6 +76,11 @@ describe('parseAIConnectionDateTime', () => {
     // 2026-03-02. Component parsing + Date.UTC + round-trip verification
     // must reject the value instead.
     expect(() => parseAIConnectionDateTime('2026-02-30T09:30')).toThrow(/valid ISO/);
+  });
+
+  it('fails closed on non-leap Feb 29 and leap-year Feb 30', () => {
+    expect(() => parseAIConnectionDateTime('2027-02-29T09:30')).toThrow(/valid ISO/);
+    expect(() => parseAIConnectionDateTime('2028-02-30T09:30:00+00:00')).toThrow(/valid ISO/);
   });
 
   it('fails closed on an invalid month (e.g. month 13)', () => {

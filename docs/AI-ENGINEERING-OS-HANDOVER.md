@@ -1,9 +1,9 @@
-# AI Engineering OS â€” Living Handover
+# AI Engineering OS — Living Handover
 
 **Purpose:** Operational continuation document for a new ChatGPT/Claude/Codex agent if the current thread ends.
 **Last updated:** 12 August 2026, during Task 8 final hardening after offset-date fix `104a6be0`.
 **Repository:** `ArowuTest/ai-engineering-os`
-**Local repo:** `C:\Users\sanus\Desktop\AI-Engineering-OS`
+**Local repo:** `<LOCAL_REPO_ROOT>`
 **Current source-of-truth branch:** `main`
 **Current remote/local main SHA:** `e51a3c183fa9dc704cb756d471afb515a9c8aed6`
 
@@ -16,7 +16,7 @@ The default rule is **reuse before rebuild; preserve before replace; generalise 
 Canonical project state must survive provider switches, sign-out, runner loss and individual collaborators leaving.
 
 Keep these concepts separate:
-Provider â†’ Model â†’ Execution Route â†’ Harness â†’ Agent â†’ Skill â†’ Tool/MCP â†’ Connection â†’ Runner â†’ Orchestrator.
+Provider → Model → Execution Route → Harness → Agent → Skill → Tool/MCP → Connection → Runner → Orchestrator.
 AI Engineering OS is the master orchestrator. Hermes/Codex/Claude Code/Antigravity are execution surfaces, not canonical state owners.
 
 ## 2. What is already merged to `main`
@@ -36,7 +36,7 @@ GitHub `main` passed Platform Verification and ECC Compatibility on that exact m
 - Product Knowledge Review Queue with Product Owner Accept / Edit & Accept / Reject / Retry.
 - Accepted candidates become canonical `confirmed`; client cannot override status.
 - Retry uses original source turn and creates no duplicate conversation messages.
-- Migrations on `main`: 001â€“005 only.
+- Migrations on `main`: 001–005 only.
 - Full local smoke and Docker PostgreSQL verification completed before merge.
 
 ## 3. Approved architecture for the current phase
@@ -45,7 +45,7 @@ Design: `docs/superpowers/specs/2026-08-11-extensible-ai-execution-routing-and-s
 SRS and Technical Architecture are v1.3.
 
 Personal connection default sequence:
-`Do Not Share` (absence of share) â†’ explicit project share creates `Online Only` â†’ owner may separately enable `Persistent` when trusted policy supports it.
+`Do Not Share` (absence of share) → explicit project share creates `Online Only` → owner may separately enable `Persistent` when trusted policy supports it.
 
 Default execution tiering:
 1. Requesting collaborator's own eligible connection.
@@ -60,28 +60,28 @@ Personal provider passwords, cookies, refresh tokens and web sessions must never
 
 Branch: `feature/ai-connection-delegation-administration`
 Isolated worktree:
-`C:\Users\sanus\Desktop\AI-Engineering-OS\.worktrees\ai-connection-delegation-administration`
+`<LOCAL_REPO_ROOT>/.worktrees/ai-connection-delegation-administration`
 
 Implementation plan:
 `docs/superpowers/plans/2026-08-12-ai-connection-delegation-administration.md`
 
 Current accepted commits on the feature branch:
-- `7ae5d5df` â€” docs: plan AI connection delegation administration
-- `4947db2f` â€” feat: define AI connection policy contracts
-- `5b4ebbbe` â€” feat: persist AI connections and project delegation
-- `086f4fd8` â€” feat: govern AI connection administration
-- `f8ad851b` â€” fix: fail closed on ambiguous AI connection credentials
-- `004dc663` â€” feat: add project-scoped AI connection sharing
-- `7bb782f8` â€” feat: expose project AI execution pool policy
+- `7ae5d5df` — docs: plan AI connection delegation administration
+- `4947db2f` — feat: define AI connection policy contracts
+- `5b4ebbbe` — feat: persist AI connections and project delegation
+- `086f4fd8` — feat: govern AI connection administration
+- `f8ad851b` — fix: fail closed on ambiguous AI connection credentials
+- `004dc663` — feat: add project-scoped AI connection sharing
+- `7bb782f8` — feat: expose project AI execution pool policy
 
-Tasks 1â€“5 are implemented and independently approved with zero Critical/Important findings.
-Task 6 is currently in progress and has not yet been accepted or committed.
+Tasks 1–7 are implemented and independently approved with zero Critical/Important findings.
+Task 8 verification/hardening is complete through product smoke and final whole-branch review; commit/push/merge verification remains.
 
-## 5. What Tasks 1â€“5 delivered
+## 5. What Tasks 1–7 delivered
 
 Task 1: open stable provider/family IDs plus trusted server-side `ConnectionFamilyPolicyRegistry`.
 Unknown families fail closed. Personal subscription families remain non-delegatable until real runner support proves otherwise.Task 2: forward-only migration `006_ai_connections_and_delegation.sql`, `AIConnectionRepository`, project-share history and active-session presence.
-Migrations 001â€“005 remain byte-identical to `main`.
+Migrations 001–005 remain byte-identical to `main`.
 DB enforces personal ownership, same-organisation project/share scope, personal-only project sharing and one active share per project/connection.
 
 Task 3: `AIConnectionService` registration/list/revocation with organisation RBAC and atomic audit.
@@ -96,25 +96,32 @@ Owner controls enable/mode/revoke. Organisation owner/admin may only narrow usag
 Mode/window replacements are revoke-old + create-new in one transaction, preserving history and audit.
 
 Task 5: project execution-pool read.
-Ordering is requester â†’ project_pool â†’ organisation; API routes are separate fallback metadata.
+Ordering is requester → project_pool → organisation; API routes are separate fallback metadata.
 Own use does not require `delegatable=true`; contributed personal routes do.
 Online Only requires a real active AI Engineering OS session for the connection owner.
 Persistent does not require web presence, but still obeys trusted policy and runner requirements.
 Runner-required routes return `runner_unavailable`; no fake runner state is invented.
 Usage window is start-inclusive/end-exclusive. Policy downgrades take effect at read time.
 
-## 6. Task 6 â€” current work
+## 6. Task 8 — current work
 
-Goal: expose authenticated AI Connection HTTP APIs and compose the real service in `createRuntimeApp()`.
-Planned endpoints include safe family catalogue, connection list/register/revoke, project share controls and project execution-pool read.
-HTTP must reject sensitive/policy body fields such as `providerToken`, `password`, `cookie`, `refreshToken`, `delegatable`, and `ownerUserId` rather than silently ignore them.
-Actor/user identity comes only from the existing authenticated session/project identity.Task 6 RED/GREEN evidence must use Docker PostgreSQL:
-`postgres://engineering_os:engineering_os@127.0.0.1:55432/engineering_os_test`.
-It must prove unauthenticated/cross-tenant/RBAC failures, safe response shapes, first-share Online Only, runtime composition and persistence across runtime restart.
+Task 6 delivered the authenticated AI Connection HTTP API/runtime composition; Task 7 delivered the server-rendered AI Connections administration UI. Both are accepted.
 
-After Task 6: Task 7 adds the server-rendered AI Connections administration UI.
-Task 8 performs fresh-volume Docker, full tests/typecheck/build/audit/ECC/security, whole-branch review, then local merge to `main`, reverify merged `main`, and push GitHub `main`.
+Task 8 fresh verification is green on the current working tree:
+- brand-new isolated Docker PostgreSQL volume/container `task8-final-postgres-1` healthy; prior volume preserved;
+- clean install: 193 packages installed, 200 audited, 0 vulnerabilities;
+- full test matrix: 33/33 static contracts, 131/131 unit, 185/185 integration;
+- platform + web typecheck pass; Next.js 16.3/Turbopack production build pass;
+- npm signatures: 186 verified packages, 52 attestations; production audit 0 vulnerabilities;
+- ECC/security gates all pass: 67 agents, 21 hooks, 94 commands, 284 skills, 34 install modules, 81 components, 7 profiles, 122 rules, 10 workflows, catalog/registry, Unicode, portable paths and IOC scan (199 files);
+- final independent whole-branch Opus review: 0 Critical / 0 Important; prior 2 Important + 10 Minor findings confirmed closed (M-3 confirmed false positive);
+- two new non-blocking review observations were resolved as contract-clarity comments; targeted 27 domain/datetime + 11 UI tests and full typecheck remain green;
+- real Fastify + production Next smoke: PASS; production sharing remains intentionally policy-blocked until Agent Bridge;
+- real API restart against the same Docker DB preserved both smoke connections, their registration audits and project state.
 
+The trusted-policy integration suite separately proves first-share Online Only, explicit Persistent, owner-offline behavior, revocation, windows and restart durability. Production subscription families remain non-delegatable until Agent Bridge, so the production smoke correctly proves fail-closed behavior rather than weakening policy.
+
+**Immediate next action:** commit the bounded Task 8 hardening, push the feature branch for exact CI, merge locally to `main` only after CI is green, reverify merged `main`, then push/verify GitHub `main`.
 ## 7. How the Opus subagent/reviewer workflow is being used
 
 The user selected subagent-driven development.
@@ -133,7 +140,7 @@ Typical invocation uses `--model opus --effort medium` (high effort for whole-br
 Important: the empty MCP config and `--no-chrome` apply ONLY to that individual Claude Code subprocess.
 They do not change the user's Claude Desktop/Claude app, global MCP configuration, or Chrome integration.
 The strict empty MCP setup was introduced because inherited MongoDB/Chrome MCP startup was delaying isolated backend subagents.Task briefs, implementer reports, review briefs and review reports are archived outside the repo at:
-`C:\Users\sanus\Desktop\AI-Engineering-OS-SDD-archive\2026-08-12-ai-connection-delegation-administration\`
+`<EXTERNAL_SDD_ARCHIVE_ROOT>/2026-08-12-ai-connection-delegation-administration/`
 This prevents ignored reviewer scratch files from tripping ECC Unicode/path scans or contaminating task commits.
 
 Reviewer focus is not just style. It challenges:
@@ -160,7 +167,7 @@ Keep ECC scratch/reviewer output outside the repo. Ignored scratch containing Un
 ## 9. Git workflow
 
 Established workflow is NOT PR-first:
-feature worktree/branch â†’ verify/review â†’ merge locally into `main` â†’ verify merged `main` â†’ push GitHub `main`.
+feature worktree/branch → verify/review → merge locally into `main` → verify merged `main` → push GitHub `main`.
 After proving a feature branch is fully contained in `main`, delete the stale remote feature branch so GitHub does not misleadingly show outstanding product branches.
 Preserve `ecc-seed` and `ecc-upstream`; never merge `ecc-upstream` wholesale.Dependabot branches are proposals and must be reviewed independently before merge.
 
@@ -207,7 +214,7 @@ No Task 6 production file has been edited yet, so Task 6 is in the correct test-
 No Task 6 commit/report exists yet.
 
 **Immediate next action:** let the Task 6 agent capture genuine HTTP RED, implement only `app.ts`/`server.ts`, reach GREEN, then run independent Opus review before Task 7.
-### Live checkpoint update â€” Task 6 review
+### Live checkpoint update — Task 6 review
 
 Task 6 implementation commit: `6b17ba98 feat: expose AI connection administration API`.
 HTTP RED was 9/9 failing before routes; GREEN is 9/9 passing. Auth/runtime/server regressions and typecheck passed; one service test hit a host 10s timing flake and passed immediately in isolation.
@@ -219,7 +226,7 @@ Chosen minimal safe behavior for this slice: reject combined mode+window PATCH w
 The fix round also closes two minors: non-string mode must 400, and unknown body fields get an explicit "not accepted on this endpoint" validation message.
 
 Do not treat Task 6 as complete until this fix is independently re-reviewed with zero Critical/Important findings.
-### Live checkpoint update â€” Task 6 accepted
+### Live checkpoint update — Task 6 accepted
 
 Task 6 commits:
 - `6b17ba98 feat: expose AI connection administration API`
@@ -261,4 +268,4 @@ The latest datetime fix has targeted GREEN evidence for 13 parser tests, 14 AI C
 
 The product architecture has also been clarified and documented as SRS/Technical Architecture v1.4: AI Engineering OS is the enhanced/productised evolution of ECC. Existing ECC learning, memory, skills, agents, MCPs, evals, verification, orchestration and related engineering capabilities are native assets to preserve and surface rather than duplicate. See `docs/superpowers/specs/2026-08-12-ecc-native-capability-productisation-design.md`.
 
-**Immediate next action:** independently review `104a6be0` and the new documentation-only architecture delta, then run Task 8 fresh-volume Docker/platform/ECC/security/product smoke and whole-branch review. Only after every gate is green should the branch merge locally to `main`, merged `main` be reverified, and GitHub `main` be pushed.
+**Latest Task 8 checkpoint:** fresh Docker/platform/ECC/security/product-smoke gates and final whole-branch review are green with 0 Critical / 0 Important. The remaining sequence is hardening commit → feature push/exact CI → local merge → merged-main verification → GitHub main push/CI verification.

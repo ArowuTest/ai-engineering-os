@@ -114,6 +114,20 @@ export function createAIConnectionRecord(input: CreateAIConnectionRecordInput): 
   const credentialStrategy = requireCredentialStrategy(input.credentialStrategy);
   const createdBy = requireNonBlank(input.createdBy, 'createdBy');
 
+  if (credentialStrategy === 'external_secret_ref') {
+    if (input.secretRefId === undefined || input.secretRefId === null) {
+      throw new DomainValidationError(
+        'secretRefId',
+        'external_secret_ref credential strategy requires secretRefId',
+      );
+    }
+  } else if (input.secretRefId !== undefined) {
+    throw new DomainValidationError(
+      'secretRefId',
+      'secretRefId is only valid with external_secret_ref credential strategy',
+    );
+  }
+
   if (ownership === 'personal') {
     if (input.ownerUserId === undefined || input.ownerUserId === null) {
       throw new DomainValidationError('ownerUserId', 'personal ownership requires ownerUserId');

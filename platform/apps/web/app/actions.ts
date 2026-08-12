@@ -296,17 +296,9 @@ export async function revokeAIConnectionAction(formData: FormData) {
 export async function shareAIConnectionAction(formData: FormData) {
   const projectId = required(formData, 'projectId');
   const connectionId = required(formData, 'connectionId');
-  const availableFrom = optionalIsoDate(formData, 'availableFrom');
-  const availableUntil = optionalIsoDate(formData, 'availableUntil');
-  const input: {
-    projectId: string;
-    connectionId: string;
-    availableFrom?: string;
-    availableUntil?: string;
-  } = { projectId, connectionId };
-  if (availableFrom) input.availableFrom = availableFrom;
-  if (availableUntil) input.availableUntil = availableUntil;
-  await shareAIConnectionWithProject(input);
+  // Initial sharing is deliberately a bare Online Only operation. Usage-window
+  // policy is a separate owner action after the share exists.
+  await shareAIConnectionWithProject({ projectId, connectionId });
   revalidatePath('/ai-connections');
   revalidatePath(`/projects/${projectId}`);
 }

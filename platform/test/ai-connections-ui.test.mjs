@@ -116,10 +116,17 @@ test('actions.ts wires AI connection server actions without accepting provider c
     actions,
     /setAIConnectionShareModeAction[\s\S]*?setAIConnectionShareMode\(/,
   );
-  // Persistent switch cannot be smuggled through the initial share action.
-  assert.doesNotMatch(
-    actions,
-    /shareAIConnectionAction[\s\S]{0,500}?['"]persistent['"]/,
+  // Persistent mode or usage-window policy cannot be smuggled through the
+  // initial share action. Those are separate post-share owner operations.
+  const shareActionBlock = actions.match(
+    /export async function shareAIConnectionAction\([\s\S]*?(?=export async function setAIConnectionShareModeAction)/,
+  );
+  assert.ok(shareActionBlock, 'shareAIConnectionAction block must exist');
+  assert.doesNotMatch(shareActionBlock[0], /['"]persistent['"]/);
+  assert.doesNotMatch(shareActionBlock[0], /availableFrom|availableUntil|optionalIsoDate/);
+  assert.match(
+    shareActionBlock[0],
+    /shareAIConnectionWithProject\(\{\s*projectId,\s*connectionId\s*\}\)/,
   );
 });
 
@@ -179,13 +186,18 @@ test('AI connections page fetches families from the server, exposes required sec
   // Persistent switch is a SEPARATE action, only rendered when policy says persistent supported.
   assert.match(page, /action=\{setAIConnectionShareModeAction\}/);
   assert.match(page, /persistentSupported/);
-  // "Do Not Share" is never shown against an active share — controls only offer Revoke.
-  assert.doesNotMatch(page, /Do Not Share/);
+  // The empty-share state uses the product's canonical "Do Not Share" wording;
+  // active shares instead show Active share + revoke controls.
+  assert.match(page, /Do Not Share/);
+  assert.match(page, /Active share/);
   assert.match(page, /action=\{revokeAIConnectionShareAction\}/);
 
   // Execution-pool entries render server-provided eligibility & reasons (no client-side re-derivation).
   assert.match(page, /entry\.eligible/);
   assert.match(page, /entry\.reasons/);
+  // API fallback routes remain a separate visible list, not personal/project entries.
+  assert.match(page, /API fallback routes/);
+  assert.match(page, /pool\.apiFallbackRoutes\.map\(/);
   // credentialConfigured is only shown as a status/boolean, not a value.
   assert.match(page, /credentialConfigured/);
 
