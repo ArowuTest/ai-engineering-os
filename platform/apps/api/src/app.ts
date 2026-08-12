@@ -846,7 +846,10 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
   function assertAllowedFields(body: JsonObject, allowed: readonly string[]): void {
     for (const key of Object.keys(body)) {
       if (!allowed.includes(key)) {
-        throw new DomainValidationError(key);
+        throw new DomainValidationError(
+          key,
+          `field ${key} is not accepted on this endpoint`,
+        );
       }
     }
   }
@@ -952,8 +955,18 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     const identity = await resolveIdentity(request, dependencies);
     const body = bodyObject(request.body);
     assertAllowedFields(body, ['mode', 'availableFrom', 'availableUntil']);
+    const hasMode = Object.prototype.hasOwnProperty.call(body, 'mode');
+    const hasWindow = body.availableFrom !== undefined || body.availableUntil !== undefined;
+    // Fail closed: combined mode + window updates are not supported on this endpoint.
+    // Rejecting BEFORE any service call prevents partial mutation.
+    if (hasMode && hasWindow) {
+      throw new DomainValidationError(
+        'mode',
+        'mode and availability window cannot be updated in the same request',
+      );
+    }
     const service = requireAIConnectionService();
-    if (typeof body.mode === 'string') {
+    if (hasMode) {
       if (body.mode !== 'online_only' && body.mode !== 'persistent') {
         throw new DomainValidationError('mode');
       }
@@ -965,7 +978,7 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
         mode: body.mode,
       });
     }
-    if (body.availableFrom !== undefined || body.availableUntil !== undefined) {
+    if (hasWindow) {
       const usagePolicy: { availableFrom?: Date; availableUntil?: Date } = {};
       const from = optionalDate(body, 'availableFrom');
       const until = optionalDate(body, 'availableUntil');

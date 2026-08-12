@@ -296,6 +296,100 @@ describe('AI connections HTTP boundary', () => {
     await app.close();
   });
 
+  it('PATCH share fails 400 when both mode and availableFrom/Until are supplied, without mutating state', async () => {
+    const ownerId = await seedUser('patch.combined', 'Patch-combined-2026!');
+    await seedOrgMembership('org-001', ownerId, 'owner');
+    const projectId = await seedProject('org-001', 'Combined Patch Project');
+    const { app } = makeDependencies();
+    const token = await login(app, 'patch.combined', 'Patch-combined-2026!');
+    const headers = { authorization: `Bearer ${token}`, 'x-organisation-id': 'org-001' };
+
+    const registered = await app.inject({
+      method: 'POST', url: '/ai-connections/personal', headers,
+      payload: { connectionFamilyId: 'codex-subscription' },
+    });
+    expect(registered.statusCode).toBe(201);
+    const connectionId = (registered.json() as { id: string }).id;
+
+    const before = await pool.query(
+      'SELECT COUNT(*)::int AS n FROM ai_connection_project_shares WHERE organisation_id=$1 AND project_id=$2 AND connection_id=$3',
+      ['org-001', projectId, connectionId],
+    );
+    expect(before.rows[0].n).toBe(0);
+
+    for (const payload of [
+      { mode: 'online_only', availableFrom: '2026-08-13T00:00:00Z' },
+      { mode: 'persistent', availableUntil: '2026-09-13T00:00:00Z' },
+      { mode: 'online_only', availableFrom: '2026-08-13T00:00:00Z', availableUntil: '2026-09-13T00:00:00Z' },
+    ]) {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/projects/${projectId}/ai-connections/${connectionId}/share`,
+        headers, payload,
+      });
+      expect(response.statusCode, JSON.stringify(payload)).toBe(400);
+      // Must be a body-shape validation rejection (has `field`), not a downstream
+      // service `policy_blocked` — proving the request never reached the service.
+      const body = response.json() as { error?: string; field?: string };
+      expect(body.field, JSON.stringify(payload)).toBeDefined();
+      expect(body.error, JSON.stringify(payload)).not.toBe('policy_blocked');
+    }
+
+    const after = await pool.query(
+      'SELECT COUNT(*)::int AS n FROM ai_connection_project_shares WHERE organisation_id=$1 AND project_id=$2 AND connection_id=$3',
+      ['org-001', projectId, connectionId],
+    );
+    expect(after.rows[0].n).toBe(0);
+    await app.close();
+  });
+
+  it('PATCH share rejects non-string or invalid mode values with 400 (no silent 204)', async () => {
+    const ownerId = await seedUser('patch.badmode', 'Patch-badmode-2026!');
+    await seedOrgMembership('org-001', ownerId, 'owner');
+    const projectId = await seedProject('org-001', 'Bad Mode Project');
+    const { app } = makeDependencies();
+    const token = await login(app, 'patch.badmode', 'Patch-badmode-2026!');
+    const headers = { authorization: `Bearer ${token}`, 'x-organisation-id': 'org-001' };
+
+    const registered = await app.inject({
+      method: 'POST', url: '/ai-connections/personal', headers,
+      payload: { connectionFamilyId: 'codex-subscription' },
+    });
+    expect(registered.statusCode).toBe(201);
+    const connectionId = (registered.json() as { id: string }).id;
+
+    for (const badMode of [42, null, true, { nested: 'x' }, ['online_only'], 'ONLINE_ONLY', 'unknown_mode', '']) {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/projects/${projectId}/ai-connections/${connectionId}/share`,
+        headers, payload: { mode: badMode as unknown },
+      });
+      expect(response.statusCode, `mode=${JSON.stringify(badMode)}`).toBe(400);
+    }
+    await app.close();
+  });
+
+  it('unknown field rejection says the field is not accepted and does not echo its value', async () => {
+    const memberId = await seedUser('reject.echo', 'Reject-echo-2026!');
+    await seedOrgMembership('org-001', memberId, 'member');
+    const { app } = makeDependencies();
+    const token = await login(app, 'reject.echo', 'Reject-echo-2026!');
+    const headers = { authorization: `Bearer ${token}`, 'x-organisation-id': 'org-001' };
+
+    const secretValue = 'sk-live-do-not-echo-9f8e7d6c';
+    const response = await app.inject({
+      method: 'POST', url: '/ai-connections/personal', headers,
+      payload: { connectionFamilyId: 'codex-subscription', apiKey: secretValue },
+    });
+    expect(response.statusCode).toBe(400);
+    const raw = response.body;
+    expect(raw).not.toContain(secretValue);
+    const body = response.json() as { error?: string };
+    expect(typeof body.error).toBe('string');
+    expect(body.error!.toLowerCase()).toContain('not accepted');
+    await app.close();
+  });
+
   it('createRuntimeApp composes real AIConnectionService and persists across restart', async () => {
     // Prepare bootstrap owner via direct seed so we can login through runtime.
     const runtime1 = createRuntimeApp({ DATABASE_URL: databaseUrl, ALLOW_DEV_IDENTITY_HEADERS: 'false' });
