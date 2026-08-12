@@ -15,8 +15,11 @@ import type {
   AIConnectionRepository,
   DatabaseUnitOfWork,
   MembershipRepository,
+  ProjectRepository,
+  SessionRepository,
 } from '@engineering-os/database';
 import type { TransactionRepositories } from '@engineering-os/database';
+import type { ModelGateway, ModelRoute } from '@engineering-os/model-gateway';
 import type {
   ConnectionFamilyPolicyRegistry,
   TrustedConnectionFamilyPolicy,
@@ -39,7 +42,47 @@ export interface AIConnectionServiceDependencies {
   unitOfWork: DatabaseUnitOfWork;
   aiConnections: AIConnectionRepository;
   memberships: MembershipRepository;
+  projects: ProjectRepository;
+  sessions: SessionRepository;
   policy: ConnectionFamilyPolicyRegistry;
+  modelGateway: ModelGateway;
+}
+
+export type ProjectExecutionPoolTier = 'requester' | 'project_pool' | 'organisation';
+
+export type ProjectExecutionPoolReason =
+  | 'connection_unavailable'
+  | 'policy_not_delegatable'
+  | 'owner_offline'
+  | 'runner_unavailable'
+  | 'usage_window_not_started'
+  | 'usage_window_expired'
+  | 'persistent_not_supported';
+
+export interface ProjectExecutionPoolEntry {
+  connectionId: string;
+  tier: ProjectExecutionPoolTier;
+  providerId: string;
+  connectionFamilyId: string;
+  ownerUserId?: string;
+  shareMode?: AIConnectionShareMode;
+  eligible: boolean;
+  reasons: ProjectExecutionPoolReason[];
+}
+
+export interface ProjectExecutionPoolApiRoute {
+  routeId: string;
+  providerId: string;
+  model: string;
+  executionMode: ModelRoute['executionMode'];
+  costType: ModelRoute['costType'];
+  available: boolean;
+  capabilities: ModelRoute['capabilities'];
+}
+
+export interface ProjectExecutionPool {
+  entries: ProjectExecutionPoolEntry[];
+  apiFallbackRoutes: ProjectExecutionPoolApiRoute[];
 }
 
 export interface AIConnectionSummary {
@@ -603,5 +646,190 @@ export class AIConnectionService {
         },
       }));
     });
+  }
+
+  // -------------------- Project execution pool (pure read) --------------------
+
+  async listProjectExecutionPool(input: {
+    organisationId: string;
+    projectId: string;
+    requesterUserId: string;
+    now?: Date;
+  }): Promise<ProjectExecutionPool> {
+    const now = input.now ?? new Date();
+    const { memberships, aiConnections, projects, sessions, policy, modelGateway } =
+      this.dependencies;
+
+    // Authorization: active org membership required.
+    const orgMembership = await memberships.getOrganisation(
+      input.organisationId, input.requesterUserId,
+    );
+    if (!orgMembership || orgMembership.status !== 'active') {
+      throw new AIConnectionServiceError('forbidden');
+    }
+    // Project must exist within organisation.
+    const project = await projects.getById(input.organisationId, input.projectId);
+    if (!project) throw new AIConnectionServiceError('not_found');
+    // Project authorisation: org owner/admin or active project membership.
+    if (orgMembership.role !== 'owner' && orgMembership.role !== 'admin') {
+      const pm = await memberships.getProject(
+        input.organisationId, input.projectId, input.requesterUserId,
+      );
+      if (!pm || pm.status !== 'active') {
+        throw new AIConnectionServiceError('forbidden');
+      }
+    }
+
+    const entries: ProjectExecutionPoolEntry[] = [];
+
+    // ----- Requester tier -----
+    const ownConnections = await aiConnections.listForUser(
+      input.organisationId, input.requesterUserId,
+    );
+    const requesterEntries: ProjectExecutionPoolEntry[] = [];
+    for (const c of ownConnections) {
+      if (c.status === 'revoked') continue; // hide revoked entirely
+      const reasons: ProjectExecutionPoolReason[] = [];
+      const familyPolicy = policy.get(c.connectionFamilyId);
+      if (c.status !== 'available') reasons.push('connection_unavailable');
+      if (!familyPolicy) {
+        reasons.push('policy_not_delegatable');
+      } else if (familyPolicy.requiresRunner) {
+        reasons.push('runner_unavailable');
+      }
+      const reqEntry: ProjectExecutionPoolEntry = {
+        connectionId: c.id,
+        tier: 'requester',
+        providerId: c.providerId,
+        connectionFamilyId: c.connectionFamilyId,
+        eligible: reasons.length === 0,
+        reasons,
+      };
+      if (c.ownerUserId !== undefined) reqEntry.ownerUserId = c.ownerUserId;
+      requesterEntries.push(reqEntry);
+    }
+    requesterEntries.sort((a, b) => {
+      const p = a.providerId.localeCompare(b.providerId);
+      if (p !== 0) return p;
+      const f = a.connectionFamilyId.localeCompare(b.connectionFamilyId);
+      if (f !== 0) return f;
+      return a.connectionId.localeCompare(b.connectionId);
+    });
+    entries.push(...requesterEntries);
+
+    // ----- Project pool tier (others' shares) -----
+    const shares = await aiConnections.listActiveProjectShares(
+      input.organisationId, input.projectId,
+    );
+    const pooledEntries: ProjectExecutionPoolEntry[] = [];
+    const requesterConnIds = new Set(ownConnections.map((c) => c.id));
+    // Cache presence lookups per owner.
+    const presenceCache = new Map<string, boolean>();
+    for (const share of shares) {
+      const conn = await aiConnections.getConnection(input.organisationId, share.connectionId);
+      if (!conn) continue;
+      if (conn.status === 'revoked') continue;
+      // Deduplicate: if this connection is already in requester tier, skip.
+      if (requesterConnIds.has(conn.id)) continue;
+
+      const reasons: ProjectExecutionPoolReason[] = [];
+      if (conn.status !== 'available') reasons.push('connection_unavailable');
+      const familyPolicy = policy.get(conn.connectionFamilyId);
+      if (!familyPolicy || !familyPolicy.delegatable) {
+        reasons.push('policy_not_delegatable');
+      } else {
+        if (familyPolicy.requiresRunner) reasons.push('runner_unavailable');
+        // Window
+        if (share.availableFrom !== undefined && now.getTime() < share.availableFrom.getTime()) {
+          reasons.push('usage_window_not_started');
+        }
+        if (share.availableUntil !== undefined && now.getTime() >= share.availableUntil.getTime()) {
+          reasons.push('usage_window_expired');
+        }
+        // Mode
+        if (share.mode === 'persistent') {
+          if (!familyPolicy.persistentSupported) reasons.push('persistent_not_supported');
+        } else {
+          // online_only requires owner presence
+          const ownerId = conn.ownerUserId;
+          if (!ownerId) {
+            reasons.push('owner_offline');
+          } else {
+            let present = presenceCache.get(ownerId);
+            if (present === undefined) {
+              present = await sessions.hasActiveForUser(ownerId, now);
+              presenceCache.set(ownerId, present);
+            }
+            if (!present) reasons.push('owner_offline');
+          }
+        }
+      }
+      const entry: ProjectExecutionPoolEntry = {
+        connectionId: conn.id,
+        tier: 'project_pool',
+        providerId: conn.providerId,
+        connectionFamilyId: conn.connectionFamilyId,
+        shareMode: share.mode,
+        eligible: reasons.length === 0,
+        reasons,
+      };
+      if (conn.ownerUserId !== undefined) entry.ownerUserId = conn.ownerUserId;
+      pooledEntries.push(entry);
+    }
+    pooledEntries.sort((a, b) => {
+      const p = a.providerId.localeCompare(b.providerId);
+      if (p !== 0) return p;
+      const f = a.connectionFamilyId.localeCompare(b.connectionFamilyId);
+      if (f !== 0) return f;
+      return a.connectionId.localeCompare(b.connectionId);
+    });
+    entries.push(...pooledEntries);
+
+    // ----- Organisation tier -----
+    const orgConnections = await aiConnections.listOrganisationConnections(input.organisationId);
+    const orgEntries: ProjectExecutionPoolEntry[] = [];
+    for (const c of orgConnections) {
+      if (c.status === 'revoked') continue;
+      const reasons: ProjectExecutionPoolReason[] = [];
+      if (c.status !== 'available') reasons.push('connection_unavailable');
+      const familyPolicy = policy.get(c.connectionFamilyId);
+      if (!familyPolicy || !familyPolicy.allowedOwnership.includes('organisation')) {
+        reasons.push('policy_not_delegatable');
+      } else if (familyPolicy.requiresRunner) {
+        reasons.push('runner_unavailable');
+      }
+      orgEntries.push({
+        connectionId: c.id,
+        tier: 'organisation',
+        providerId: c.providerId,
+        connectionFamilyId: c.connectionFamilyId,
+        eligible: reasons.length === 0,
+        reasons,
+      });
+    }
+    orgEntries.sort((a, b) => {
+      const p = a.providerId.localeCompare(b.providerId);
+      if (p !== 0) return p;
+      const f = a.connectionFamilyId.localeCompare(b.connectionFamilyId);
+      if (f !== 0) return f;
+      return a.connectionId.localeCompare(b.connectionId);
+    });
+    entries.push(...orgEntries);
+
+    // ----- API fallback routes -----
+    const apiFallbackRoutes: ProjectExecutionPoolApiRoute[] = modelGateway
+      .listRoutes()
+      .filter((r) => r.executionMode === 'api')
+      .map((r) => ({
+        routeId: r.id,
+        providerId: r.provider,
+        model: r.model,
+        executionMode: r.executionMode,
+        costType: r.costType,
+        available: r.available,
+        capabilities: r.capabilities,
+      }));
+
+    return { entries, apiFallbackRoutes };
   }
 }

@@ -5,9 +5,14 @@ import {
   AuditRepository,
   DatabaseUnitOfWork,
   MembershipRepository,
+  ProjectRepository,
+  SessionRepository,
   UserRepository,
 } from '@engineering-os/database';
+import { ModelGateway } from '@engineering-os/model-gateway';
+import type { ModelAdapter, ModelRoute } from '@engineering-os/model-gateway';
 import type { OrganisationRole } from '@engineering-os/domain';
+import { createHash, randomBytes } from 'node:crypto';
 import { AIConnectionService, AIConnectionServiceError } from '../src/ai-connection-service.js';
 import {
   createConnectionFamilyPolicyRegistry,
@@ -110,12 +115,18 @@ async function seedMember(
   );
 }
 
-function makeService(registry: ConnectionFamilyPolicyRegistry = makeRegistry()) {
+function makeService(
+  registry: ConnectionFamilyPolicyRegistry = makeRegistry(),
+  modelGateway: ModelGateway = new ModelGateway(),
+) {
   return new AIConnectionService({
     unitOfWork: new DatabaseUnitOfWork(pool),
     aiConnections: new AIConnectionRepository(pool),
     memberships: new MembershipRepository(pool),
+    projects: new ProjectRepository(pool),
+    sessions: new SessionRepository(pool),
     policy: registry,
+    modelGateway,
   });
 }
 
@@ -1270,5 +1281,577 @@ describe('AIConnectionService', () => {
       [conn.id],
     );
     expect(rows.rowCount).toBe(1);
+  });
+
+  // ---------- Task 5: project execution-pool eligibility and tier ordering ----------
+
+  async function seedActiveSession(userId: string, expiresAt = new Date(Date.now() + 60 * 60 * 1000)) {
+    await new SessionRepository(pool).create({
+      id: randomUUID(),
+      userId,
+      tokenHash: createHash('sha256').update(randomBytes(16)).digest('hex'),
+      createdAt: new Date(Date.now() - 1000),
+      expiresAt,
+    });
+  }
+
+  async function setConnectionStatusRaw(
+    organisationId: string,
+    connectionId: string,
+    status: 'configured' | 'available' | 'reauth_required' | 'disabled' | 'revoked',
+  ) {
+    await pool.query(
+      `UPDATE ai_connections SET status = $3, updated_at = now() WHERE organisation_id = $1 AND id = $2`,
+      [organisationId, connectionId, status],
+    );
+  }
+
+  const POOL_TEST_POLICIES: readonly TrustedConnectionFamilyPolicy[] = [
+    {
+      id: 'pool-personal-online',
+      providerId: 'test',
+      displayName: 'Pool Personal Online-only',
+      executionMode: 'subscription',
+      harnessId: 'test',
+      allowedOwnership: ['personal'],
+      credentialStrategies: ['runner_managed'],
+      delegatable: true,
+      requiresRunner: false,
+      persistentSupported: false,
+    },
+    {
+      id: 'pool-personal-persistent',
+      providerId: 'test',
+      displayName: 'Pool Personal Persistent',
+      executionMode: 'subscription',
+      harnessId: 'test',
+      allowedOwnership: ['personal'],
+      credentialStrategies: ['runner_managed'],
+      delegatable: true,
+      requiresRunner: false,
+      persistentSupported: true,
+    },
+    {
+      id: 'pool-personal-runner',
+      providerId: 'test',
+      displayName: 'Pool Personal Runner Required',
+      executionMode: 'subscription',
+      harnessId: 'test',
+      allowedOwnership: ['personal'],
+      credentialStrategies: ['runner_managed'],
+      delegatable: true,
+      requiresRunner: true,
+      persistentSupported: false,
+    },
+    {
+      id: 'pool-personal-nondel',
+      providerId: 'test',
+      displayName: 'Pool Personal Nondelegatable',
+      executionMode: 'subscription',
+      harnessId: 'test',
+      allowedOwnership: ['personal'],
+      credentialStrategies: ['runner_managed'],
+      delegatable: false,
+      requiresRunner: false,
+      persistentSupported: false,
+    },
+    {
+      id: 'pool-org-api',
+      providerId: 'test',
+      displayName: 'Pool Org API',
+      executionMode: 'api',
+      allowedOwnership: ['organisation'],
+      credentialStrategies: ['external_secret_ref'],
+      delegatable: false,
+      requiresRunner: false,
+      persistentSupported: false,
+    },
+    {
+      id: 'pool-org-runner',
+      providerId: 'test',
+      displayName: 'Pool Org Runner Required',
+      executionMode: 'api',
+      allowedOwnership: ['organisation'],
+      credentialStrategies: ['external_secret_ref'],
+      delegatable: false,
+      requiresRunner: true,
+      persistentSupported: false,
+    },
+  ];
+
+  function makePoolRegistry(): ConnectionFamilyPolicyRegistry {
+    return createConnectionFamilyPolicyRegistry(POOL_TEST_POLICIES);
+  }
+
+  function fakeRoute(overrides: Partial<ModelRoute> & { id: string; provider: string; model: string; executionMode: ModelRoute['executionMode']; }): ModelAdapter {
+    const route: ModelRoute = {
+      id: overrides.id,
+      provider: overrides.provider,
+      model: overrides.model,
+      executionMode: overrides.executionMode,
+      costType: overrides.costType ?? 'metered_api',
+      available: overrides.available ?? true,
+      priority: overrides.priority ?? 0,
+      capabilities: overrides.capabilities ?? {
+        chat: true,
+        tools: false,
+        vision: false,
+        files: false,
+        mcp: false,
+        localWorkspace: false,
+        headless: false,
+        structuredOutput: false,
+      },
+    };
+    return {
+      route,
+      async execute() { throw new Error('not used in pool tests'); },
+    };
+  }
+
+  it('listProjectExecutionPool: requester own available connection is eligible without any share, and appears in requester tier (not project_pool)', async () => {
+    const requester = await seedUser('pool.req.own');
+    await seedMember('org-001', requester.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, requester.id);
+    const service = makeService(makePoolRegistry());
+
+    // Requester registers a nondelegatable personal (still visible to self)
+    const own = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: requester.id, connectionFamilyId: 'pool-personal-nondel',
+    });
+    await setConnectionStatusRaw('org-001', own.id, 'available');
+
+    const result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+    });
+    const req = result.entries.filter((e) => e.tier === 'requester');
+    expect(req.length).toBe(1);
+    expect(req[0]?.connectionId).toBe(own.id);
+    expect(req[0]?.eligible).toBe(true);
+    expect(req[0]?.reasons).toEqual([]);
+    // No entry for the same connection in project_pool tier.
+    expect(result.entries.some((e) => e.tier === 'project_pool' && e.connectionId === own.id)).toBe(false);
+    // No secretRefId leaks
+    expect(JSON.stringify(result)).not.toContain('secretRefId');
+  });
+
+  it('listProjectExecutionPool: requester own non-available connection reports connection_unavailable', async () => {
+    const requester = await seedUser('pool.req.notavail');
+    await seedMember('org-001', requester.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, requester.id);
+    const service = makeService(makePoolRegistry());
+
+    const own = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: requester.id, connectionFamilyId: 'pool-personal-online',
+    });
+    // stays 'configured'
+
+    const result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+    });
+    const entry = result.entries.find((e) => e.tier === 'requester' && e.connectionId === own.id);
+    expect(entry).toBeDefined();
+    expect(entry?.eligible).toBe(false);
+    expect(entry?.reasons).toContain('connection_unavailable');
+  });
+
+  it('listProjectExecutionPool: requester who is also share owner is NOT duplicated (only requester tier)', async () => {
+    const requester = await seedUser('pool.req.samesharer');
+    await seedMember('org-001', requester.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, requester.id);
+    const service = makeService(makePoolRegistry());
+    const own = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: requester.id, connectionFamilyId: 'pool-personal-online',
+    });
+    await setConnectionStatusRaw('org-001', own.id, 'available');
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: requester.id, projectId, connectionId: own.id,
+    });
+
+    const result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+    });
+    const matching = result.entries.filter((e) => e.connectionId === own.id);
+    expect(matching.length).toBe(1);
+    expect(matching[0]?.tier).toBe('requester');
+  });
+
+  it('listProjectExecutionPool: contributed online_only with active owner session -> eligible; without session -> owner_offline', async () => {
+    const owner = await seedUser('pool.owner.online');
+    const requester = await seedUser('pool.req.online');
+    await seedMember('org-001', owner.id, 'member');
+    await seedMember('org-001', requester.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    await seedProjectMembership('org-001', projectId, requester.id);
+    const service = makeService(makePoolRegistry());
+    const conn = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: owner.id, connectionFamilyId: 'pool-personal-online',
+    });
+    await setConnectionStatusRaw('org-001', conn.id, 'available');
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+    });
+
+    // No session yet -> owner_offline
+    let result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+    });
+    let entry = result.entries.find((e) => e.tier === 'project_pool' && e.connectionId === conn.id);
+    expect(entry?.eligible).toBe(false);
+    expect(entry?.reasons).toContain('owner_offline');
+    expect(entry?.shareMode).toBe('online_only');
+    expect(entry?.ownerUserId).toBe(owner.id);
+
+    // Seed active session -> eligible
+    await seedActiveSession(owner.id);
+    result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+    });
+    entry = result.entries.find((e) => e.tier === 'project_pool' && e.connectionId === conn.id);
+    expect(entry?.eligible).toBe(true);
+    expect(entry?.reasons).toEqual([]);
+  });
+
+  it('listProjectExecutionPool: persistent share stays eligible without owner session when family supports persistent', async () => {
+    const owner = await seedUser('pool.owner.persist');
+    const requester = await seedUser('pool.req.persist');
+    await seedMember('org-001', owner.id, 'member');
+    await seedMember('org-001', requester.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    await seedProjectMembership('org-001', projectId, requester.id);
+    const service = makeService(makePoolRegistry());
+    const conn = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: owner.id, connectionFamilyId: 'pool-personal-persistent',
+    });
+    await setConnectionStatusRaw('org-001', conn.id, 'available');
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+    });
+    await service.setProjectShareMode({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id, mode: 'persistent',
+    });
+
+    const result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+    });
+    const entry = result.entries.find((e) => e.tier === 'project_pool' && e.connectionId === conn.id);
+    expect(entry?.eligible).toBe(true);
+    expect(entry?.shareMode).toBe('persistent');
+    expect(entry?.reasons).toEqual([]);
+  });
+
+  it('listProjectExecutionPool: runner-required family in project_pool and organisation tiers returns runner_unavailable', async () => {
+    const owner = await seedUser('pool.owner.runner');
+    const requester = await seedUser('pool.req.runner');
+    const admin = await seedUser('pool.admin.runner');
+    await seedMember('org-001', owner.id, 'member');
+    await seedMember('org-001', requester.id, 'member');
+    await seedMember('org-001', admin.id, 'admin');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    await seedProjectMembership('org-001', projectId, requester.id);
+    const service = makeService(makePoolRegistry());
+
+    const contributed = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: owner.id, connectionFamilyId: 'pool-personal-runner',
+    });
+    await setConnectionStatusRaw('org-001', contributed.id, 'available');
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: contributed.id,
+    });
+    await seedActiveSession(owner.id);
+
+    const orgConn = await service.registerOrganisationConnection({
+      organisationId: 'org-001', actorUserId: admin.id,
+      connectionFamilyId: 'pool-org-runner', secretRefId: 'vault:runner',
+    });
+    await setConnectionStatusRaw('org-001', orgConn.id, 'available');
+
+    const result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+    });
+    const shared = result.entries.find((e) => e.tier === 'project_pool' && e.connectionId === contributed.id);
+    expect(shared?.eligible).toBe(false);
+    expect(shared?.reasons).toContain('runner_unavailable');
+    const org = result.entries.find((e) => e.tier === 'organisation' && e.connectionId === orgConn.id);
+    expect(org?.eligible).toBe(false);
+    expect(org?.reasons).toContain('runner_unavailable');
+  });
+
+  it('listProjectExecutionPool: usage window boundaries (start-inclusive; end-exclusive)', async () => {
+    const owner = await seedUser('pool.owner.window');
+    const requester = await seedUser('pool.req.window');
+    await seedMember('org-001', owner.id, 'member');
+    await seedMember('org-001', requester.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    await seedProjectMembership('org-001', projectId, requester.id);
+    const service = makeService(makePoolRegistry());
+    const conn = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: owner.id, connectionFamilyId: 'pool-personal-online',
+    });
+    await setConnectionStatusRaw('org-001', conn.id, 'available');
+    await seedActiveSession(owner.id, new Date('2099-01-01T00:00:00.000Z'));
+    const from = new Date('2027-01-01T00:00:00.000Z');
+    const until = new Date('2027-02-01T00:00:00.000Z');
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+      usagePolicy: { availableFrom: from, availableUntil: until },
+    });
+
+    // Before start
+    let result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+      now: new Date('2026-12-31T23:59:59.999Z'),
+    });
+    let entry = result.entries.find((e) => e.tier === 'project_pool' && e.connectionId === conn.id);
+    expect(entry?.reasons).toContain('usage_window_not_started');
+
+    // Exactly at start -> allowed
+    result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+      now: from,
+    });
+    entry = result.entries.find((e) => e.tier === 'project_pool' && e.connectionId === conn.id);
+    expect(entry?.reasons).not.toContain('usage_window_not_started');
+    expect(entry?.reasons).not.toContain('usage_window_expired');
+    expect(entry?.eligible).toBe(true);
+
+    // Exactly at end -> expired
+    result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+      now: until,
+    });
+    entry = result.entries.find((e) => e.tier === 'project_pool' && e.connectionId === conn.id);
+    expect(entry?.reasons).toContain('usage_window_expired');
+    expect(entry?.eligible).toBe(false);
+  });
+
+  it('listProjectExecutionPool: policy downgrade (delegatable now false) makes existing share ineligible; share history unchanged', async () => {
+    const owner = await seedUser('pool.owner.downgrade');
+    const requester = await seedUser('pool.req.downgrade');
+    await seedMember('org-001', owner.id, 'member');
+    await seedMember('org-001', requester.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    await seedProjectMembership('org-001', projectId, requester.id);
+    // Use registry where family IS delegatable to allow share creation.
+    const service = makeService(makePoolRegistry());
+    const conn = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: owner.id, connectionFamilyId: 'pool-personal-online',
+    });
+    await setConnectionStatusRaw('org-001', conn.id, 'available');
+    await seedActiveSession(owner.id);
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+    });
+
+    // Now build a downgraded registry where the same family is nondelegatable.
+    const downgraded = createConnectionFamilyPolicyRegistry([
+      { ...POOL_TEST_POLICIES.find((p) => p.id === 'pool-personal-online')!, delegatable: false },
+    ]);
+    const downgradedService = makeService(downgraded);
+    const result = await downgradedService.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+    });
+    const entry = result.entries.find((e) => e.tier === 'project_pool' && e.connectionId === conn.id);
+    expect(entry?.eligible).toBe(false);
+    expect(entry?.reasons).toContain('policy_not_delegatable');
+    // Share history unchanged
+    const shareRows = await pool.query(
+      `SELECT id, mode, revoked_at FROM ai_connection_project_shares WHERE connection_id = $1`,
+      [conn.id],
+    );
+    expect(shareRows.rowCount).toBe(1);
+    expect(shareRows.rows[0].revoked_at).toBeNull();
+    expect(shareRows.rows[0].mode).toBe('online_only');
+  });
+
+  it('listProjectExecutionPool: multiple contributed shares are deterministic; NOT project-owner-first biased', async () => {
+    const alice = await seedUser('pool.alice');
+    const bob = await seedUser('pool.bob');
+    const requester = await seedUser('pool.req.multi');
+    await seedMember('org-001', alice.id, 'member');
+    await seedMember('org-001', bob.id, 'member');
+    await seedMember('org-001', requester.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, alice.id);
+    await seedProjectMembership('org-001', projectId, bob.id);
+    await seedProjectMembership('org-001', projectId, requester.id);
+    const service = makeService(makePoolRegistry());
+    const c1 = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: alice.id, connectionFamilyId: 'pool-personal-online',
+    });
+    await setConnectionStatusRaw('org-001', c1.id, 'available');
+    await seedActiveSession(alice.id);
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: alice.id, projectId, connectionId: c1.id,
+    });
+    const c2 = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: bob.id, connectionFamilyId: 'pool-personal-persistent',
+    });
+    await setConnectionStatusRaw('org-001', c2.id, 'available');
+    await seedActiveSession(bob.id);
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: bob.id, projectId, connectionId: c2.id,
+    });
+
+    const result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+    });
+    const shared = result.entries.filter((e) => e.tier === 'project_pool');
+    expect(shared.length).toBe(2);
+    // Deterministic order: providerId, connectionFamilyId, connectionId
+    const sortedIds = [...shared].sort((a, b) => {
+      const p = a.providerId.localeCompare(b.providerId);
+      if (p !== 0) return p;
+      const f = a.connectionFamilyId.localeCompare(b.connectionFamilyId);
+      if (f !== 0) return f;
+      return a.connectionId.localeCompare(b.connectionId);
+    });
+    expect(shared.map((e) => e.connectionId)).toEqual(sortedIds.map((e) => e.connectionId));
+  });
+
+  it('listProjectExecutionPool: organisation tier appears third and does not require delegatable=true', async () => {
+    const requester = await seedUser('pool.req.orgtier');
+    const admin = await seedUser('pool.admin.orgtier');
+    await seedMember('org-001', requester.id, 'member');
+    await seedMember('org-001', admin.id, 'admin');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, requester.id);
+    const service = makeService(makePoolRegistry());
+
+    const own = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: requester.id, connectionFamilyId: 'pool-personal-online',
+    });
+    await setConnectionStatusRaw('org-001', own.id, 'available');
+    const orgConn = await service.registerOrganisationConnection({
+      organisationId: 'org-001', actorUserId: admin.id, connectionFamilyId: 'pool-org-api', secretRefId: 'vault:x',
+    });
+    await setConnectionStatusRaw('org-001', orgConn.id, 'available');
+
+    const result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+    });
+    const tiers = result.entries.map((e) => e.tier);
+    // Order: requester (any) -> project_pool (0) -> organisation (any)
+    // Ensure strict tier ordering: no organisation entry appears before a requester entry
+    const firstOrgIdx = tiers.indexOf('organisation');
+    const lastReqIdx = tiers.lastIndexOf('requester');
+    const lastProjIdx = tiers.lastIndexOf('project_pool');
+    expect(firstOrgIdx).toBeGreaterThan(-1);
+    expect(firstOrgIdx).toBeGreaterThan(lastReqIdx);
+    if (lastProjIdx !== -1) expect(firstOrgIdx).toBeGreaterThan(lastProjIdx);
+
+    const orgEntry = result.entries.find((e) => e.tier === 'organisation' && e.connectionId === orgConn.id);
+    expect(orgEntry?.eligible).toBe(true);
+    expect(orgEntry?.reasons).toEqual([]);
+    expect(orgEntry?.ownerUserId).toBeUndefined();
+  });
+
+  it('listProjectExecutionPool: cross-organisation and non-member forbidden; no leakage', async () => {
+    const insider = await seedUser('pool.insider');
+    const outsider = await seedUser('pool.outsider');
+    await seedMember('org-001', insider.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, insider.id);
+    const service = makeService(makePoolRegistry());
+
+    await expectServiceError(
+      service.listProjectExecutionPool({
+        organisationId: 'org-001', projectId, requesterUserId: outsider.id,
+      }),
+      'forbidden',
+    );
+    await expectServiceError(
+      service.listProjectExecutionPool({
+        organisationId: 'org-999', projectId, requesterUserId: insider.id,
+      }),
+      'forbidden',
+    );
+    // Insider without project access
+    const insider2 = await seedUser('pool.insider2');
+    await seedMember('org-001', insider2.id, 'member');
+    await expectServiceError(
+      service.listProjectExecutionPool({
+        organisationId: 'org-001', projectId, requesterUserId: insider2.id,
+      }),
+      'forbidden',
+    );
+    // Project that doesn't exist
+    await expectServiceError(
+      service.listProjectExecutionPool({
+        organisationId: 'org-001', projectId: randomUUID(), requesterUserId: insider.id,
+      }),
+      'not_found',
+    );
+  });
+
+  it('listProjectExecutionPool: apiFallbackRoutes includes only executionMode=api routes', async () => {
+    const requester = await seedUser('pool.req.api');
+    await seedMember('org-001', requester.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, requester.id);
+    const gateway = new ModelGateway();
+    gateway.register(fakeRoute({ id: 'test-api-1', provider: 'openai', model: 'gpt-x', executionMode: 'api' }));
+    gateway.register(fakeRoute({ id: 'test-api-2', provider: 'anthropic', model: 'claude-y', executionMode: 'api', available: false }));
+    gateway.register(fakeRoute({ id: 'test-sub-1', provider: 'test', model: 'sub-model', executionMode: 'subscription', costType: 'included_subscription' }));
+    gateway.register(fakeRoute({ id: 'test-man-1', provider: 'test', model: 'man-model', executionMode: 'manual', costType: 'manual' }));
+    const service = makeService(makePoolRegistry(), gateway);
+
+    const result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+    });
+    expect(result.apiFallbackRoutes.map((r) => r.routeId).sort()).toEqual(['test-api-1', 'test-api-2']);
+    for (const r of result.apiFallbackRoutes) {
+      expect(r.executionMode).toBe('api');
+      expect(r).toHaveProperty('available');
+      expect(r).toHaveProperty('capabilities');
+      expect(r).toHaveProperty('costType');
+      expect(r).toHaveProperty('providerId');
+      expect(r).toHaveProperty('model');
+    }
+    // Routes are NOT merged into entries
+    for (const e of result.entries) {
+      expect(e.tier).not.toBe('api' as unknown as typeof e.tier);
+    }
+  });
+
+  it('listProjectExecutionPool: pool read does not mutate state (no audit, no share writes)', async () => {
+    const owner = await seedUser('pool.owner.pure');
+    const requester = await seedUser('pool.req.pure');
+    await seedMember('org-001', owner.id, 'member');
+    await seedMember('org-001', requester.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    await seedProjectMembership('org-001', projectId, requester.id);
+    const service = makeService(makePoolRegistry());
+    const conn = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: owner.id, connectionFamilyId: 'pool-personal-online',
+    });
+    await setConnectionStatusRaw('org-001', conn.id, 'available');
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+    });
+    const auditsBefore = await new AuditRepository(pool).listByOrganisation('org-001');
+    const sharesBefore = await pool.query(`SELECT id, mode, revoked_at FROM ai_connection_project_shares WHERE connection_id = $1`, [conn.id]);
+
+    await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+    });
+    await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+      now: new Date('2030-01-01T00:00:00.000Z'),
+    });
+
+    const auditsAfter = await new AuditRepository(pool).listByOrganisation('org-001');
+    const sharesAfter = await pool.query(`SELECT id, mode, revoked_at FROM ai_connection_project_shares WHERE connection_id = $1`, [conn.id]);
+    expect(auditsAfter.length).toBe(auditsBefore.length);
+    expect(sharesAfter.rowCount).toBe(sharesBefore.rowCount);
   });
 });
