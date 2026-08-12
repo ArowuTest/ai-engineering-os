@@ -1,7 +1,7 @@
-# AI Engineering OS — Living Handover
+# AI Engineering OS â€” Living Handover
 
 **Purpose:** Operational continuation document for a new ChatGPT/Claude/Codex agent if the current thread ends.
-**Last updated:** 12 August 2026, during AI Connection / Delegation Task 6.
+**Last updated:** 12 August 2026, after AI Connection / Delegation Task 7 acceptance.
 **Repository:** `ArowuTest/ai-engineering-os`
 **Local repo:** `C:\Users\sanus\Desktop\AI-Engineering-OS`
 **Current source-of-truth branch:** `main`
@@ -14,7 +14,7 @@ The web application owns the project; models, agents and harnesses are replaceab
 Canonical project state must survive provider switches, sign-out, runner loss and individual collaborators leaving.
 
 Keep these concepts separate:
-Provider → Model → Execution Route → Harness → Agent → Skill → Tool/MCP → Connection → Runner → Orchestrator.
+Provider â†’ Model â†’ Execution Route â†’ Harness â†’ Agent â†’ Skill â†’ Tool/MCP â†’ Connection â†’ Runner â†’ Orchestrator.
 AI Engineering OS is the master orchestrator. Hermes/Codex/Claude Code/Antigravity are execution surfaces, not canonical state owners.
 
 ## 2. What is already merged to `main`
@@ -34,7 +34,7 @@ GitHub `main` passed Platform Verification and ECC Compatibility on that exact m
 - Product Knowledge Review Queue with Product Owner Accept / Edit & Accept / Reject / Retry.
 - Accepted candidates become canonical `confirmed`; client cannot override status.
 - Retry uses original source turn and creates no duplicate conversation messages.
-- Migrations on `main`: 001–005 only.
+- Migrations on `main`: 001â€“005 only.
 - Full local smoke and Docker PostgreSQL verification completed before merge.
 
 ## 3. Approved architecture for the current phase
@@ -43,7 +43,7 @@ Design: `docs/superpowers/specs/2026-08-11-extensible-ai-execution-routing-and-s
 SRS and Technical Architecture are v1.3.
 
 Personal connection default sequence:
-`Do Not Share` (absence of share) → explicit project share creates `Online Only` → owner may separately enable `Persistent` when trusted policy supports it.
+`Do Not Share` (absence of share) â†’ explicit project share creates `Online Only` â†’ owner may separately enable `Persistent` when trusted policy supports it.
 
 Default execution tiering:
 1. Requesting collaborator's own eligible connection.
@@ -64,22 +64,22 @@ Implementation plan:
 `docs/superpowers/plans/2026-08-12-ai-connection-delegation-administration.md`
 
 Current accepted commits on the feature branch:
-- `7ae5d5df` — docs: plan AI connection delegation administration
-- `4947db2f` — feat: define AI connection policy contracts
-- `5b4ebbbe` — feat: persist AI connections and project delegation
-- `086f4fd8` — feat: govern AI connection administration
-- `f8ad851b` — fix: fail closed on ambiguous AI connection credentials
-- `004dc663` — feat: add project-scoped AI connection sharing
-- `7bb782f8` — feat: expose project AI execution pool policy
+- `7ae5d5df` â€” docs: plan AI connection delegation administration
+- `4947db2f` â€” feat: define AI connection policy contracts
+- `5b4ebbbe` â€” feat: persist AI connections and project delegation
+- `086f4fd8` â€” feat: govern AI connection administration
+- `f8ad851b` â€” fix: fail closed on ambiguous AI connection credentials
+- `004dc663` â€” feat: add project-scoped AI connection sharing
+- `7bb782f8` â€” feat: expose project AI execution pool policy
 
-Tasks 1–5 are implemented and independently approved with zero Critical/Important findings.
+Tasks 1â€“5 are implemented and independently approved with zero Critical/Important findings.
 Task 6 is currently in progress and has not yet been accepted or committed.
 
-## 5. What Tasks 1–5 delivered
+## 5. What Tasks 1â€“5 delivered
 
 Task 1: open stable provider/family IDs plus trusted server-side `ConnectionFamilyPolicyRegistry`.
 Unknown families fail closed. Personal subscription families remain non-delegatable until real runner support proves otherwise.Task 2: forward-only migration `006_ai_connections_and_delegation.sql`, `AIConnectionRepository`, project-share history and active-session presence.
-Migrations 001–005 remain byte-identical to `main`.
+Migrations 001â€“005 remain byte-identical to `main`.
 DB enforces personal ownership, same-organisation project/share scope, personal-only project sharing and one active share per project/connection.
 
 Task 3: `AIConnectionService` registration/list/revocation with organisation RBAC and atomic audit.
@@ -94,14 +94,14 @@ Owner controls enable/mode/revoke. Organisation owner/admin may only narrow usag
 Mode/window replacements are revoke-old + create-new in one transaction, preserving history and audit.
 
 Task 5: project execution-pool read.
-Ordering is requester → project_pool → organisation; API routes are separate fallback metadata.
+Ordering is requester â†’ project_pool â†’ organisation; API routes are separate fallback metadata.
 Own use does not require `delegatable=true`; contributed personal routes do.
 Online Only requires a real active AI Engineering OS session for the connection owner.
 Persistent does not require web presence, but still obeys trusted policy and runner requirements.
 Runner-required routes return `runner_unavailable`; no fake runner state is invented.
 Usage window is start-inclusive/end-exclusive. Policy downgrades take effect at read time.
 
-## 6. Task 6 — current work
+## 6. Task 6 â€” current work
 
 Goal: expose authenticated AI Connection HTTP APIs and compose the real service in `createRuntimeApp()`.
 Planned endpoints include safe family catalogue, connection list/register/revoke, project share controls and project execution-pool read.
@@ -158,7 +158,7 @@ Keep ECC scratch/reviewer output outside the repo. Ignored scratch containing Un
 ## 9. Git workflow
 
 Established workflow is NOT PR-first:
-feature worktree/branch → verify/review → merge locally into `main` → verify merged `main` → push GitHub `main`.
+feature worktree/branch â†’ verify/review â†’ merge locally into `main` â†’ verify merged `main` â†’ push GitHub `main`.
 After proving a feature branch is fully contained in `main`, delete the stale remote feature branch so GitHub does not misleadingly show outstanding product branches.
 Preserve `ecc-seed` and `ecc-upstream`; never merge `ecc-upstream` wholesale.Dependabot branches are proposals and must be reviewed independently before merge.
 
@@ -205,7 +205,7 @@ No Task 6 production file has been edited yet, so Task 6 is in the correct test-
 No Task 6 commit/report exists yet.
 
 **Immediate next action:** let the Task 6 agent capture genuine HTTP RED, implement only `app.ts`/`server.ts`, reach GREEN, then run independent Opus review before Task 7.
-### Live checkpoint update — Task 6 review
+### Live checkpoint update â€” Task 6 review
 
 Task 6 implementation commit: `6b17ba98 feat: expose AI connection administration API`.
 HTTP RED was 9/9 failing before routes; GREEN is 9/9 passing. Auth/runtime/server regressions and typecheck passed; one service test hit a host 10s timing flake and passed immediately in isolation.
@@ -217,7 +217,7 @@ Chosen minimal safe behavior for this slice: reject combined mode+window PATCH w
 The fix round also closes two minors: non-string mode must 400, and unknown body fields get an explicit "not accepted on this endpoint" validation message.
 
 Do not treat Task 6 as complete until this fix is independently re-reviewed with zero Critical/Important findings.
-### Live checkpoint update — Task 6 accepted
+### Live checkpoint update â€” Task 6 accepted
 
 Task 6 commits:
 - `6b17ba98 feat: expose AI connection administration API`
@@ -231,3 +231,18 @@ Invalid/non-string share modes 400; disallowed fields use an explicit "not accep
 
 Task 6 is complete. Immediate next task: Task 7 AI Connections web administration UI, then Task 8 whole-slice verification/merge/push.
 A pre-existing DB test-harness race after repeated schema resets was reproduced on baseline during fix verification; Task 8 fresh-volume full-suite execution is the mandatory gate to determine whether any harness correction is needed before merge.
+### Live checkpoint update — Task 7 accepted
+
+Task 7 commits:
+- `7a001a49 feat: add AI connection administration UI`
+- `2c687432 fix: expose durable owner AI connection share state`
+
+Task 7 final independent Opus re-review: **SPEC PASS / SECURITY PASS / QUALITY PASS, 0 Critical / 0 Important**.
+The initial UI review found one Important cross-layer defect: requester-owned shares were deduplicated out of `project_pool`, so the owner could not see/manage their durable share after refresh.
+The fix preserves requester dedup while adding a safe optional `share` object to requester/project-pool entries containing only share id, mode and availability window.
+The `/ai-connections` page now derives owner share state from `entry.share`, hydrates existing window values, preserves separate mode/window mutations, and loads project pools in parallel.
+Fresh acceptance evidence on `2c687432`: UI contract 8/8, AI connection PostgreSQL integration 50/50, unit tests 115/115, typecheck pass, Next.js production build pass.
+No migrations, HTTP routes, trusted policy, model gateway, runner/Agent Bridge or ECC files changed in this fix.
+Non-blocking notes: `datetime-local` currently formats stored timestamps using UTC digits; there is no explicit one-click clear-both-window-bounds affordance yet. Backend authority and durable state are correct.
+
+**Immediate next action:** Task 8 fresh-volume full platform/ECC/security verification, product smoke, whole-branch Opus review, then local merge to `main`, merged-main verification and GitHub `main` push if every gate is green.
