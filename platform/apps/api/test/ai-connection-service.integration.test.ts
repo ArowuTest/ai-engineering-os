@@ -1479,6 +1479,124 @@ describe('AIConnectionService', () => {
     expect(matching[0]?.tier).toBe('requester');
   });
 
+  it('listProjectExecutionPool: owner-shared connection appears once in requester tier with durable active-share metadata after DB round-trip', async () => {
+    const requester = await seedUser('pool.req.ownshare.meta');
+    await seedMember('org-001', requester.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, requester.id);
+    const service = makeService(makePoolRegistry());
+    const own = await service.registerPersonalConnection({
+      organisationId: 'org-001',
+      actorUserId: requester.id,
+      connectionFamilyId: 'pool-personal-persistent',
+    });
+    await setConnectionStatusRaw('org-001', own.id, 'available');
+    const availableFrom = new Date('2027-03-01T00:00:00.000Z');
+    const availableUntil = new Date('2027-04-01T00:00:00.000Z');
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001',
+      actorUserId: requester.id,
+      projectId,
+      connectionId: own.id,
+      usagePolicy: { availableFrom, availableUntil },
+    });
+    await service.setProjectShareMode({
+      organisationId: 'org-001',
+      actorUserId: requester.id,
+      projectId,
+      connectionId: own.id,
+      mode: 'persistent',
+    });
+
+    const persistedShare = await new AIConnectionRepository(pool).getActiveProjectShare(
+      'org-001', projectId, own.id,
+    );
+    expect(persistedShare).not.toBeNull();
+
+    const result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+    });
+    const matching = result.entries.filter((e) => e.connectionId === own.id);
+    expect(matching.length).toBe(1);
+    const entry = matching[0]!;
+    expect(entry.tier).toBe('requester');
+    expect(entry.ownerUserId).toBe(requester.id);
+    // Durable, safe share metadata is exposed alongside the requester entry.
+    expect(entry.share).toBeDefined();
+    expect(entry.share?.id).toBe(persistedShare?.id);
+    expect(entry.share?.mode).toBe('persistent');
+    expect(entry.share?.availableFrom?.toISOString()).toBe(availableFrom.toISOString());
+    expect(entry.share?.availableUntil?.toISOString()).toBe(availableUntil.toISOString());
+    // No credential material leaks through the pool response.
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain('secretRefId');
+    expect(serialized).not.toContain('credentialStrategy');
+  });
+
+  it('listProjectExecutionPool: requester-owned unshared connection has no share metadata', async () => {
+    const requester = await seedUser('pool.req.unshared.meta');
+    await seedMember('org-001', requester.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, requester.id);
+    const service = makeService(makePoolRegistry());
+    const own = await service.registerPersonalConnection({
+      organisationId: 'org-001',
+      actorUserId: requester.id,
+      connectionFamilyId: 'pool-personal-online',
+    });
+    await setConnectionStatusRaw('org-001', own.id, 'available');
+
+    const result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+    });
+    const entry = result.entries.find(
+      (e) => e.tier === 'requester' && e.connectionId === own.id,
+    );
+    expect(entry).toBeDefined();
+    expect(entry?.share).toBeUndefined();
+  });
+
+  it('listProjectExecutionPool: contributed project_pool entry also carries durable share metadata', async () => {
+    const owner = await seedUser('pool.owner.share.meta');
+    const requester = await seedUser('pool.req.share.meta');
+    await seedMember('org-001', owner.id, 'member');
+    await seedMember('org-001', requester.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    await seedProjectMembership('org-001', projectId, requester.id);
+    const service = makeService(makePoolRegistry());
+    const conn = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: owner.id, connectionFamilyId: 'pool-personal-online',
+    });
+    await setConnectionStatusRaw('org-001', conn.id, 'available');
+    const availableFrom = new Date('2027-05-01T00:00:00.000Z');
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+      usagePolicy: { availableFrom },
+    });
+    await seedActiveSession(owner.id);
+
+    const persistedShare = await new AIConnectionRepository(pool).getActiveProjectShare(
+      'org-001', projectId, conn.id,
+    );
+    expect(persistedShare).not.toBeNull();
+
+    const result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id,
+    });
+    const entry = result.entries.find(
+      (e) => e.tier === 'project_pool' && e.connectionId === conn.id,
+    );
+    expect(entry?.share?.id).toBe(persistedShare?.id);
+    expect(entry?.share?.mode).toBe('online_only');
+    expect(entry?.share?.availableFrom?.toISOString()).toBe(availableFrom.toISOString());
+    expect(entry?.share?.availableUntil).toBeUndefined();
+    // Organisation-tier entries never expose a share.
+    for (const orgEntry of result.entries.filter((e) => e.tier === 'organisation')) {
+      expect(orgEntry.share).toBeUndefined();
+    }
+  });
+
   it('listProjectExecutionPool: contributed online_only with active owner session -> eligible; without session -> owner_offline', async () => {
     const owner = await seedUser('pool.owner.online');
     const requester = await seedUser('pool.req.online');

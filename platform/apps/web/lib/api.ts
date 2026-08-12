@@ -500,6 +500,13 @@ export interface AIConnectionSummary {
   revokedAt?: string;
 }
 
+export interface ProjectExecutionPoolShareState {
+  id: string;
+  mode: AIConnectionShareMode;
+  availableFrom?: string;
+  availableUntil?: string;
+}
+
 export interface ProjectExecutionPoolEntry {
   connectionId: string;
   tier: 'requester' | 'project_pool' | 'organisation';
@@ -507,6 +514,7 @@ export interface ProjectExecutionPoolEntry {
   connectionFamilyId: string;
   ownerUserId?: string;
   shareMode?: AIConnectionShareMode;
+  share?: ProjectExecutionPoolShareState;
   eligible: boolean;
   reasons: ProjectExecutionPoolReason[];
 }

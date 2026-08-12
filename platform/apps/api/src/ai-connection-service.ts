@@ -59,6 +59,13 @@ export type ProjectExecutionPoolReason =
   | 'usage_window_expired'
   | 'persistent_not_supported';
 
+export interface ProjectExecutionPoolShareState {
+  id: string;
+  mode: AIConnectionShareMode;
+  availableFrom?: Date;
+  availableUntil?: Date;
+}
+
 export interface ProjectExecutionPoolEntry {
   connectionId: string;
   tier: ProjectExecutionPoolTier;
@@ -66,6 +73,7 @@ export interface ProjectExecutionPoolEntry {
   connectionFamilyId: string;
   ownerUserId?: string;
   shareMode?: AIConnectionShareMode;
+  share?: ProjectExecutionPoolShareState;
   eligible: boolean;
   reasons: ProjectExecutionPoolReason[];
 }
@@ -98,6 +106,15 @@ export interface AIConnectionSummary {
   createdAt: Date;
   updatedAt: Date;
   revokedAt?: Date;
+}
+
+function toSafeShareState(
+  share: AIConnectionProjectShareRecord,
+): ProjectExecutionPoolShareState {
+  const state: ProjectExecutionPoolShareState = { id: share.id, mode: share.mode };
+  if (share.availableFrom !== undefined) state.availableFrom = share.availableFrom;
+  if (share.availableUntil !== undefined) state.availableUntil = share.availableUntil;
+  return state;
 }
 
 function toSummary(record: AIConnectionRecord): AIConnectionSummary {
@@ -682,10 +699,17 @@ export class AIConnectionService {
 
     const entries: ProjectExecutionPoolEntry[] = [];
 
+    // Load own connections and all active project shares in parallel; the share
+    // list is the authoritative source of durable share state for BOTH the
+    // requester tier (owner-shared) and the project_pool tier (others' shares).
+    const [ownConnections, shares] = await Promise.all([
+      aiConnections.listForUser(input.organisationId, input.requesterUserId),
+      aiConnections.listActiveProjectShares(input.organisationId, input.projectId),
+    ]);
+    const shareByConnectionId = new Map<string, AIConnectionProjectShareRecord>();
+    for (const share of shares) shareByConnectionId.set(share.connectionId, share);
+
     // ----- Requester tier -----
-    const ownConnections = await aiConnections.listForUser(
-      input.organisationId, input.requesterUserId,
-    );
     const requesterEntries: ProjectExecutionPoolEntry[] = [];
     for (const c of ownConnections) {
       if (c.status === 'revoked') continue; // hide revoked entirely
@@ -706,6 +730,8 @@ export class AIConnectionService {
         reasons,
       };
       if (c.ownerUserId !== undefined) reqEntry.ownerUserId = c.ownerUserId;
+      const ownerShare = shareByConnectionId.get(c.id);
+      if (ownerShare) reqEntry.share = toSafeShareState(ownerShare);
       requesterEntries.push(reqEntry);
     }
     requesterEntries.sort((a, b) => {
@@ -718,9 +744,6 @@ export class AIConnectionService {
     entries.push(...requesterEntries);
 
     // ----- Project pool tier (others' shares) -----
-    const shares = await aiConnections.listActiveProjectShares(
-      input.organisationId, input.projectId,
-    );
     const pooledEntries: ProjectExecutionPoolEntry[] = [];
     const requesterConnIds = new Set(ownConnections.map((c) => c.id));
     // Cache presence lookups per owner.
@@ -770,6 +793,7 @@ export class AIConnectionService {
         providerId: conn.providerId,
         connectionFamilyId: conn.connectionFamilyId,
         shareMode: share.mode,
+        share: toSafeShareState(share),
         eligible: reasons.length === 0,
         reasons,
       };

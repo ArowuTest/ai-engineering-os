@@ -200,3 +200,101 @@ test('globals.css adds AI connection administration styling', async () => {
   assert.match(css, /\.ai-connections/);
   assert.match(css, /\.ai-connection-card/);
 });
+
+test('ProjectExecutionPoolEntry exposes durable, safe share metadata (id/mode/window only)', async () => {
+  const api = await read('lib/api.ts');
+  const entryBlock = api.match(/export interface ProjectExecutionPoolEntry\s*\{[\s\S]*?\n\}/);
+  assert.ok(entryBlock, 'ProjectExecutionPoolEntry block must be declared');
+  const block = entryBlock[0];
+  assert.match(
+    block,
+    /share\?:\s*(ProjectExecutionPoolShareState|\{[\s\S]*?id:\s*string[\s\S]*?mode:\s*AIConnectionShareMode[\s\S]*?availableFrom\?:\s*string[\s\S]*?availableUntil\?:\s*string[\s\S]*?\})/,
+    'ProjectExecutionPoolEntry must expose share?: { id; mode; availableFrom?; availableUntil? }',
+  );
+  // Ensure the referenced share-state interface is declared with the safe shape.
+  const stateBlock = api.match(
+    /export interface ProjectExecutionPoolShareState\s*\{[\s\S]*?\n\}/,
+  );
+  assert.ok(stateBlock, 'ProjectExecutionPoolShareState must be declared');
+  assert.match(stateBlock[0], /id:\s*string/);
+  assert.match(stateBlock[0], /mode:\s*AIConnectionShareMode/);
+  assert.match(stateBlock[0], /availableFrom\?:\s*string/);
+  assert.match(stateBlock[0], /availableUntil\?:\s*string/);
+  // No credential or secret material may sneak into the share metadata.
+  for (const dirty of [stateBlock[0], block]) {
+    assert.doesNotMatch(dirty, /secretRefId/);
+    assert.doesNotMatch(dirty, /credentialStrategy/);
+    assert.doesNotMatch(dirty, /\bpassword\b/i);
+    assert.doesNotMatch(dirty, /\bapiKey\b/i);
+    assert.doesNotMatch(dirty, /\btoken\b/i);
+    assert.doesNotMatch(dirty, /\bcookie\b/i);
+  }
+});
+
+test('AI connections page derives owner share state from authoritative entry.share, hydrates windows and loads pools in parallel', async () => {
+  const page = await read('app/ai-connections/page.tsx');
+
+  // Owner share detection must NOT be tier-based; tier === 'project_pool' is for OTHER users' shares.
+  assert.doesNotMatch(
+    page,
+    /entry\.tier\s*===\s*['"]project_pool['"]/,
+    'owner share detection must not use tier === project_pool',
+  );
+  // Owner share detection uses the authoritative share metadata from the requester tier.
+  assert.match(
+    page,
+    /entry\.tier\s*===\s*['"]requester['"][\s\S]{0,500}?\?\.share|entry\.tier\s*===\s*['"]requester['"][\s\S]{0,500}?\.share\b/,
+    'owner-side share state must be derived from the requester-tier entry.share',
+  );
+
+  // Datetime-local inputs for the usage window must be hydrated from durable share windows,
+  // not left blank (which would silently clear the persisted window on submit).
+  assert.match(
+    page,
+    /type=["']datetime-local["'][\s\S]{0,400}?name=["']availableFrom["'][\s\S]{0,400}?defaultValue=\{[\s\S]*?[sS]hare[\s\S]*?availableFrom/,
+    'availableFrom datetime-local must be hydrated from the active share',
+  );
+  assert.match(
+    page,
+    /type=["']datetime-local["'][\s\S]{0,400}?name=["']availableUntil["'][\s\S]{0,400}?defaultValue=\{[\s\S]*?[sS]hare[\s\S]*?availableUntil/,
+    'availableUntil datetime-local must be hydrated from the active share',
+  );
+
+  // Project pools must be fetched in parallel (Promise.all), not serially.
+  assert.match(page, /Promise\.all\(\s*projects\.map\(/, 'project pools must load in parallel');
+  // Serial for-of over projects.map fetch should be gone.
+  assert.doesNotMatch(
+    page,
+    /for\s*\(\s*const\s+project\s+of\s+projects\s*\)\s*\{[\s\S]{0,300}?await\s+listProjectAIExecutionPool/,
+    'project pool loads must not be serialized in a for-of loop',
+  );
+
+  // Persistent-mode toggle stays gated on the family policy and the current active share mode.
+  assert.match(page, /persistentSupported/);
+});
+
+test('actions.ts guards update-window against blind PATCH and keeps mode & window PATCHes separate', async () => {
+  const actions = await read('app/actions.ts');
+  // Window update action must NOT issue a PATCH with no window fields (blind overwrite / silent
+  // clear on backends that support it). It should short-circuit when the form is empty.
+  assert.match(
+    actions,
+    /updateAIConnectionShareWindowAction[\s\S]{0,2000}?(?:if\s*\(\s*!availableFrom\s*&&\s*!availableUntil|availableFrom\s*===\s*undefined\s*&&\s*availableUntil\s*===\s*undefined)/,
+    'update window action must short-circuit when no window fields are provided',
+  );
+  // Mode change action must NOT accept availableFrom/availableUntil fields (Task 6 rejects combined PATCH).
+  const modeAction = actions.match(
+    /export async function setAIConnectionShareModeAction\([\s\S]*?\n\}/,
+  );
+  assert.ok(modeAction, 'setAIConnectionShareModeAction must be declared');
+  assert.doesNotMatch(
+    modeAction[0],
+    /availableFrom/,
+    'mode-change action must not smuggle window fields',
+  );
+  assert.doesNotMatch(
+    modeAction[0],
+    /availableUntil/,
+    'mode-change action must not smuggle window fields',
+  );
+});

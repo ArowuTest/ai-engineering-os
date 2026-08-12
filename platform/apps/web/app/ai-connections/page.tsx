@@ -40,6 +40,14 @@ function familyDisplay(
   return families.find((family) => family.id === familyId);
 }
 
+function toDatetimeLocal(iso: string | undefined): string {
+  if (!iso) return '';
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return '';
+  // Render in UTC and strip the seconds/ms + trailing Z for datetime-local.
+  return parsed.toISOString().slice(0, 16);
+}
+
 export default async function AIConnectionsPage() {
   const identity = await getCurrentIdentity();
   if (!identity) redirect('/login');
@@ -76,11 +84,13 @@ export default async function AIConnectionsPage() {
     projectId: string;
     projectName: string;
     pool: ProjectExecutionPool;
-  }> = [];
-  for (const project of projects) {
-    const pool = await listProjectAIExecutionPool(project.id);
-    projectPools.push({ projectId: project.id, projectName: project.name, pool });
-  }
+  }> = await Promise.all(
+    projects.map(async (project) => ({
+      projectId: project.id,
+      projectName: project.name,
+      pool: await listProjectAIExecutionPool(project.id),
+    })),
+  );
 
   return (
     <main className="page-shell ai-connections">
@@ -256,10 +266,15 @@ export default async function AIConnectionsPage() {
                   personalConnections.map((connection) => {
                     const family = familyDisplay(families, connection.connectionFamilyId);
                     const persistentSupported = family?.persistentSupported === true;
-                    const activeShare = pool.entries.find(
+                    // Owner-side share state comes from the authoritative requester-tier entry
+                    // (backend hydrates entry.share for owner-owned shares). We never infer
+                    // ownership from `tier === 'project_pool'` — that tier is for OTHER users'
+                    // contributed shares.
+                    const ownerEntry = pool.entries.find(
                       (entry) =>
-                        entry.connectionId === connection.id && entry.tier === 'project_pool',
+                        entry.tier === 'requester' && entry.connectionId === connection.id,
                     );
+                    const activeShare = ownerEntry?.share;
                     return (
                       <article
                         className="ai-connection-card"
@@ -270,7 +285,7 @@ export default async function AIConnectionsPage() {
                           <span>{connection.providerId}</span>
                           {activeShare ? (
                             <small>
-                              Active share · {activeShare.shareMode ?? 'online_only'}
+                              Active share · {activeShare.mode}
                             </small>
                           ) : (
                             <small>Not shared with this project</small>
@@ -295,7 +310,7 @@ export default async function AIConnectionsPage() {
                         ) : (
                           <div className="ai-connection-actions">
                             {persistentSupported &&
-                            activeShare.shareMode !== 'persistent' ? (
+                            activeShare.mode !== 'persistent' ? (
                               <form action={setAIConnectionShareModeAction}>
                                 <input
                                   type="hidden"
@@ -317,7 +332,7 @@ export default async function AIConnectionsPage() {
                                 </button>
                               </form>
                             ) : null}
-                            {activeShare.shareMode === 'persistent' ? (
+                            {activeShare.mode === 'persistent' ? (
                               <form action={setAIConnectionShareModeAction}>
                                 <input
                                   type="hidden"
@@ -359,6 +374,9 @@ export default async function AIConnectionsPage() {
                                   className="input"
                                   type="datetime-local"
                                   name="availableFrom"
+                                  defaultValue={toDatetimeLocal(
+                                    activeShare.availableFrom,
+                                  )}
                                 />
                               </label>
                               <label>
@@ -367,6 +385,9 @@ export default async function AIConnectionsPage() {
                                   className="input"
                                   type="datetime-local"
                                   name="availableUntil"
+                                  defaultValue={toDatetimeLocal(
+                                    activeShare.availableUntil,
+                                  )}
                                 />
                               </label>
                               <button className="button-small" type="submit">

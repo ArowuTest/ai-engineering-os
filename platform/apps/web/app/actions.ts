@@ -323,6 +323,14 @@ export async function updateAIConnectionShareWindowAction(formData: FormData) {
   const connectionId = required(formData, 'connectionId');
   const availableFrom = optionalIsoDate(formData, 'availableFrom');
   const availableUntil = optionalIsoDate(formData, 'availableUntil');
+  // Guard against blind PATCH: the underlying HTTP route treats missing window
+  // fields as a no-op, so short-circuit here to avoid a needless round-trip
+  // and to make the "nothing to change" branch explicit.
+  if (availableFrom === undefined && availableUntil === undefined) {
+    revalidatePath('/ai-connections');
+    revalidatePath(`/projects/${projectId}`);
+    return;
+  }
   const input: {
     projectId: string;
     connectionId: string;
