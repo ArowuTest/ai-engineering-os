@@ -40,6 +40,7 @@ import {
   type ProductPartner,
   type ProjectRole,
 } from '../lib/api';
+import { parseAIConnectionDateTime } from '../lib/ai-connection-datetime';
 
 
 function required(formData: FormData, key: string): string {
@@ -256,19 +257,16 @@ export async function revokeOrganisationAccessAction(formData: FormData) {
 }
 
 // AI connection availability administration is an explicit UTC contract.
-// Browser <input type="datetime-local"> submits timezone-less strings like
-// "2026-08-13T09:30" which `new Date(raw)` would parse in the server's local TZ.
-// We normalise to UTC BEFORE parsing so behaviour is deterministic across hosts.
-const DATETIME_LOCAL_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?$/;
-
+// The parser lives in ../lib/ai-connection-datetime.ts so it can be unit-tested
+// independently of Next.js server-action wiring and of the hosting TZ.
 function optionalIsoDate(formData: FormData, key: string): string | undefined {
   const raw = formData.get(key);
   if (typeof raw !== 'string' || raw.trim() === '') return undefined;
-  const trimmed = raw.trim();
-  const normalised = DATETIME_LOCAL_RE.test(trimmed) ? trimmed + 'Z' : trimmed;
-  const parsed = new Date(normalised);
-  if (Number.isNaN(parsed.getTime())) throw new Error(`${key} must be a valid ISO date`);
-  return parsed.toISOString();
+  try {
+    return parseAIConnectionDateTime(raw);
+  } catch {
+    throw new Error(`${key} must be a valid ISO date`);
+  }
 }
 
 export async function registerPersonalAIConnectionAction(formData: FormData) {

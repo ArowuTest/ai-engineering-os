@@ -301,20 +301,22 @@ test('AI connections page treats usage-window inputs as explicit UTC and offers 
   );
 });
 
-test('actions.ts parses datetime-local as UTC deterministically and exposes clearAIConnectionShareWindowAction', async () => {
+test('actions.ts parses datetime-local as UTC via the dedicated helper and exposes clearAIConnectionShareWindowAction', async () => {
   const actions = await read('app/actions.ts');
 
-  // A timezone-less datetime-local value (YYYY-MM-DDTHH:MM[:SS]) must be normalised
-  // to UTC BEFORE handing off to new Date(), so parsing is not server-TZ dependent.
+  // Deterministic UTC parsing lives in a dedicated pure helper so the behaviour
+  // has real unit tests (see lib/ai-connection-datetime.test.ts). The action file
+  // must import and use that helper — not re-implement date parsing inline with
+  // new Date(raw), which would silently pick up the server's local TZ.
   assert.match(
     actions,
-    /\/\^\\d\{4\}-\\d\{2\}-\\d\{2\}T\\d\{2\}:\\d\{2\}(?:\(\?:\:\\d\{2\}\)\?)?(?:\\.\\d\+)?\$\/|\/\^\\d\{4\}-\\d\{2\}-\\d\{2\}T\\d\{2\}:\\d\{2\}/,
-    'actions.ts must detect timezone-less datetime-local values with a regex before parsing',
+    /import\s*\{\s*parseAIConnectionDateTime\s*\}\s*from\s*['"]\.\.\/lib\/ai-connection-datetime['"]/,
+    'actions.ts must import parseAIConnectionDateTime from the dedicated helper module',
   );
   assert.match(
     actions,
-    /(\+\s*['"]Z['"]|Date\.UTC\()/,
-    'timezone-less datetime-local values must be coerced to UTC (append "Z" or use Date.UTC)',
+    /parseAIConnectionDateTime\s*\(/,
+    'actions.ts must call parseAIConnectionDateTime rather than parsing dates inline',
   );
 
   // The dedicated clear action must exist and call the client with explicit nulls.

@@ -17,7 +17,12 @@ import { ModelGateway } from '@engineering-os/model-gateway';
 import { buildApp } from '../src/app.js';
 import { AuthService } from '../src/auth-service.js';
 import { AIConnectionService } from '../src/ai-connection-service.js';
-import { productionConnectionFamilyPolicyRegistry } from '../src/ai-connection-policy.js';
+import {
+  createConnectionFamilyPolicyRegistry,
+  productionConnectionFamilyPolicyRegistry,
+  type ConnectionFamilyPolicyRegistry,
+  type TrustedConnectionFamilyPolicy,
+} from '../src/ai-connection-policy.js';
 import { createRuntimeApp } from '../src/server.js';
 import {
   closeDatabase,
@@ -26,7 +31,28 @@ import {
   resetDatabase,
 } from '../../../packages/database/test/database-test-harness.js';
 
-function makeDependencies() {
+const DELEGATABLE_TEST_POLICIES: readonly TrustedConnectionFamilyPolicy[] = [
+  {
+    id: 'test-personal-delegatable',
+    providerId: 'test',
+    displayName: 'Test Personal Delegatable',
+    executionMode: 'subscription',
+    harnessId: 'test-harness',
+    allowedOwnership: ['personal'],
+    credentialStrategies: ['runner_managed'],
+    delegatable: true,
+    requiresRunner: false,
+    persistentSupported: false,
+  },
+];
+
+function makeDelegatableRegistry(): ConnectionFamilyPolicyRegistry {
+  return createConnectionFamilyPolicyRegistry(DELEGATABLE_TEST_POLICIES);
+}
+
+function makeDependencies(
+  policy: ConnectionFamilyPolicyRegistry = productionConnectionFamilyPolicyRegistry,
+) {
   const unitOfWork = new DatabaseUnitOfWork(pool);
   const authService = new AuthService({
     unitOfWork,
@@ -42,7 +68,7 @@ function makeDependencies() {
     memberships: new MembershipRepository(pool),
     projects: new ProjectRepository(pool),
     sessions: new SessionRepository(pool),
-    policy: productionConnectionFamilyPolicyRegistry,
+    policy,
     modelGateway: new ModelGateway(),
   });
   const app = buildApp({
@@ -53,7 +79,7 @@ function makeDependencies() {
     modelGateway: new ModelGateway(),
     authService,
     aiConnectionService,
-    aiConnectionPolicy: productionConnectionFamilyPolicyRegistry,
+    aiConnectionPolicy: policy,
     allowDevIdentityHeaders: false,
   });
   return { app, authService };
@@ -387,6 +413,117 @@ describe('AI connections HTTP boundary', () => {
     const body = response.json() as { error?: string };
     expect(typeof body.error).toBe('string');
     expect(body.error!.toLowerCase()).toContain('not accepted');
+    await app.close();
+  });
+
+  it('owner PATCH with explicit null bounds clears both window ends and preserves share mode', async () => {
+    const ownerId = await seedUser('window.clear.owner', 'Window-clear-owner-2026!');
+    await seedOrgMembership('org-001', ownerId, 'owner');
+    const projectId = await seedProject('org-001', 'Window Clear Project');
+    // Owner needs project membership to share/edit a delegatable connection.
+    await pool.query(
+      `INSERT INTO project_memberships
+        (organisation_id, project_id, user_id, role, status, created_by, created_at, updated_at)
+       VALUES ($1, $2, $3, 'contributor', 'active', 'test', $4, $4)`,
+      ['org-001', projectId, ownerId, new Date()],
+    );
+    const { app } = makeDependencies(makeDelegatableRegistry());
+    const token = await login(app, 'window.clear.owner', 'Window-clear-owner-2026!');
+    const headers = { authorization: `Bearer ${token}`, 'x-organisation-id': 'org-001' };
+
+    const registered = await app.inject({
+      method: 'POST', url: '/ai-connections/personal', headers,
+      payload: { connectionFamilyId: 'test-personal-delegatable' },
+    });
+    expect(registered.statusCode).toBe(201);
+    const connectionId = (registered.json() as { id: string }).id;
+
+    // Owner shares the connection with a non-empty usage window.
+    const shared = await app.inject({
+      method: 'POST',
+      url: `/projects/${projectId}/ai-connections/${connectionId}/share`,
+      headers,
+      payload: {
+        availableFrom: '2026-08-13T09:30:00.000Z',
+        availableUntil: '2026-09-13T09:30:00.000Z',
+      },
+    });
+    expect(shared.statusCode).toBe(201);
+
+    // Confirm bounds are actually persisted before the clear.
+    const before = await pool.query(
+      `SELECT mode, available_from, available_until
+         FROM ai_connection_project_shares
+        WHERE organisation_id = $1 AND project_id = $2 AND connection_id = $3
+          AND revoked_at IS NULL`,
+      ['org-001', projectId, connectionId],
+    );
+    expect(before.rowCount).toBe(1);
+    expect(before.rows[0].mode).toBe('online_only');
+    expect(before.rows[0].available_from).not.toBeNull();
+    expect(before.rows[0].available_until).not.toBeNull();
+
+    // Owner PATCHes explicit nulls to clear both bounds. hasWindow must be
+    // detected (fields present, not merely absent) so the service is invoked
+    // with an empty usage policy — clearing both ends.
+    const cleared = await app.inject({
+      method: 'PATCH',
+      url: `/projects/${projectId}/ai-connections/${connectionId}/share`,
+      headers,
+      payload: { availableFrom: null, availableUntil: null },
+    });
+    expect(cleared.statusCode).toBe(204);
+
+    // Read back the active share directly from the pool — bounds must be
+    // cleared and mode must still be online_only.
+    const after = await pool.query(
+      `SELECT mode, available_from, available_until
+         FROM ai_connection_project_shares
+        WHERE organisation_id = $1 AND project_id = $2 AND connection_id = $3
+          AND revoked_at IS NULL`,
+      ['org-001', projectId, connectionId],
+    );
+    expect(after.rowCount).toBe(1);
+    expect(after.rows[0].mode).toBe('online_only');
+    expect(after.rows[0].available_from).toBeNull();
+    expect(after.rows[0].available_until).toBeNull();
+
+    // The GET pool endpoint must also project the cleared state — owner
+    // requester tier share metadata should omit both bounds.
+    const readback = await app.inject({
+      method: 'GET', url: `/projects/${projectId}/ai-connections`, headers,
+    });
+    expect(readback.statusCode).toBe(200);
+    const body = readback.json() as {
+      entries: Array<{
+        connectionId: string;
+        tier: string;
+        share?: { mode: string; availableFrom?: string; availableUntil?: string };
+      }>;
+    };
+    const ownerEntry = body.entries.find(
+      (e) => e.connectionId === connectionId && e.tier === 'requester',
+    );
+    expect(ownerEntry).toBeDefined();
+    expect(ownerEntry!.share).toBeDefined();
+    expect(ownerEntry!.share!.mode).toBe('online_only');
+    expect(ownerEntry!.share!.availableFrom).toBeUndefined();
+    expect(ownerEntry!.share!.availableUntil).toBeUndefined();
+
+    // A different member (not the connection owner and not an org admin) must
+    // not be able to clear another user's window — proves the null-bounds
+    // path is authorisation-gated end to end, not just at HTTP-parse time.
+    const strangerId = await seedUser('window.clear.stranger', 'Stranger-2026!');
+    await seedOrgMembership('org-001', strangerId, 'member');
+    const strangerToken = await login(app, 'window.clear.stranger', 'Stranger-2026!');
+    const forbidden = await app.inject({
+      method: 'PATCH',
+      url: `/projects/${projectId}/ai-connections/${connectionId}/share`,
+      headers: { authorization: `Bearer ${strangerToken}`, 'x-organisation-id': 'org-001' },
+      payload: { availableFrom: null, availableUntil: null },
+    });
+    expect([403, 404]).toContain(forbidden.statusCode);
+
     await app.close();
   });
 
