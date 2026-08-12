@@ -52,4 +52,27 @@ describe('parseAIConnectionDateTime', () => {
   it('throws for a non-ISO garbage value', () => {
     expect(() => parseAIConnectionDateTime('not-a-date')).toThrow(/valid ISO/);
   });
+
+  it('accepts a valid leap-day datetime-local value and normalises to UTC', () => {
+    // 2028 is a leap year — Feb 29 must round-trip untouched.
+    expect(parseAIConnectionDateTime('2028-02-29T12:00')).toBe(
+      '2028-02-29T12:00:00.000Z',
+    );
+  });
+
+  it('fails closed on a calendar-invalid day like 2026-02-30 (never silently rolls forward)', () => {
+    // Host `new Date()` parsing would silently roll 2026-02-30 forward to
+    // 2026-03-02. Component parsing + Date.UTC + round-trip verification
+    // must reject the value instead.
+    expect(() => parseAIConnectionDateTime('2026-02-30T09:30')).toThrow(/valid ISO/);
+  });
+
+  it('fails closed on an invalid month (e.g. month 13)', () => {
+    expect(() => parseAIConnectionDateTime('2026-13-01T09:30')).toThrow(/valid ISO/);
+  });
+
+  it('fails closed on invalid hour or minute components', () => {
+    expect(() => parseAIConnectionDateTime('2026-08-13T24:00')).toThrow(/valid ISO/);
+    expect(() => parseAIConnectionDateTime('2026-08-13T09:60')).toThrow(/valid ISO/);
+  });
 });

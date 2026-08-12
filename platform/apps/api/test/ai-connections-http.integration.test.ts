@@ -510,11 +510,20 @@ describe('AI connections HTTP boundary', () => {
     expect(ownerEntry!.share!.availableFrom).toBeUndefined();
     expect(ownerEntry!.share!.availableUntil).toBeUndefined();
 
-    // A different member (not the connection owner and not an org admin) must
-    // not be able to clear another user's window — proves the null-bounds
-    // path is authorisation-gated end to end, not just at HTTP-parse time.
+    // A different member — one who has active project membership AND org
+    // membership — must still be rejected when trying to clear another user's
+    // window. Giving the stranger project access removes project-visibility as
+    // a rejection path, so the ONLY remaining gate is connection ownership /
+    // organisation-admin authority. We therefore assert an exact 403 (not
+    // [403,404]), proving the null-bounds PATCH is authority-gated end to end.
     const strangerId = await seedUser('window.clear.stranger', 'Stranger-2026!');
     await seedOrgMembership('org-001', strangerId, 'member');
+    await pool.query(
+      `INSERT INTO project_memberships
+        (organisation_id, project_id, user_id, role, status, created_by, created_at, updated_at)
+       VALUES ($1, $2, $3, 'contributor', 'active', 'test', $4, $4)`,
+      ['org-001', projectId, strangerId, new Date()],
+    );
     const strangerToken = await login(app, 'window.clear.stranger', 'Stranger-2026!');
     const forbidden = await app.inject({
       method: 'PATCH',
@@ -522,7 +531,70 @@ describe('AI connections HTTP boundary', () => {
       headers: { authorization: `Bearer ${strangerToken}`, 'x-organisation-id': 'org-001' },
       payload: { availableFrom: null, availableUntil: null },
     });
-    expect([403, 404]).toContain(forbidden.statusCode);
+    expect(forbidden.statusCode).toBe(403);
+
+    await app.close();
+  });
+
+  it('owner PATCH with only one bound null (other absent) fully replaces the window: both bounds cleared', async () => {
+    // Documents the current full-replacement contract of
+    // updateProjectShareUsagePolicy: the PATCH body is a full replacement of
+    // the usage-window policy, NOT a partial merge. A one-null / one-absent
+    // PATCH therefore clears BOTH ends, not just the null one. If we ever want
+    // per-field partial updates, this test must be rewritten in the same
+    // change as the service semantics.
+    const ownerId = await seedUser('window.one.null', 'Window-one-null-2026!');
+    await seedOrgMembership('org-001', ownerId, 'owner');
+    const projectId = await seedProject('org-001', 'One Null Project');
+    await pool.query(
+      `INSERT INTO project_memberships
+        (organisation_id, project_id, user_id, role, status, created_by, created_at, updated_at)
+       VALUES ($1, $2, $3, 'contributor', 'active', 'test', $4, $4)`,
+      ['org-001', projectId, ownerId, new Date()],
+    );
+    const { app } = makeDependencies(makeDelegatableRegistry());
+    const token = await login(app, 'window.one.null', 'Window-one-null-2026!');
+    const headers = { authorization: `Bearer ${token}`, 'x-organisation-id': 'org-001' };
+
+    const registered = await app.inject({
+      method: 'POST', url: '/ai-connections/personal', headers,
+      payload: { connectionFamilyId: 'test-personal-delegatable' },
+    });
+    expect(registered.statusCode).toBe(201);
+    const connectionId = (registered.json() as { id: string }).id;
+
+    const shared = await app.inject({
+      method: 'POST',
+      url: `/projects/${projectId}/ai-connections/${connectionId}/share`,
+      headers,
+      payload: {
+        availableFrom: '2026-08-13T09:30:00.000Z',
+        availableUntil: '2026-09-13T09:30:00.000Z',
+      },
+    });
+    expect(shared.statusCode).toBe(201);
+
+    // Only availableFrom is present-and-null; availableUntil is absent entirely.
+    const patched = await app.inject({
+      method: 'PATCH',
+      url: `/projects/${projectId}/ai-connections/${connectionId}/share`,
+      headers,
+      payload: { availableFrom: null },
+    });
+    expect(patched.statusCode).toBe(204);
+
+    const after = await pool.query(
+      `SELECT mode, available_from, available_until
+         FROM ai_connection_project_shares
+        WHERE organisation_id = $1 AND project_id = $2 AND connection_id = $3
+          AND revoked_at IS NULL`,
+      ['org-001', projectId, connectionId],
+    );
+    expect(after.rowCount).toBe(1);
+    expect(after.rows[0].mode).toBe('online_only');
+    // Full-window replacement: BOTH ends cleared even though only one was null.
+    expect(after.rows[0].available_from).toBeNull();
+    expect(after.rows[0].available_until).toBeNull();
 
     await app.close();
   });
