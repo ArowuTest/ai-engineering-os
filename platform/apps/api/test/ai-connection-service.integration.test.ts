@@ -30,6 +30,30 @@ const TEST_POLICIES: readonly TrustedConnectionFamilyPolicy[] = [
     persistentSupported: false,
   },
   {
+    id: 'test-personal-delegatable',
+    providerId: 'test',
+    displayName: 'Test Personal Delegatable',
+    executionMode: 'subscription',
+    harnessId: 'test-harness',
+    allowedOwnership: ['personal'],
+    credentialStrategies: ['runner_managed'],
+    delegatable: true,
+    requiresRunner: false,
+    persistentSupported: false,
+  },
+  {
+    id: 'test-personal-persistent',
+    providerId: 'test',
+    displayName: 'Test Personal Persistent',
+    executionMode: 'subscription',
+    harnessId: 'test-harness',
+    allowedOwnership: ['personal'],
+    credentialStrategies: ['runner_managed'],
+    delegatable: true,
+    requiresRunner: false,
+    persistentSupported: true,
+  },
+  {
     id: 'test-org-api',
     providerId: 'test',
     displayName: 'Test Organisation API',
@@ -635,5 +659,616 @@ describe('AIConnectionService', () => {
         DROP FUNCTION IF EXISTS reject_ai_rev_audit();
       `);
     }
+  });
+
+  // ---------- Task 4: project sharing modes and owner usage windows ----------
+
+  async function seedProject(organisationId: string, name = 'project A'): Promise<string> {
+    const projectId = randomUUID();
+    const now = new Date();
+    await pool.query(
+      `INSERT INTO projects
+        (id, organisation_id, name, created_by, created_at, stage,
+         preferred_product_partner, updated_at)
+       VALUES ($1, $2, $3, 'bootstrap', $4, 'discovery', 'auto', $4)`,
+      [projectId, organisationId, name, now],
+    );
+    return projectId;
+  }
+
+  async function seedProjectMembership(
+    organisationId: string,
+    projectId: string,
+    userId: string,
+  ): Promise<void> {
+    const now = new Date();
+    await pool.query(
+      `INSERT INTO project_memberships
+        (organisation_id, project_id, user_id, role, status, created_by, created_at, updated_at)
+       VALUES ($1, $2, $3, 'contributor', 'active', 'bootstrap', $4, $4)`,
+      [organisationId, projectId, userId, now],
+    );
+  }
+
+  async function registerDelegatablePersonal(
+    service: AIConnectionService,
+    orgId: string,
+    actorId: string,
+    familyId = 'test-personal-delegatable',
+  ) {
+    return service.registerPersonalConnection({
+      organisationId: orgId,
+      actorUserId: actorId,
+      connectionFamilyId: familyId,
+    });
+  }
+
+  it('absence of any share means Do Not Share (no rows)', async () => {
+    const owner = await seedUser('share.doi.owner');
+    await seedMember('org-001', owner.id, 'member');
+    const service = makeService();
+    const conn = await registerDelegatablePersonal(service, 'org-001', owner.id);
+    const rows = await pool.query(
+      `SELECT id FROM ai_connection_project_shares WHERE connection_id = $1`,
+      [conn.id],
+    );
+    expect(rows.rowCount).toBe(0);
+  });
+
+  it('first share always creates an active online_only row (signature has no mode)', async () => {
+    const owner = await seedUser('share.first.owner');
+    await seedMember('org-001', owner.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    const service = makeService();
+    const conn = await registerDelegatablePersonal(service, 'org-001', owner.id);
+
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001',
+      actorUserId: owner.id,
+      projectId,
+      connectionId: conn.id,
+    });
+
+    const rows = await pool.query(
+      `SELECT mode, revoked_at FROM ai_connection_project_shares
+       WHERE organisation_id = 'org-001' AND project_id = $1 AND connection_id = $2`,
+      [projectId, conn.id],
+    );
+    expect(rows.rowCount).toBe(1);
+    expect(rows.rows[0].mode).toBe('online_only');
+    expect(rows.rows[0].revoked_at).toBeNull();
+  });
+
+  it('sharing a nondelegatable family fails closed with policy_blocked', async () => {
+    const owner = await seedUser('share.nondelegatable');
+    await seedMember('org-001', owner.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    const service = makeService();
+    // 'test-personal' has delegatable: false
+    const conn = await service.registerPersonalConnection({
+      organisationId: 'org-001',
+      actorUserId: owner.id,
+      connectionFamilyId: 'test-personal',
+    });
+    await expectServiceError(
+      service.shareConnectionWithProject({
+        organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+      }),
+      'policy_blocked',
+    );
+  });
+
+  it('sharing project A does not create share for project B', async () => {
+    const owner = await seedUser('share.scope.owner');
+    await seedMember('org-001', owner.id, 'member');
+    const projectA = await seedProject('org-001', 'A');
+    const projectB = await seedProject('org-001', 'B');
+    await seedProjectMembership('org-001', projectA, owner.id);
+    await seedProjectMembership('org-001', projectB, owner.id);
+    const service = makeService();
+    const conn = await registerDelegatablePersonal(service, 'org-001', owner.id);
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId: projectA, connectionId: conn.id,
+    });
+    const rows = await pool.query(
+      `SELECT project_id FROM ai_connection_project_shares WHERE connection_id = $1`,
+      [conn.id],
+    );
+    expect(rows.rowCount).toBe(1);
+    expect(rows.rows[0].project_id).toBe(projectA);
+  });
+
+  it('non-owner cannot enable/mode-change/revoke another persons share (including org admin)', async () => {
+    const owner = await seedUser('share.owner.only');
+    const other = await seedUser('share.other');
+    const admin = await seedUser('share.admin');
+    await seedMember('org-001', owner.id, 'member');
+    await seedMember('org-001', other.id, 'member');
+    await seedMember('org-001', admin.id, 'admin');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    await seedProjectMembership('org-001', projectId, other.id);
+    // admin is not project member; still forbidden for another user's share
+    const service = makeService();
+    const conn = await registerDelegatablePersonal(service, 'org-001', owner.id);
+
+    // other member cannot enable share on someone else's connection
+    await expectServiceError(
+      service.shareConnectionWithProject({
+        organisationId: 'org-001', actorUserId: other.id, projectId, connectionId: conn.id,
+      }),
+      'forbidden',
+    );
+    // admin also cannot opt owner's connection in
+    await expectServiceError(
+      service.shareConnectionWithProject({
+        organisationId: 'org-001', actorUserId: admin.id, projectId, connectionId: conn.id,
+      }),
+      'forbidden',
+    );
+
+    // now owner enables share, then non-owners cannot switch mode or revoke
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+    });
+    await expectServiceError(
+      service.setProjectShareMode({
+        organisationId: 'org-001', actorUserId: other.id, projectId, connectionId: conn.id, mode: 'persistent',
+      }),
+      'forbidden',
+    );
+    await expectServiceError(
+      service.setProjectShareMode({
+        organisationId: 'org-001', actorUserId: admin.id, projectId, connectionId: conn.id, mode: 'persistent',
+      }),
+      'forbidden',
+    );
+    await expectServiceError(
+      service.revokeProjectShare({
+        organisationId: 'org-001', actorUserId: other.id, projectId, connectionId: conn.id,
+      }),
+      'forbidden',
+    );
+    await expectServiceError(
+      service.revokeProjectShare({
+        organisationId: 'org-001', actorUserId: admin.id, projectId, connectionId: conn.id,
+      }),
+      'forbidden',
+    );
+  });
+
+  it('ordinary owner without project access cannot share; org owner sharing own connection may access project', async () => {
+    const memberOwner = await seedUser('share.member.owner');
+    const orgOwner = await seedUser('share.org.owner');
+    await seedMember('org-001', memberOwner.id, 'member');
+    await seedMember('org-001', orgOwner.id, 'owner');
+    const projectId = await seedProject('org-001');
+    // memberOwner has NO project membership
+    const service = makeService();
+    const memberConn = await registerDelegatablePersonal(service, 'org-001', memberOwner.id);
+    await expectServiceError(
+      service.shareConnectionWithProject({
+        organisationId: 'org-001', actorUserId: memberOwner.id, projectId, connectionId: memberConn.id,
+      }),
+      'forbidden',
+    );
+
+    // Org owner has implicit project access
+    const ownerConn = await registerDelegatablePersonal(service, 'org-001', orgOwner.id);
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: orgOwner.id, projectId, connectionId: ownerConn.id,
+    });
+    const row = await pool.query(
+      `SELECT mode FROM ai_connection_project_shares WHERE connection_id = $1 AND revoked_at IS NULL`,
+      [ownerConn.id],
+    );
+    expect(row.rowCount).toBe(1);
+  });
+
+  it('persistent mode: unsupported family -> policy_blocked; supported family swaps rows preserving history', async () => {
+    const owner = await seedUser('share.persistent.owner');
+    await seedMember('org-001', owner.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    const service = makeService();
+
+    // family without persistentSupported
+    const noPersistConn = await registerDelegatablePersonal(service, 'org-001', owner.id, 'test-personal-delegatable');
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: noPersistConn.id,
+    });
+    await expectServiceError(
+      service.setProjectShareMode({
+        organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: noPersistConn.id, mode: 'persistent',
+      }),
+      'policy_blocked',
+    );
+
+    // family with persistentSupported
+    const persistConn = await registerDelegatablePersonal(service, 'org-001', owner.id, 'test-personal-persistent');
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: persistConn.id,
+    });
+    await service.setProjectShareMode({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: persistConn.id, mode: 'persistent',
+    });
+
+    const rows = await pool.query(
+      `SELECT id, mode, revoked_at FROM ai_connection_project_shares
+       WHERE connection_id = $1 ORDER BY created_at ASC`,
+      [persistConn.id],
+    );
+    expect(rows.rowCount).toBe(2);
+    expect(rows.rows[0].mode).toBe('online_only');
+    expect(rows.rows[0].revoked_at).not.toBeNull();
+    expect(rows.rows[1].mode).toBe('persistent');
+    expect(rows.rows[1].revoked_at).toBeNull();
+  });
+
+  it('setProjectShareMode with unknown mode is rejected', async () => {
+    const owner = await seedUser('share.mode.invalid');
+    await seedMember('org-001', owner.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    const service = makeService();
+    const conn = await registerDelegatablePersonal(service, 'org-001', owner.id, 'test-personal-persistent');
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+    });
+    await expectServiceError(
+      service.setProjectShareMode({
+        organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+        mode: 'weird_mode' as unknown as 'persistent',
+      }),
+      'policy_blocked',
+    );
+  });
+
+  it('usage window round-trips valid values and rejects inverted windows', async () => {
+    const owner = await seedUser('share.window.owner');
+    await seedMember('org-001', owner.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    const service = makeService();
+    const conn = await registerDelegatablePersonal(service, 'org-001', owner.id);
+
+    const from = new Date('2026-08-01T00:00:00.000Z');
+    const until = new Date('2026-08-31T00:00:00.000Z');
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+      usagePolicy: { availableFrom: from, availableUntil: until },
+    });
+    const row = await pool.query(
+      `SELECT available_from, available_until FROM ai_connection_project_shares
+       WHERE connection_id = $1 AND revoked_at IS NULL`,
+      [conn.id],
+    );
+    expect(new Date(row.rows[0].available_from).toISOString()).toBe(from.toISOString());
+    expect(new Date(row.rows[0].available_until).toISOString()).toBe(until.toISOString());
+
+    await expectServiceError(
+      service.updateProjectShareUsagePolicy({
+        organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+        usagePolicy: { availableFrom: until, availableUntil: from },
+      }),
+      'policy_blocked',
+    );
+  });
+
+  it('org admin can only narrow existing usage window (never widen or clear); owner can change freely', async () => {
+    const owner = await seedUser('share.win.owner');
+    const admin = await seedUser('share.win.admin');
+    await seedMember('org-001', owner.id, 'member');
+    await seedMember('org-001', admin.id, 'admin');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    const service = makeService();
+    const conn = await registerDelegatablePersonal(service, 'org-001', owner.id);
+    const from = new Date('2026-08-10T00:00:00.000Z');
+    const until = new Date('2026-08-20T00:00:00.000Z');
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+      usagePolicy: { availableFrom: from, availableUntil: until },
+    });
+
+    // admin cannot widen (earlier availableFrom)
+    await expectServiceError(
+      service.updateProjectShareUsagePolicy({
+        organisationId: 'org-001', actorUserId: admin.id, projectId, connectionId: conn.id,
+        usagePolicy: { availableFrom: new Date('2026-08-05T00:00:00.000Z'), availableUntil: until },
+      }),
+      'forbidden',
+    );
+    // admin cannot widen (later availableUntil)
+    await expectServiceError(
+      service.updateProjectShareUsagePolicy({
+        organisationId: 'org-001', actorUserId: admin.id, projectId, connectionId: conn.id,
+        usagePolicy: { availableFrom: from, availableUntil: new Date('2026-08-25T00:00:00.000Z') },
+      }),
+      'forbidden',
+    );
+    // admin cannot clear
+    await expectServiceError(
+      service.updateProjectShareUsagePolicy({
+        organisationId: 'org-001', actorUserId: admin.id, projectId, connectionId: conn.id,
+        usagePolicy: {},
+      }),
+      'forbidden',
+    );
+
+    // admin CAN narrow (later availableFrom, earlier availableUntil)
+    await service.updateProjectShareUsagePolicy({
+      organisationId: 'org-001', actorUserId: admin.id, projectId, connectionId: conn.id,
+      usagePolicy: {
+        availableFrom: new Date('2026-08-12T00:00:00.000Z'),
+        availableUntil: new Date('2026-08-18T00:00:00.000Z'),
+      },
+    });
+    let row = await pool.query(
+      `SELECT available_from, available_until FROM ai_connection_project_shares
+       WHERE connection_id = $1 AND revoked_at IS NULL`,
+      [conn.id],
+    );
+    expect(new Date(row.rows[0].available_from).toISOString()).toBe('2026-08-12T00:00:00.000Z');
+    expect(new Date(row.rows[0].available_until).toISOString()).toBe('2026-08-18T00:00:00.000Z');
+
+    // owner can widen back
+    await service.updateProjectShareUsagePolicy({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+      usagePolicy: { availableFrom: from, availableUntil: until },
+    });
+    row = await pool.query(
+      `SELECT available_from, available_until FROM ai_connection_project_shares
+       WHERE connection_id = $1 AND revoked_at IS NULL`,
+      [conn.id],
+    );
+    expect(new Date(row.rows[0].available_from).toISOString()).toBe(from.toISOString());
+    expect(new Date(row.rows[0].available_until).toISOString()).toBe(until.toISOString());
+
+    // owner can clear
+    await service.updateProjectShareUsagePolicy({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+      usagePolicy: {},
+    });
+    row = await pool.query(
+      `SELECT available_from, available_until FROM ai_connection_project_shares
+       WHERE connection_id = $1 AND revoked_at IS NULL`,
+      [conn.id],
+    );
+    expect(row.rows[0].available_from).toBeNull();
+    expect(row.rows[0].available_until).toBeNull();
+  });
+
+  it('revoke removes active share and preserves history; re-share creates a new online_only row', async () => {
+    const owner = await seedUser('share.revoker');
+    await seedMember('org-001', owner.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    const service = makeService();
+    const conn = await registerDelegatablePersonal(service, 'org-001', owner.id, 'test-personal-persistent');
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+    });
+    await service.setProjectShareMode({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id, mode: 'persistent',
+    });
+    await service.revokeProjectShare({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+    });
+    let rows = await pool.query(
+      `SELECT id, mode, revoked_at FROM ai_connection_project_shares WHERE connection_id = $1 ORDER BY created_at`,
+      [conn.id],
+    );
+    expect(rows.rowCount).toBe(2);
+    expect(rows.rows.every((r) => r.revoked_at !== null)).toBe(true);
+
+    // re-share -> new active online_only row
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+    });
+    rows = await pool.query(
+      `SELECT mode, revoked_at FROM ai_connection_project_shares WHERE connection_id = $1 ORDER BY created_at`,
+      [conn.id],
+    );
+    expect(rows.rowCount).toBe(3);
+    const active = rows.rows.filter((r) => r.revoked_at === null);
+    expect(active.length).toBe(1);
+    expect(active[0].mode).toBe('online_only');
+  });
+
+  it('conflict when trying to enable share while active share already exists', async () => {
+    const owner = await seedUser('share.conflict');
+    await seedMember('org-001', owner.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    const service = makeService();
+    const conn = await registerDelegatablePersonal(service, 'org-001', owner.id);
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+    });
+    await expectServiceError(
+      service.shareConnectionWithProject({
+        organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+      }),
+      'conflict',
+    );
+  });
+
+  it('revoked personal connection cannot be shared', async () => {
+    const owner = await seedUser('share.revoked.conn');
+    await seedMember('org-001', owner.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    const service = makeService();
+    const conn = await registerDelegatablePersonal(service, 'org-001', owner.id);
+    await service.revokeConnection({
+      organisationId: 'org-001', actorUserId: owner.id, connectionId: conn.id,
+    });
+    await expectServiceError(
+      service.shareConnectionWithProject({
+        organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+      }),
+      'conflict',
+    );
+  });
+
+  it('org-scoped connection cannot be shared as a personal project share', async () => {
+    const admin = await seedUser('share.org.only');
+    await seedMember('org-001', admin.id, 'admin');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, admin.id);
+    const service = makeService();
+    const orgConn = await service.registerOrganisationConnection({
+      organisationId: 'org-001', actorUserId: admin.id,
+      connectionFamilyId: 'test-org-api', secretRefId: 'vault:x',
+    });
+    await expectServiceError(
+      service.shareConnectionWithProject({
+        organisationId: 'org-001', actorUserId: admin.id, projectId, connectionId: orgConn.id,
+      }),
+      'forbidden',
+    );
+  });
+
+  it('project must belong to same organisation as connection', async () => {
+    const owner = await seedUser('share.cross.org');
+    await seedMember('org-001', owner.id, 'member');
+    await seedMember('org-002', owner.id, 'member');
+    const projectInOrg2 = await seedProject('org-002');
+    await seedProjectMembership('org-002', projectInOrg2, owner.id);
+    const service = makeService();
+    const conn = await registerDelegatablePersonal(service, 'org-001', owner.id);
+    await expectServiceError(
+      service.shareConnectionWithProject({
+        organisationId: 'org-001', actorUserId: owner.id,
+        projectId: projectInOrg2, connectionId: conn.id,
+      }),
+      'not_found',
+    );
+  });
+
+  it('emits ai.connection.project_share.enabled|mode_changed|policy_changed|revoked audit events', async () => {
+    const owner = await seedUser('share.audit.owner');
+    await seedMember('org-001', owner.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    const service = makeService();
+    const conn = await registerDelegatablePersonal(service, 'org-001', owner.id, 'test-personal-persistent');
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+    });
+    await service.setProjectShareMode({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id, mode: 'persistent',
+    });
+    await service.updateProjectShareUsagePolicy({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+      usagePolicy: { availableFrom: new Date('2026-08-15T00:00:00.000Z') },
+    });
+    await service.revokeProjectShare({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+    });
+
+    const audits = await new AuditRepository(pool).listByOrganisation('org-001');
+    const types = audits.map((e) => e.eventType);
+    expect(types).toContain('ai.connection.project_share.enabled');
+    expect(types).toContain('ai.connection.project_share.mode_changed');
+    expect(types).toContain('ai.connection.project_share.policy_changed');
+    expect(types).toContain('ai.connection.project_share.revoked');
+  });
+
+  it('audit failure rolls back share enable/mode/policy/revoke', async () => {
+    const owner = await seedUser('share.audit.rollback');
+    await seedMember('org-001', owner.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    const service = makeService();
+    const conn = await registerDelegatablePersonal(service, 'org-001', owner.id, 'test-personal-persistent');
+
+    async function withBlockingTrigger(eventType: string, work: () => Promise<void>) {
+      await pool.query(`
+        CREATE FUNCTION reject_share_audit()
+        RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.event_type = '${eventType}' THEN
+            RAISE EXCEPTION 'forced share audit failure';
+          END IF;
+          RETURN NEW;
+        END;
+        $$;
+        CREATE TRIGGER reject_share_audit_trigger
+        BEFORE INSERT ON audit_events
+        FOR EACH ROW EXECUTE FUNCTION reject_share_audit();
+      `);
+      try {
+        await expect(work()).rejects.toThrow(/forced share audit failure/);
+      } finally {
+        await pool.query(`
+          DROP TRIGGER IF EXISTS reject_share_audit_trigger ON audit_events;
+          DROP FUNCTION IF EXISTS reject_share_audit();
+        `);
+      }
+    }
+
+    await withBlockingTrigger('ai.connection.project_share.enabled', async () => {
+      await service.shareConnectionWithProject({
+        organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+      });
+    });
+    let rows = await pool.query(
+      `SELECT id FROM ai_connection_project_shares WHERE connection_id = $1`,
+      [conn.id],
+    );
+    expect(rows.rowCount).toBe(0);
+
+    // Enable for real so subsequent operations have a target
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+    });
+    const activeIdBefore = (
+      await pool.query(
+        `SELECT id FROM ai_connection_project_shares
+         WHERE connection_id = $1 AND revoked_at IS NULL`,
+        [conn.id],
+      )
+    ).rows[0].id;
+
+    await withBlockingTrigger('ai.connection.project_share.mode_changed', async () => {
+      await service.setProjectShareMode({
+        organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id, mode: 'persistent',
+      });
+    });
+    rows = await pool.query(
+      `SELECT id, mode, revoked_at FROM ai_connection_project_shares WHERE connection_id = $1`,
+      [conn.id],
+    );
+    expect(rows.rowCount).toBe(1);
+    expect(rows.rows[0].id).toBe(activeIdBefore);
+    expect(rows.rows[0].mode).toBe('online_only');
+    expect(rows.rows[0].revoked_at).toBeNull();
+
+    await withBlockingTrigger('ai.connection.project_share.policy_changed', async () => {
+      await service.updateProjectShareUsagePolicy({
+        organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+        usagePolicy: { availableFrom: new Date('2026-08-15T00:00:00.000Z') },
+      });
+    });
+    rows = await pool.query(
+      `SELECT available_from FROM ai_connection_project_shares WHERE connection_id = $1 AND revoked_at IS NULL`,
+      [conn.id],
+    );
+    expect(rows.rows[0].available_from).toBeNull();
+
+    await withBlockingTrigger('ai.connection.project_share.revoked', async () => {
+      await service.revokeProjectShare({
+        organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+      });
+    });
+    rows = await pool.query(
+      `SELECT id FROM ai_connection_project_shares WHERE connection_id = $1 AND revoked_at IS NULL`,
+      [conn.id],
+    );
+    expect(rows.rowCount).toBe(1);
   });
 });
