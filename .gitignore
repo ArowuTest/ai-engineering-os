@@ -107,3 +107,7 @@ ecc2/target/
 assets/images/security/badrudi-exploit.mp4
 
 .aider*
+
+# Local Git worktrees
+.worktrees/
+.superpowers/sdd/

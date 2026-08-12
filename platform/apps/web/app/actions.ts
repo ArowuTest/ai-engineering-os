@@ -4,6 +4,7 @@ import { cookies } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import {
+  acceptKnowledgeCandidate,
   addKnowledge,
   appendMessage,
   cancelInvitation,
@@ -17,6 +18,8 @@ import {
   logoutUser,
   ORGANISATION_COOKIE,
   redeemInvitation,
+  rejectKnowledgeCandidate,
+  retryKnowledgeExtraction,
   reviseKnowledge,
   revokeOrganisationAccess,
   revokeProjectAccess,
@@ -114,6 +117,34 @@ export async function sendProductPartnerTurnAction(formData: FormData) {
   const projectId = required(formData, 'projectId');
   await sendProductPartnerTurn(projectId, required(formData, 'content'));
   revalidatePath('/');
+  revalidatePath(`/projects/${projectId}`);
+  // Failed extraction state is reconstructible from durable studio.latestFailedExtractionRun
+  // on the next render — no redirect-only query params.
+}
+
+export async function acceptKnowledgeCandidateAction(formData: FormData) {
+  const projectId = required(formData, 'projectId');
+  const candidateId = required(formData, 'candidateId');
+  const category = required(formData, 'category');
+  const title = required(formData, 'title');
+  const content = required(formData, 'content');
+  await acceptKnowledgeCandidate(projectId, candidateId, { category, title, content });
+  revalidatePath('/');
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function rejectKnowledgeCandidateAction(formData: FormData) {
+  const projectId = required(formData, 'projectId');
+  const candidateId = required(formData, 'candidateId');
+  const reason = String(formData.get('reason') ?? '').trim();
+  await rejectKnowledgeCandidate(projectId, candidateId, reason ? { reason } : {});
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function retryKnowledgeExtractionAction(formData: FormData) {
+  const projectId = required(formData, 'projectId');
+  const runId = required(formData, 'runId');
+  await retryKnowledgeExtraction(projectId, runId);
   revalidatePath(`/projects/${projectId}`);
 }
 

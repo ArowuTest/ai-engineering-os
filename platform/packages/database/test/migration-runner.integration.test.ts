@@ -11,7 +11,13 @@ describe('runMigrations', () => {
     const first = await runMigrations(pool);
     const second = await runMigrations(pool);
 
-    expect(first).toEqual(['001_initial.sql', '002_product_studio.sql', '003_auth_collaboration.sql']);
+    expect(first).toEqual([
+      '001_initial.sql',
+      '002_product_studio.sql',
+      '003_auth_collaboration.sql',
+      '004_extensible_execution_routes.sql',
+      '005_product_knowledge_candidates.sql',
+    ]);
     expect(second).toEqual([]);
 
     const applied = await pool.query<{ name: string }>(
@@ -21,6 +27,8 @@ describe('runMigrations', () => {
       '001_initial.sql',
       '002_product_studio.sql',
       '003_auth_collaboration.sql',
+      '004_extensible_execution_routes.sql',
+      '005_product_knowledge_candidates.sql',
     ]);
   });
 });

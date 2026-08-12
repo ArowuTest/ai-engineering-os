@@ -5,7 +5,7 @@ export const SESSION_COOKIE = 'engineering_os_session';
 export const ORGANISATION_COOKIE = 'engineering_os_organisation';
 export const INVITATION_FLASH_COOKIE = 'engineering_os_invitation_flash';
 
-export type ProductPartner = 'auto' | 'openai' | 'anthropic' | 'google';
+export type ProductPartner = 'auto' | string;
 export type KnowledgeStatus =
   | 'proposed'
   | 'inferred'
@@ -48,7 +48,7 @@ export interface ConversationMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
-  provider?: 'openai' | 'anthropic' | 'google';
+  provider?: string;
   createdAt: string;
 }
 
@@ -58,28 +58,56 @@ export interface StudioState {
   messages: ConversationMessage[];
   knowledge: ProductKnowledge[];
   completeness: ProductCompleteness;
+  viewerProjectRole: ProjectRole | null;
+  latestFailedExtractionRun: KnowledgeExtractionRunSummary | null;
+}
+
+export interface ModelRouteCapabilities {
+  chat: boolean;
+  tools: boolean;
+  vision: boolean;
+  files: boolean;
+  mcp: boolean;
+  localWorkspace: boolean;
+  headless: boolean;
+  structuredOutput: boolean;
 }
 
 export interface ModelRouteSummary {
   id: string;
-  provider: 'openai' | 'anthropic' | 'google';
+  provider: string;
   model: string;
   executionMode: string;
   costType: string;
   available: boolean;
+  capabilities: {
+    chat: boolean;
+    tools: boolean;
+    vision: boolean;
+    files: boolean;
+    mcp: boolean;
+    localWorkspace: boolean;
+    headless: boolean;
+    structuredOutput: boolean;
+  };
 }
 
 export interface ProductPartnerTurnResult {
   userMessage: ConversationMessage;
   assistantMessage: ConversationMessage;
   execution: {
-    provider: 'openai' | 'anthropic' | 'google';
+    provider: string;
     model: string;
     routeId: string;
     executionMode: string;
     costType: string;
     inputTokens?: number;
     outputTokens?: number;
+  };
+  extraction: {
+    runId: string;
+    status: 'succeeded' | 'failed';
+    candidateCount: number;
   };
 }
 
@@ -88,6 +116,69 @@ export interface CurrentIdentity {
   accountId: string;
   userId: string;
   organisations: Array<{ organisationId: string; role: OrganisationRole }>;
+}
+
+export type KnowledgeCandidateStatus = 'pending' | 'accepted' | 'rejected';
+export type KnowledgeCandidateBasis = 'user_stated' | 'assistant_inferred' | 'assistant_recommended';
+export type KnowledgeExtractionRunStatus = 'received' | 'succeeded' | 'failed';
+
+export interface KnowledgeCandidateSummary {
+  id: string;
+  organisationId: string;
+  projectId: string;
+  extractionRunId: string;
+  category: string;
+  title: string;
+  content: string;
+  basis: KnowledgeCandidateBasis;
+  status: KnowledgeCandidateStatus;
+  fingerprint: string;
+  createdAt: string;
+  reviewerId?: string;
+  reviewedAt?: string;
+  acceptedKnowledgeId?: string;
+  rejectionReason?: string;
+  sourceRun: KnowledgeExtractionRunSummary;
+}
+
+export interface KnowledgeExtractionRunSummary {
+  id: string;
+  organisationId: string;
+  projectId: string;
+  conversationId: string;
+  sourceUserMessageId: string;
+  sourceAssistantMessageId: string;
+  provider: string;
+  model: string;
+  routeId: string;
+  responseContractVersion: string;
+  status: KnowledgeExtractionRunStatus;
+  createdAt: string;
+  completedAt?: string;
+  failureCode?: string;
+  failureMessage?: string;
+}
+
+export interface AcceptKnowledgeCandidateInput {
+  category?: string;
+  title?: string;
+  content?: string;
+}
+
+export interface AcceptKnowledgeCandidateResult {
+  candidate: KnowledgeCandidateSummary;
+  knowledge: ProductKnowledge;
+}
+
+export interface RejectKnowledgeCandidateInput {
+  reason?: string;
+}
+
+export interface RetryKnowledgeExtractionResult {
+  originalRunId: string;
+  retryRunId: string;
+  status: 'succeeded' | 'failed';
+  candidateCount: number;
 }
 
 export interface LoginResult {
@@ -186,6 +277,17 @@ export function getCurrentIdentityWithToken(token: string): Promise<CurrentIdent
   });
 }
 
+export async function getCurrentIdentity(): Promise<CurrentIdentity | null> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(SESSION_COOKIE)?.value;
+  if (!token) return null;
+  try {
+    return await getCurrentIdentityWithToken(token);
+  } catch {
+    return null;
+  }
+}
+
 export function logoutUser(): Promise<void> {
   return apiFetch<void>('/auth/logout', { method: 'POST' });
 }
@@ -259,6 +361,46 @@ export function sendProductPartnerTurn(
     method: 'POST',
     body: JSON.stringify({ content }),
   });
+}
+
+export function listKnowledgeCandidates(
+  projectId: string,
+): Promise<KnowledgeCandidateSummary[]> {
+  return apiFetch<KnowledgeCandidateSummary[]>(
+    `/projects/${projectId}/knowledge-candidates?status=pending`,
+  );
+}
+
+export function acceptKnowledgeCandidate(
+  projectId: string,
+  candidateId: string,
+  input: AcceptKnowledgeCandidateInput = {},
+): Promise<AcceptKnowledgeCandidateResult> {
+  return apiFetch<AcceptKnowledgeCandidateResult>(
+    `/projects/${projectId}/knowledge-candidates/${candidateId}/accept`,
+    { method: 'POST', body: JSON.stringify(input) },
+  );
+}
+
+export function rejectKnowledgeCandidate(
+  projectId: string,
+  candidateId: string,
+  input: RejectKnowledgeCandidateInput = {},
+): Promise<{ candidate: KnowledgeCandidateSummary }> {
+  return apiFetch<{ candidate: KnowledgeCandidateSummary }>(
+    `/projects/${projectId}/knowledge-candidates/${candidateId}/reject`,
+    { method: 'POST', body: JSON.stringify(input) },
+  );
+}
+
+export function retryKnowledgeExtraction(
+  projectId: string,
+  runId: string,
+): Promise<RetryKnowledgeExtractionResult> {
+  return apiFetch<RetryKnowledgeExtractionResult>(
+    `/projects/${projectId}/extraction-runs/${runId}/retry`,
+    { method: 'POST' },
+  );
 }
 
 export function listPeople(): Promise<AdminPerson[]> {

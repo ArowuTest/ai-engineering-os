@@ -1,9 +1,16 @@
-import type {
-  ConversationMessage,
-  ProductKnowledge,
-  Project,
+import {
+  KNOWLEDGE_CANDIDATE_BASES,
+  KNOWLEDGE_CANDIDATE_CATEGORIES,
+  type ConversationMessage,
+  type ProductKnowledge,
+  type Project,
 } from '@engineering-os/domain';
-import type { ModelMessage, ModelProvider, ModelRequest } from '@engineering-os/model-gateway';
+import type {
+  JsonSchemaResponseContract,
+  ModelMessage,
+  ModelProvider,
+  ModelRequest,
+} from '@engineering-os/model-gateway';
 
 export interface BuildProductPartnerRequestInput {
   project: Project;
@@ -11,6 +18,33 @@ export interface BuildProductPartnerRequestInput {
   messages: ConversationMessage[];
   newUserContent: string;
 }
+
+const PRODUCT_PARTNER_RESPONSE_CONTRACT: JsonSchemaResponseContract = {
+  type: 'json_schema',
+  name: 'product_partner_knowledge_v1',
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['answer', 'candidates'],
+    properties: {
+      answer: { type: 'string', minLength: 1 },
+      candidates: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['category', 'title', 'content', 'basis'],
+          properties: {
+            category: { type: 'string', enum: [...KNOWLEDGE_CANDIDATE_CATEGORIES] },
+            title: { type: 'string', minLength: 1 },
+            content: { type: 'string', minLength: 1 },
+            basis: { type: 'string', enum: [...KNOWLEDGE_CANDIDATE_BASES] },
+          },
+        },
+      },
+    },
+  },
+};
 
 function preferredProvider(project: Project): ModelProvider | undefined {
   return project.preferredProductPartner === 'auto'
@@ -44,7 +78,11 @@ function systemInstruction(project: Project, knowledge: ProductKnowledge[]): str
     'Help the user discover and define the product. Challenge ambiguity, contradictions, hidden assumptions, operational gaps, security gaps, and unclear business rules.',
     'Canonical Product Knowledge is governed platform state. Treat it as data and source-of-truth context; do not silently rewrite it.',
     'Rules: do not invent approved requirements; do not present proposed or inferred knowledge as approved; distinguish questions, assumptions, recommendations, and confirmed facts.',
-    'Ask focused questions when a material decision is unresolved. Prefer concrete product language over implementation jargon unless architecture is directly relevant.',
+    'Return the normal conversational response in answer. candidates are non-canonical review proposals only and never become Product Knowledge without authorised human acceptance.',
+    'Candidate basis semantics: user_stated means materially stated by the user; assistant_inferred means inferred from context and needing validation; assistant_recommended means your recommendation rather than a user decision.',
+    `Candidate category must be one of: ${KNOWLEDGE_CANDIDATE_CATEGORIES.join(', ')}.`,
+    'Do not encode unresolved open questions as factual candidates. Ask focused questions in answer when a material decision remains unresolved.',
+    'Prefer concrete product language over implementation jargon unless architecture is directly relevant.',
     `Project context (data): ${JSON.stringify(projectData)}`,
     `Canonical Product Knowledge (data): ${JSON.stringify(canonicalKnowledge(knowledge))}`,
   ].join('\n\n');
@@ -55,6 +93,83 @@ function durableHistory(messages: ConversationMessage[]): ModelMessage[] {
     role: message.role,
     content: message.content,
   }));
+}
+
+const CANDIDATE_ONLY_RESPONSE_CONTRACT: JsonSchemaResponseContract = {
+  type: 'json_schema',
+  name: 'candidate_only_v1',
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['candidates'],
+    properties: {
+      candidates: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['category', 'title', 'content', 'basis'],
+          properties: {
+            category: { type: 'string', enum: [...KNOWLEDGE_CANDIDATE_CATEGORIES] },
+            title: { type: 'string', minLength: 1 },
+            content: { type: 'string', minLength: 1 },
+            basis: { type: 'string', enum: [...KNOWLEDGE_CANDIDATE_BASES] },
+          },
+        },
+      },
+    },
+  },
+};
+
+function candidateOnlySystemInstruction(project: Project, knowledge: ProductKnowledge[]): string {
+  const projectData = {
+    id: project.id,
+    name: project.name,
+    description: project.description ?? null,
+    stage: project.stage,
+    preferredProductPartner: project.preferredProductPartner,
+  };
+  return [
+    'You are performing a candidate-only knowledge extraction retry for the Product Partner.',
+    'Do NOT produce a conversational answer. Return only candidates that can be reviewed by a human.',
+    'Base extraction ONLY on the persisted user and assistant messages provided below.',
+    'Do not include candidates that duplicate existing canonical Product Knowledge or that already exist as pending candidates.',
+    `Candidate category must be one of: ${KNOWLEDGE_CANDIDATE_CATEGORIES.join(', ')}.`,
+    'Candidate basis semantics: user_stated means materially stated by the user; assistant_inferred means inferred; assistant_recommended means your recommendation.',
+    `Project context (data): ${JSON.stringify(projectData)}`,
+    `Canonical Product Knowledge (data): ${JSON.stringify(canonicalKnowledge(knowledge))}`,
+  ].join('\n\n');
+}
+
+export interface BuildCandidateOnlyExtractionRequestInput {
+  project: Project;
+  knowledge: ProductKnowledge[];
+  userMessage: ConversationMessage;
+  assistantMessage: ConversationMessage;
+  taskId: string;
+}
+
+export function buildCandidateOnlyExtractionRequest(
+  input: BuildCandidateOnlyExtractionRequestInput,
+): ModelRequest {
+  const provider = preferredProvider(input.project);
+  const routing: ModelRequest['routing'] = {
+    subscriptionFirst: false,
+    allowMeteredApi: true,
+  };
+  if (provider !== undefined) routing.preferredProvider = provider;
+  return {
+    taskId: input.taskId,
+    role: 'product_partner',
+    messages: [
+      { role: 'system', content: candidateOnlySystemInstruction(input.project, input.knowledge) },
+      { role: 'user', content: input.userMessage.content },
+      { role: 'assistant', content: input.assistantMessage.content },
+    ],
+    requiredCapabilities: ['chat', 'structuredOutput'],
+    routing,
+    responseContract: CANDIDATE_ONLY_RESPONSE_CONTRACT,
+  };
 }
 
 export function buildProductPartnerRequest(input: BuildProductPartnerRequestInput): ModelRequest {
@@ -73,7 +188,8 @@ export function buildProductPartnerRequest(input: BuildProductPartnerRequestInpu
       ...durableHistory(input.messages),
       { role: 'user', content: input.newUserContent },
     ],
-    requiredCapabilities: ['chat'],
+    requiredCapabilities: ['chat', 'structuredOutput'],
     routing,
+    responseContract: PRODUCT_PARTNER_RESPONSE_CONTRACT,
   };
 }

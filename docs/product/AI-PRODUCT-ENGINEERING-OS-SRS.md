@@ -1,16 +1,35 @@
 # AI Product & Engineering Operating System
 ## Product Requirements & Software Requirements Specification
 
-**Document version:** 1.2
-**Status:** Approved baseline for V1 planning  
-**Date:** 9 August 2026  
-**Working name:** AI Engineering OS  
+**Document version:** 1.3
+**Status:** Approved baseline for V1 planning
+**Date:** 11 August 2026
+**Working name:** AI Engineering OS
 **Parent initiative:** Private AI-native product and software engineering platform
+**Execution design:** `docs/superpowers/specs/2026-08-11-extensible-ai-execution-routing-and-shared-entitlements-design.md`
 
 ## 0. Change record
 
+### Version 1.3
+
+This revision incorporates the approved extensible AI execution, harness and shared-entitlement requirements while preserving the current V1 Product Studio sequence:
+
+1. Provider, model, execution route, harness, agent, skill, tool, connection and runner are separate product concepts.
+2. Core contracts shall support an extensible provider/model/route catalogue rather than imposing a three-provider ceiling. OpenAI, Anthropic and Google remain the initial provider families, not the domain limit.
+3. Multiple models and execution routes may coexist for one provider. Route capability is evaluated per concrete route.
+4. Review-first Product Knowledge extraction requires explicit structured-output capability and must not infer that capability from provider identity.
+5. ECC's existing agent/skill substrate is reused through the private ECC adapter; agent definitions are assignable independently of provider/model/harness.
+6. AI Engineering OS remains the master orchestrator. Hermes, Codex, Claude Code, Antigravity, OpenCode and future harnesses are replaceable execution surfaces rather than sources of canonical project truth.
+7. Personal AI connections remain owned by the individual who authenticated them; organisation-owned AI connections are separate resources.
+8. Personal AI connections default to **Do Not Share**. When a user opts into project sharing the default is **Online Only**; **Persistent** availability requires an explicit owner toggle and a suitable authorised persistent runner.
+9. Once an eligible connection is shared with a project, authorised collaborators may benefit from it automatically through the orchestrator, subject to project RBAC, owner limits and provider/account/harness delegation eligibility. Credentials are never exposed to collaborators.
+10. The requester's own eligible connection is preferred before contributed project capacity under ordinary routing policy. Multiple contributed connections form a shared pool selected by capability, health, quota/availability, cost/risk and policy rather than always consuming the project owner's connection first.
+11. User sign-out, connection revocation, runner loss or provider failure shall not delete or strand durable project state.
+12. The immediate delivery sequence is: routing-foundation generalisation → review-first Product Knowledge extraction → connection/delegation administration → subscription Agent Bridge/harness adapters → ECC-backed Engineering Studio execution.
+
 ### Version 1.2
-This revision adds the approved V1 authentication and collaboration requirements:
+
+This revision added the approved V1 authentication and collaboration requirements:
 
 1. Permanent login is **User ID + password only**; email is not required for V1.
 2. New users join through an administrator-generated **single-use invitation key**.
@@ -20,8 +39,10 @@ This revision adds the approved V1 authentication and collaboration requirements
 6. Administrators may revoke organisation access, remove a user from selected projects, suspend an account, and invalidate active sessions immediately.
 7. Authentication, invitation, membership, role and revocation events are auditable.
 8. Multiple independent projects and multiple product-discovery conversation sessions are supported while canonical Product Knowledge remains project-scoped.
+
 ### Version 1.1
-This revision incorporates the decisions made after the original v1.0 requirements discussion:
+
+This revision incorporated the decisions made after the original v1.0 requirements discussion:
 
 1. The product will be based on an **independent private derivative of the official `affaan-m/ECC` repository**, not a GitHub public fork.
 2. The private repository will retain the exact ECC baseline commit and use the official ECC repository only as a **read-only upstream source for candidate updates**.
@@ -71,13 +92,16 @@ RELEASE APPROVAL
 DEPLOYMENT
 ```
 
-The platform shall support multiple AI providers including OpenAI, Anthropic and Google. Models shall be assignable to roles rather than permanently tied to roles.
+The platform shall support an extensible catalogue of AI providers, models and execution routes. OpenAI, Anthropic and Google are the initial provider families. Models and routes shall be assignable to roles rather than permanently tied to roles.
+
+Agent definitions and execution harnesses are also independent from provider identity. An ECC code reviewer may run through Codex, Claude Code or another eligible harness; Hermes may act as an operator/runtime harness without becoming another model provider.
 
 Examples:
 
 - ChatGPT/OpenAI Product Partner → Claude Engineer → OpenAI Reviewer.
 - Claude Product Partner → OpenAI Engineer → Claude Reviewer.
 - Gemini/Antigravity UI specialist → Claude engineering reviewer.
+- ECC security-reviewer agent → eligible independent provider/harness selected by policy.
 - High-risk payment work → Engineer plus two independent reviewers.
 
 The system is intended to feel like an **AI software company in a box**, not merely a coding assistant.
@@ -133,31 +157,37 @@ The Product Owner should not normally need to operate:
 A short prompt is not sufficient authority to build a complex application. Product discovery and requirements maturity come first.
 
 ## 3.2 Project state is permanent; sessions are temporary
-No project shall depend on one long ChatGPT, Claude, Gemini or Codex conversation remaining available.
+No project shall depend on one long ChatGPT, Claude, Gemini, Codex, Hermes or other harness/session remaining available.
 
 ## 3.3 Models are workers, not the source of truth
 The canonical Product Knowledge Store, approved Product Package, repository and task state belong to the platform.
 
-## 3.4 Provider independence
-Core business workflows shall not assume that Claude always engineers, Codex always handles backend work, or Gemini always handles frontend work.
+## 3.4 Provider, model, harness and agent independence
+Core business workflows shall not assume that Claude always engineers, Codex always handles backend work, Gemini always handles frontend work, or any ECC agent definition belongs permanently to one model/harness.
 
 ## 3.5 Independent review
 An Engineer shall not be able to silently mark its own material work as independently approved.
 
 ## 3.6 Subscription-first execution
-Where officially supported, existing user subscription entitlements should be preferred before separately metered API execution.
+Where officially supported, eligible user or organisation subscription entitlements should be preferred before separately metered API execution, subject to capability, availability, delegation and project policy.
 
 ## 3.7 No provider restriction bypass
-The system shall not imitate private browser sessions, scrape consumer chat applications or otherwise bypass provider terms to turn consumer subscriptions into unofficial APIs.
+The system shall not imitate private browser sessions, scrape consumer chat applications, forward another user's credentials or otherwise bypass provider terms to turn consumer subscriptions into unofficial APIs.
 
 ## 3.8 Context efficiency
 Only task-relevant documents, code, skills and MCP tools should be loaded into an agent context.
 
 ## 3.9 Least privilege
-Agents receive only the capabilities and credentials required for a task.
+Agents, harnesses, runners and collaborators receive only the capabilities and credentials required for a task.
 
 ## 3.10 Human approval at consequential gates
 Product baselines, security waivers, significant paid API use and production deployments require policy-controlled human approval by default.
+
+## 3.11 Connection ownership is not project ownership
+A personal AI connection remains owned by the individual who authenticated it. Project sharing delegates eligible execution capacity to the orchestrator without transferring provider credentials or ownership.
+
+## 3.12 Collaboration survives individual availability
+User sign-out, connection loss, model switching, runner failure or collaborator departure shall not delete canonical project state or prevent other authorised collaborators from continuing through another eligible execution route.
 
 ---
 
@@ -183,6 +213,8 @@ Relevant ECC capabilities include:
 - MCP inventory;
 - worktree lifecycle management;
 - continuous-learning patterns.
+
+ECC agent definitions and skills are reusable capabilities. The private platform shall enumerate and select approved ECC assets through a narrow adapter rather than recreating the complete agent catalogue as hard-coded private roles.
 
 ## 4.2 Independent private derivative
 The project shall **not** use GitHub's public fork mechanism.
@@ -251,6 +283,7 @@ The update analyser should distinguish:
 - orchestration changes;
 - session/worktree changes;
 - provider adapter changes;
+- harness/runner changes;
 - files conflicting with private platform extensions.
 
 ## 4.5 Separation from ECC core
@@ -359,16 +392,19 @@ Each tool shall declare:
 # 7. User Roles
 
 ## 7.1 Platform Owner
-May configure providers, security policy, budgets, trusted skills, MCPs and infrastructure integrations.
+May configure providers, model/route catalogues, organisation AI connections, security policy, budgets, trusted skills, MCPs and infrastructure integrations.
 
 ## 7.2 Product Owner
-May create products, conduct product discovery, review requirements, approve Product Packages, submit changes, monitor builds and approve releases.
+May create products, conduct product discovery, review requirements and extraction candidates, approve Product Packages, submit changes, monitor builds and approve releases.
 
 ## 7.3 Technical Administrator
 May manage deployment/integration configuration, investigate execution failures and approve technical exceptions.
 
 ## 7.4 Human Engineer / Reviewer
 Future and optional role that may participate in code, review and release workflows.
+
+## 7.5 Connection Owner
+A user who authenticates a personal AI connection owns that connection's project-sharing scope and may enable, change or revoke eligible sharing subject to organisation policy. Other project members cannot widen that user's sharing scope.
 
 ---
 
@@ -383,6 +419,9 @@ Turns an approved Product Package into tested source code and previews.
 ## 8.3 Review & QA Studio
 Independently evaluates implementation correctness, security and requirement coverage.
 
+## 8.4 Administration / AI Connections
+Manages organisation provider configuration and, in the later connection/delegation slice, user-owned AI connections, project sharing, runner status and route availability without exposing provider credentials to collaborators.
+
 ---
 
 # 9. Product Studio Functional Requirements
@@ -391,7 +430,7 @@ Independently evaluates implementation correctness, security and requirement cov
 The Product Owner shall be able to create a new greenfield project or connect an existing application.
 
 ## PS-002 Select Product Partner
-The Product Owner shall be able to select OpenAI, Claude, Gemini or Auto Select as the Product Partner.
+The initial Product Studio shall present OpenAI, Claude, Gemini or Auto Select as Product Partner choices. These initial choices shall not impose a closed provider domain; later approved providers/models/routes may be added through the execution-route registry without changing canonical project-state semantics.
 
 ## PS-003 Natural-language discovery
 The Product Partner shall discuss the business/product before finalising an SRS.
@@ -421,13 +460,13 @@ Material facts and decisions from conversations shall be extracted as structured
 AI-extracted requirements, business rules, assumptions, risks, decisions and other product facts shall enter a candidate review queue first. AI extraction alone shall **not** create or modify canonical Product Knowledge. A candidate becomes canonical only after an authorised user explicitly accepts it; rejected candidates remain non-canonical review evidence.
 
 ## PS-004B Automatic extraction trigger
-After every successful live Product Partner turn, the platform shall automatically attempt to extract structured Product Knowledge candidates. The normal execution path should obtain the conversational answer and candidate set within the same provider operation where the selected provider/model supports the approved structured-output contract. Extraction failure shall not silently promote knowledge or erase an otherwise successful conversation turn.
+After every successful live Product Partner turn, the platform shall automatically attempt to extract structured Product Knowledge candidates. The normal execution path should obtain the conversational answer and candidate set within the same model operation where the selected concrete route explicitly supports the approved structured-output contract. Extraction capability shall not be inferred from provider name. Extraction failure shall not silently promote knowledge or erase an otherwise successful conversation turn.
 
 ## PS-005 Knowledge status
 Knowledge records shall support at least Proposed, Inferred, Confirmed, Approved, Superseded and Rejected states.
 
-## PS-006 Model switching
-The Product Owner may switch Product Partner without losing agreed project understanding.
+## PS-006 Model/route switching
+The Product Owner may switch Product Partner model/provider/eligible route without losing agreed project understanding.
 
 ## PS-007 Cross-model challenge
 The Product Owner may ask another model to challenge requirements, architecture, business rules or UI/UX.
@@ -560,7 +599,7 @@ Review Finding
 Release
 ```
 
-Examples: `AUTH-FR-001`, `PAY-FR-014`, `STREAM-NFR-006`.
+Examples: `AUTH-FR-001`, `AI-CONN-FR-001`, `PAY-FR-014`, `STREAM-NFR-006`.
 
 ---
 
@@ -591,8 +630,8 @@ The platform shall decompose the approved Product Package into a task graph of e
 ## ENG-002 Role assignment
 Engineering tasks shall be assigned to logical roles such as Principal Engineer, Backend Engineer, Frontend Engineer, Database Engineer, Test Engineer or Security Engineer.
 
-## ENG-003 Provider independence
-A role may be fulfilled by any provider route whose capabilities satisfy the task.
+## ENG-003 Execution independence
+A role may be fulfilled by any approved agent/model/provider/harness/route combination whose capabilities and permissions satisfy the task. ECC agent definitions shall not be permanently coupled to one provider or harness.
 
 ## ENG-004 Plan before significant change
 Material tasks require an implementation plan identifying affected components, tests, migrations, security concerns and rollback implications.
@@ -607,7 +646,7 @@ Engineering must occur in an isolated sandbox/worktree rather than unrestricted 
 Every material execution shall persist current status, changed files, tests, outstanding work, risks and source revision.
 
 ## ENG-008 Handoff
-A different model/provider shall be able to resume work from the durable project/task checkpoint.
+A different model/provider/harness shall be able to resume work from the durable project/task checkpoint without requiring the previous worker's private provider conversation.
 
 ---
 
@@ -617,7 +656,7 @@ A different model/provider shall be able to resume work from the durable project
 Material work shall be reviewed in a fresh context.
 
 ## REV-002 Cross-provider preference
-Default policy: Engineer Provider != Reviewer Provider where a suitable alternative is available.
+Default policy: Engineer Provider != Reviewer Provider where a suitable alternative is available. The orchestrator may additionally use harness/agent separation as policy evidence but provider difference remains the default preference for material independent review.
 
 ## REV-003 Reviewer context isolation
 Reviewer receives requirements, acceptance criteria, architecture, code/diff, tests and policies, but not unnecessary engineer reasoning/confidence statements.
@@ -672,20 +711,27 @@ Natural-language preview feedback shall be routed through controlled change anal
 
 ---
 
-# 20. Model Gateway Requirements
+# 20. Execution Gateway Requirements
 
 The platform shall expose a provider-independent internal interface for:
 
-- session creation;
+- provider/model/route identity;
+- session creation where applicable;
 - message/turn execution;
+- structured-output contracts;
 - tool attachment;
 - file/context attachment;
 - cancellation;
-- health/capabilities;
+- route health/capabilities;
 - usage/cost metadata;
-- provider session references.
+- provider/harness session references;
+- later connection/runner metadata where applicable.
 
-Core platform modules shall not call provider-specific APIs directly outside provider adapters.
+The gateway shall support multiple routes/models per provider and stable extensible provider identifiers. The presence of OpenAI, Anthropic and Google adapters shall not impose a closed provider type on core domain contracts.
+
+Capabilities shall belong to concrete routes. At minimum the architecture shall be able to represent chat, structured output, tools, files, vision, MCP, local workspace, shell/command execution, headless execution, checkpoint/resume, persistent-runner support, cancellation and usage/quota telemetry where available.
+
+Core platform modules shall not call provider-specific APIs or harness internals directly outside approved adapters.
 
 ---
 
@@ -693,10 +739,13 @@ Core platform modules shall not call provider-specific APIs directly outside pro
 
 The platform shall support:
 
-1. **Subscription First** — use officially supported subscription-backed execution where possible.
-2. **API** — use provider API execution.
-3. **Hybrid** — subscription first, alternate subscription second, API fallback subject to policy.
-4. **Manual/Interactive Handoff** — prepare a portable package for interactive work where programmatic subscription execution is unavailable.
+1. **Personal Subscription** — use an eligible user-owned provider/harness entitlement where officially supported and authorised for the task/project.
+2. **Organisation Subscription/Enterprise** — use eligible organisation-owned capacity according to policy.
+3. **API** — use provider API execution with separate metered/credit classification.
+4. **Hybrid / Auto** — select among eligible personal, project-contributed, organisation and API routes according to capability, availability, risk, review and cost policy.
+5. **Manual/Interactive Handoff** — prepare a portable package where programmatic execution is unavailable.
+
+Personal subscription execution shall not mean scraping a consumer chat application or transferring another user's login credentials.
 
 ---
 
@@ -708,11 +757,16 @@ The platform shall support:
 - project budget;
 - provider budget;
 - per-task approval threshold;
+- subscription-first preference where eligible;
+- requester's-own-route-first policy under ordinary collaborator-initiated work;
+- eligible project-contributed connection pool;
+- organisation subscription/enterprise fallback;
 - "switch provider before API" policy;
 - "ask before paid API" policy;
+- connection-owner usage contribution limits where enforceable;
 - usage classification into subscription-included, separate credits, API metered, infrastructure and external-tool spend.
 
-The system shall never assume ordinary consumer chat subscription usage is equivalent to API billing.
+The system shall never assume ordinary consumer chat subscription usage is equivalent to API billing or claim a precise remaining subscription percentage unless the provider exposes sufficient telemetry.
 
 ---
 
@@ -729,6 +783,8 @@ For each task, the platform shall construct a bounded context using only relevan
 - tool definitions.
 
 Context exhaustion is an expected runtime condition. The system shall checkpoint and resume rather than lose work.
+
+A provider/harness session is not the canonical memory layer. Switching or losing an execution route shall rebuild context from platform-owned project/task state and repository evidence.
 
 ---
 
@@ -781,9 +837,16 @@ The platform shall implement:
 - dependency scanning;
 - audit logging;
 - production deployment gates;
-- prompt-injection-aware data boundaries.
+- prompt-injection-aware data boundaries;
+- user ownership of personal AI connections;
+- explicit project-scoped delegation rather than credential sharing;
+- separate scoped/revocable runner credentials for Agent Bridge processes;
+- immediate connection/share revocation for new executions;
+- organisation policy able to restrict personal AI use without silently enabling sharing.
 
 External text, repository content, web pages, tool output and uploaded documents are data by default, not trusted platform instructions.
+
+Provider credentials, refresh tokens and personal provider session material shall never be written into Product Knowledge, conversations, audit metadata, task prompts or repository files, and shall never be exposed to collaborators.
 
 ---
 
@@ -794,17 +857,21 @@ Example default permissions:
 **Engineer**
 - read/write approved workspace;
 - run tests/build;
+- use only orchestrator-authorised model/harness/tool routes;
 - no unrestricted production deployment.
 
 **Reviewer**
 - read source/diff;
 - run tests;
 - create findings;
+- use only reviewer-authorised routes/tools;
 - no deployment authority.
 
 **Deployment Agent**
 - deploy an already approved revision only;
 - cannot rewrite engineering scope.
+
+A shared AI connection does not grant a project member any additional product/project permission beyond their existing role.
 
 ---
 
@@ -814,15 +881,22 @@ The system shall append audit events for:
 
 - Product Package approvals;
 - requirement changes;
-- model assignments;
-- provider route changes;
+- model/agent assignments;
+- provider/execution route changes;
 - skill installations/upgrades;
 - MCP activation;
 - tool writes;
 - code revisions;
 - review findings and waivers;
 - releases;
-- production deployment.
+- production deployment;
+- AI connection registration/disconnection/revocation;
+- project share enabled/mode changed/revoked;
+- material runner trust/capability changes;
+- contributed-route execution selection/fallback/failure;
+- usage-limit or policy blocks.
+
+Audit metadata shall use safe identifiers and shall never contain provider credentials or hidden model reasoning.
 
 ---
 
@@ -836,6 +910,9 @@ Provide Product, Requirements, Documents, Engineering, Review, QA, Preview, Chan
 
 ## Project chat
 Questions such as "Why has payment not completed?" must be answered from durable project/task state rather than guessed from conversation context.
+
+## AI connection status
+When the connection/delegation slice is implemented, authorised users shall be able to distinguish private, shared Online Only, shared Persistent, runner-offline, quota/rate-limited, re-authentication-required and revoked/disabled connection states without seeing another user's provider secrets.
 
 ---
 
@@ -854,7 +931,7 @@ Future policy-controlled mode with broader autonomous authority.
 
 # 31. Stop Conditions
 
-Agents must stop/escalate when:
+Agents/orchestration must stop or safely reroute/escalate when:
 
 - requirements materially conflict;
 - required secrets are unavailable;
@@ -862,27 +939,34 @@ Agents must stop/escalate when:
 - security policy fails;
 - migrations exceed permitted risk;
 - required tests repeatedly fail;
-- cost policy is reached;
-- provider/tool is unavailable and no safe fallback exists;
+- cost/usage policy is reached;
+- provider/model/route/harness/runner is unavailable and no safe fallback exists;
+- a contributed personal route is not delegatable under provider/account/harness policy;
 - production approval is required.
 
 ---
 
 # 32. Data and Storage Requirements
 
-The platform shall maintain:
+The platform shall maintain, as required by the active delivery slice:
 
 - relational project state;
-- product knowledge;
+- Product Knowledge and revisions;
+- extraction runs and non-canonical knowledge candidates;
 - requirements;
 - documents and versions;
-- provider sessions and executions;
+- conversations/messages;
+- provider/model/route executions and usage evidence;
 - task checkpoints;
 - skills and tool registry;
 - review findings;
 - tests;
 - cost events;
-- audit events.
+- audit events;
+- later personal/organisation AI connection records;
+- later project connection-sharing records;
+- later authorised runner/Agent Bridge records;
+- later common execution evidence linking requester, route, agent/harness and outcome without exposing secrets.
 
 Large artefacts shall use object storage rather than being embedded directly in relational rows.
 
@@ -891,22 +975,22 @@ Large artefacts shall use object storage rather than being embedded directly in 
 # 33. Non-Functional Requirements
 
 ## NFR-001 Security
-Least privilege and tenant isolation are mandatory.
+Least privilege, credential isolation and tenant/project isolation are mandatory.
 
 ## NFR-002 Maintainability
-Provider, skill, MCP and sandbox integrations shall use modular interfaces.
+Provider, model, route, harness, connection, skill, MCP and sandbox integrations shall use modular interfaces.
 
 ## NFR-003 Portability
-No core workflow shall require one cloud, LLM or deployment vendor.
+No core workflow shall require one cloud, LLM, harness or deployment vendor.
 
 ## NFR-004 Observability
-Task state, errors, provider calls, tool actions, tests and deployments shall be observable.
+Task state, errors, route selection, provider/model/harness execution, tool actions, tests and deployments shall be observable at an appropriate product level.
 
 ## NFR-005 Scalability
 Architecture shall support multiple projects and concurrent jobs while preserving project isolation.
 
 ## NFR-006 Resilience
-Provider limits, context limits, outages and session loss must not corrupt canonical project state.
+Provider limits, context limits, route outages, runner loss, user sign-out and session loss must not corrupt canonical project state.
 
 ## NFR-007 Explainability at product level
 The Product Owner must be able to understand what is happening without needing private chain-of-thought or low-level terminal output.
@@ -915,7 +999,7 @@ The Product Owner must be able to understand what is happening without needing p
 
 # 34. V1 Scope
 
-V1 shall prove the Product Studio and model-independent project-memory concept.
+V1 shall prove the Product Studio and model-independent project-memory concept while ensuring the execution contracts do not create a future three-provider/harness dead end.
 
 Required V1 outcomes:
 
@@ -923,12 +1007,16 @@ Required V1 outcomes:
 - upstream baseline/provenance recorded;
 - project creation;
 - Product Partner conversation abstraction;
-- provider-independent model gateway contract;
+- extensible provider-independent execution gateway contract;
+- multiple route IDs/models per provider supported by core contracts;
+- explicit structured-output route capability;
+- current OpenAI/Anthropic/Google API adapters retained as initial metered routes;
 - canonical Product Knowledge Store;
+- review-first automatic Product Knowledge extraction and candidate queue;
+- Product Owner candidate review/promotion/rejection with audit;
 - document upload metadata/storage contract;
-- requirements/knowledge extraction pipeline;
 - Product Package generation/versioning;
-- model switching without loss of canonical project state;
+- model/route switching without loss of canonical project state;
 - initial skill registry based on ECC;
 - initial MCP registry;
 - audit trail;
@@ -939,7 +1027,7 @@ Required V1 outcomes:
 - session revocation, account suspension and project-specific access removal;
 - People & Access administration.
 
-Full autonomous engineering is not required to prove V1.
+Full personal connection administration, Agent Bridge, subscription harness adapters and autonomous engineering are not required to complete the immediate V1 extraction slice.
 
 ---
 
@@ -949,7 +1037,8 @@ Engineering Studio:
 
 - GitHub project repository creation/import;
 - task graph;
-- ECC-backed engineering roles;
+- approved ECC agent/skill enumeration through the private ECC adapter;
+- agent definitions selected independently of provider/model/harness;
 - worktrees;
 - secure execution sandbox;
 - TDD/build/test;
@@ -967,20 +1056,28 @@ Review & QA:
 - findings/fix/re-review;
 - Playwright E2E;
 - security review;
-- requirement traceability gates.
+- requirement traceability gates;
+- provider/route/harness evidence sufficient to demonstrate configured review independence.
 
 ---
 
 # 37. V4 Scope
 
-Subscription-first orchestration:
+Subscription-first and shared-entitlement orchestration:
 
+- personal and organisation AI connection administration;
 - provider subscription connectors supported by official mechanisms;
-- local Agent Bridge where needed;
-- provider capability registry;
+- Do Not Share / Online Only / Persistent project-sharing modes;
+- orchestrator-controlled project execution pools;
+- connection-owner usage limits where enforceable;
+- provider/account/harness delegation-eligibility rules;
+- local or managed Agent Bridge where needed;
+- runner registration, scoped authentication, health and revocation;
+- Codex, Claude Code, Antigravity and other supported harness adapters incrementally;
+- provider/model/route/harness capability registry;
 - quota/availability-aware routing;
-- API fallback policy;
-- automated provider handoff.
+- organisation and API fallback policy;
+- automated provider/model/harness handoff from durable project/task state.
 
 ---
 
@@ -993,7 +1090,8 @@ Capability intelligence:
 - automated compatibility/security evaluation;
 - dynamic MCP selection;
 - project-specific skill generation;
-- controlled cross-project learning/promotion.
+- controlled cross-project learning/promotion;
+- more advanced policy scoring across agents, models, harnesses, connection pools and cost/performance evidence.
 
 ---
 
@@ -1004,23 +1102,27 @@ The target architecture must eventually demonstrate:
 1. Product Owner creates a project.
 2. Selects OpenAI as Product Partner.
 3. Discusses an idea.
-4. Platform persists product knowledge outside raw chat history.
-5. Product Owner switches to Claude.
-6. Claude receives the canonical project context and challenges requirements.
-7. Gemini/Antigravity contributes UI/UX analysis.
-8. Platform generates Product Package v1.0.
-9. Product Owner approves it.
-10. Claude is assigned Engineer.
-11. Claude implements a feature in an isolated worktree/sandbox.
-12. Durable checkpoint is recorded.
-13. OpenAI independently reviews the change.
-14. Reviewer finds a defect.
-15. Engineer fixes it and adds/updates tests.
-16. Reviewer re-checks.
-17. Automated tests and E2E pass.
-18. Product Owner opens live preview.
-19. Product Owner approves production release.
-20. All material decisions and evidence are auditable.
+4. Platform persists the successful conversation and produces non-canonical Product Knowledge candidates through an eligible structured-output route.
+5. Product Owner accepts selected candidates into canonical Product Knowledge.
+6. Product Owner switches to Claude.
+7. Claude receives canonical project context and challenges requirements without relying on the previous provider session.
+8. Gemini/Antigravity contributes UI/UX analysis through an eligible route/harness.
+9. Platform generates Product Package v1.0.
+10. Product Owner approves it.
+11. An approved ECC engineering agent is assigned independently of provider/harness.
+12. The orchestrator selects an eligible engineering route and isolated worktree/sandbox.
+13. Durable checkpoint is recorded.
+14. An independent reviewer route is selected according to policy.
+15. Reviewer finds a defect.
+16. Engineer fixes it and adds/updates tests.
+17. Reviewer re-checks.
+18. Automated tests and E2E pass.
+19. Product Owner opens live preview.
+20. Product Owner approves production release.
+21. A collaborator may continue the project after another collaborator signs out because canonical state is project-owned.
+22. Where later subscription sharing is enabled, a collaborator's own eligible connection is preferred before eligible contributed project capacity under ordinary routing policy.
+23. Revoking a contributed personal connection blocks new use without deleting historical project evidence.
+24. All material decisions, execution routes and evidence are auditable without exposing provider credentials.
 
 ---
 
@@ -1056,20 +1158,83 @@ Invitation creation/redemption/cancellation/expiry, login/logout, account suspen
 ## AUTH-FR-010 Multiple products and discovery sessions
 A user may belong to multiple projects subject to access control. Each project shall retain independent Product Knowledge, documents, requirements, conversations and engineering state. A project may contain multiple product-discovery conversations that share the same project-owned canonical Product Knowledge.
 
+## AUTH-FR-011 Collaboration survives sign-out
+Signing out of the web application shall terminate the user's web session but shall not delete project state, conversations, canonical Product Knowledge, task/checkpoint state or other collaborators' project access.
+
 ---
 
-# 41. Final Product Definition
+# 41. AI Connection & Shared Entitlement Requirements
 
-The AI Product & Engineering Operating System is a **private, model-independent, AI-native product and software engineering platform** built around an updateable ECC engineering substrate.
+These requirements apply to the approved connection/delegation architecture. Their full implementation is phased after the immediate routing-foundation and review-first extraction work.
+
+## AI-CONN-FR-001 Separate connection ownership
+An AI connection shall be owned by either one user (`personal`) or the organisation. A personal connection shall not become project- or organisation-owned merely because it is used for collaborative work.
+
+## AI-CONN-FR-002 Do Not Share default
+A newly connected personal AI entitlement shall default to **Do Not Share**. Connecting an account shall never automatically contribute personal capacity to a project or organisation.
+
+## AI-CONN-FR-003 Online Only sharing default
+When the connection owner explicitly shares an eligible personal connection with a project, the default sharing mode shall be **Online Only**. The route is eligible only while the owner has active AI Engineering OS presence and the required authorised runner is online.
+
+## AI-CONN-FR-004 Persistent sharing
+The owner may explicitly change a project share to **Persistent**. Persistent sharing may remain eligible after the owner signs out only while a suitable authorised persistent runner remains reachable and provider/account/harness policy permits the execution.
+
+## AI-CONN-FR-005 Project scope
+Personal sharing shall be project-scoped. Sharing with one project shall not implicitly share with another project or the entire organisation.
+
+## AI-CONN-FR-006 Automatic collaborator benefit
+Once an eligible connection is explicitly shared with a project, authorised collaborators may benefit from it automatically through the orchestrator without per-collaborator connection approval, subject to their project role and all connection/provider/policy gates.
+
+## AI-CONN-FR-007 No credential sharing
+A collaborator shall never receive another user's provider password, token, cookie, refresh token or provider session material. Shared capacity is consumed through an authorised execution route controlled by the orchestrator.
+
+## AI-CONN-FR-008 Provider/account/harness eligibility
+User consent to share capacity is necessary but not sufficient. A personal connection may enter the executable project pool only where the provider, account type, harness and applicable terms technically and contractually permit delegated execution.
+
+## AI-CONN-FR-009 Personal route preference
+For ordinary collaborator-initiated work, the requesting user's own eligible route shall be preferred before eligible contributed project routes, unless risk, review-independence, capability or explicit routing policy requires another route.
+
+## AI-CONN-FR-010 Shared project pool selection
+When multiple collaborators contribute eligible connections, the orchestrator shall select from the project pool by capability, route health, provider/harness suitability, allowance/quota signals, cost/risk and policy. It shall not automatically consume the project owner's entitlement first.
+
+## AI-CONN-FR-011 Organisation/API fallback
+Eligible organisation subscription/enterprise routes and approved API routes shall remain separate fallback tiers rather than being conflated with personal contributed capacity.
+
+## AI-CONN-FR-012 Usage contribution controls
+A connection owner may constrain contributed capacity using enforceable limits such as task/execution counts, time windows, project scopes or provider-reported quota signals. The platform shall not claim a precise percentage of remaining allowance where the provider does not expose sufficient telemetry.
+
+## AI-CONN-FR-013 Revocation
+Changing a project share to Do Not Share or otherwise revoking delegation shall block new project executions through that connection immediately. Revocation shall not delete historical outputs, checkpoints, Product Knowledge, conversations, repository revisions, usage records or audit evidence.
+
+## AI-CONN-FR-014 Runner separation
+Where a subscription-backed route requires a local or managed harness, provider authentication shall remain on the authorised runner where practical. Runner authentication to AI Engineering OS shall use separate scoped/revocable credentials and shall expose only safe capability/health metadata.
+
+## AI-CONN-FR-015 Persistent project memory
+A project shall remain continuable by other authorised collaborators when a connection owner signs out, disconnects, goes offline, exhausts quota or leaves the project. A replacement worker shall resume from platform-owned context, repository/task state and durable checkpoints rather than requiring the unavailable provider session.
+
+## AI-CONN-FR-016 Master orchestration
+Contributed AI capacity shall be made available to the AI Engineering OS orchestrator, not directly controlled as another user's provider account by collaborators. The orchestrator shall enforce project RBAC, capability, cost, risk, owner limit and independent-review policy before use.
+
+## AI-CONN-FR-017 Material auditability
+Connection registration/revocation, project sharing/mode changes, material runner trust/capability changes, contributed-route use, routing fallback and usage/policy blocks shall be auditable using safe identifiers without exposing provider credentials.
+
+---
+
+# 42. Final Product Definition
+
+The AI Product & Engineering Operating System is a **private, provider/model/harness-independent, AI-native product and software engineering platform** built around an updateable ECC engineering substrate.
 
 - ECC provides much of the engineering process, agent and skill foundation.
 - Curated OneSkill additions expand capability only after review.
 - MCPs provide controlled access to external systems.
-- OpenAI, Claude and Gemini/Antigravity provide interchangeable model intelligence.
-- The Orchestrator manages the lifecycle.
-- The Product Knowledge Store owns understanding.
+- An extensible provider/model/route registry supplies interchangeable intelligence and execution capacity.
+- Codex, Claude Code, Antigravity, Hermes, OpenCode and future harnesses are replaceable execution surfaces where supported, not canonical project-memory owners.
+- Personal AI connections remain user-owned and may contribute eligible project capacity only through explicit governed sharing.
+- Organisation AI connections and APIs remain separate governed resources.
+- The Orchestrator manages the lifecycle and route selection.
+- The Product Knowledge Store owns governed understanding.
 - GitHub owns software source history.
-- Sandboxes execute engineering work safely.
+- Sandboxes/worktrees execute engineering work safely.
 - Independent agents review material changes.
 - Automated QA verifies behaviour.
 - The Product Owner works through conversations, documents, previews and approvals.

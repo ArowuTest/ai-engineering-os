@@ -20,6 +20,23 @@ const request: ModelRequest = {
   routing: { subscriptionFirst: false, allowMeteredApi: true },
 };
 
+const schema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['answer'],
+  properties: { answer: { type: 'string' } },
+};
+
+const structuredRequest: ModelRequest = {
+  ...request,
+  requiredCapabilities: ['chat', 'structuredOutput'],
+  responseContract: {
+    type: 'json_schema',
+    name: 'example_v1',
+    schema,
+  },
+};
+
 describe('official API provider adapters', () => {
   it('translates a Product Partner request to OpenAI Responses and maps usage', async () => {
     let captured: unknown;
@@ -107,6 +124,122 @@ describe('official API provider adapters', () => {
     ['google', () => createGeminiAdapter({ apiKey: 'x', client: { interactions: { create: async () => ({ output_text: '' }) } } as never })],
   ])('rejects blank %s output with a safe provider execution error', async (_provider, factory) => {
     await expect(factory().execute(request)).rejects.toBeInstanceOf(ProviderExecutionError);
+  });
+});
+
+describe('structured output translation', () => {
+  it('maps the generic schema contract to OpenAI Responses text.format', async () => {
+    let captured: Record<string, unknown> | undefined;
+    const adapter = createOpenAIAdapter({
+      apiKey: 'x',
+      client: {
+        responses: {
+          create: async (input: Record<string, unknown>) => {
+            captured = input;
+            return { output_text: '{"answer":"OpenAI structured"}' };
+          },
+        },
+      } as never,
+    });
+
+    const result = await adapter.execute(structuredRequest);
+    expect(adapter.route.capabilities.structuredOutput).toBe(true);
+    expect(captured).toMatchObject({
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'example_v1',
+          schema,
+          strict: true,
+        },
+      },
+    });
+    expect(result.content).toBe('{"answer":"OpenAI structured"}');
+  });
+
+  it('maps the generic schema contract to Anthropic output_config.format', async () => {
+    let captured: Record<string, unknown> | undefined;
+    const adapter = createAnthropicAdapter({
+      apiKey: 'x',
+      client: {
+        messages: {
+          create: async (input: Record<string, unknown>) => {
+            captured = input;
+            return { content: [{ type: 'text', text: '{"answer":"Claude structured"}' }] };
+          },
+        },
+      } as never,
+    });
+
+    const result = await adapter.execute(structuredRequest);
+    expect(adapter.route.capabilities.structuredOutput).toBe(true);
+    expect(captured).toMatchObject({
+      output_config: {
+        format: {
+          type: 'json_schema',
+          schema,
+        },
+      },
+    });
+    expect(result.content).toBe('{"answer":"Claude structured"}');
+  });
+
+  it('maps the generic schema contract to Gemini Interactions response_format', async () => {
+    let captured: Record<string, unknown> | undefined;
+    const adapter = createGeminiAdapter({
+      apiKey: 'x',
+      client: {
+        interactions: {
+          create: async (input: Record<string, unknown>) => {
+            captured = input;
+            return { output_text: '{"answer":"Gemini structured"}' };
+          },
+        },
+      } as never,
+    });
+
+    const result = await adapter.execute(structuredRequest);
+    expect(adapter.route.capabilities.structuredOutput).toBe(true);
+    expect(captured).toMatchObject({
+      response_format: {
+        type: 'text',
+        mime_type: 'application/json',
+        schema,
+      },
+    });
+    expect(result.content).toBe('{"answer":"Gemini structured"}');
+  });
+
+  it('does not add structured-output fields to ordinary chat requests', async () => {
+    let openAI: Record<string, unknown> | undefined;
+    let anthropic: Record<string, unknown> | undefined;
+    let google: Record<string, unknown> | undefined;
+
+    await createOpenAIAdapter({
+      apiKey: 'x',
+      client: { responses: { create: async (input: Record<string, unknown>) => {
+        openAI = input;
+        return { output_text: 'plain' };
+      } } } as never,
+    }).execute(request);
+    await createAnthropicAdapter({
+      apiKey: 'x',
+      client: { messages: { create: async (input: Record<string, unknown>) => {
+        anthropic = input;
+        return { content: [{ type: 'text', text: 'plain' }] };
+      } } } as never,
+    }).execute(request);
+    await createGeminiAdapter({
+      apiKey: 'x',
+      client: { interactions: { create: async (input: Record<string, unknown>) => {
+        google = input;
+        return { output_text: 'plain' };
+      } } } as never,
+    }).execute(request);
+
+    expect(openAI).not.toHaveProperty('text');
+    expect(anthropic).not.toHaveProperty('output_config');
+    expect(google).not.toHaveProperty('response_format');
   });
 });
 

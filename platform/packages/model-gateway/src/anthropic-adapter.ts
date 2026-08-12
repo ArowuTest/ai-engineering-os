@@ -28,10 +28,31 @@ function systemInstruction(messages: ModelMessage[]): string | undefined {
     .join('\n\n');
   return value || undefined;
 }
+
 function conversationMessages(messages: ModelMessage[]) {
   return messages
     .filter((message) => message.role === 'user' || message.role === 'assistant')
     .map((message) => ({ role: message.role, content: message.content }));
+}
+
+function messageRequest(model: string, request: ModelRequest): Record<string, unknown> {
+  const input: Record<string, unknown> = {
+    model,
+    max_tokens: 4096,
+    system: systemInstruction(request.messages),
+    messages: conversationMessages(request.messages),
+  };
+
+  if (request.responseContract) {
+    input.output_config = {
+      format: {
+        type: 'json_schema',
+        schema: request.responseContract.schema,
+      },
+    };
+  }
+
+  return input;
 }
 
 export function createAnthropicAdapter(options: AnthropicAdapterOptions): ModelAdapter {
@@ -55,16 +76,12 @@ export function createAnthropicAdapter(options: AnthropicAdapterOptions): ModelA
         mcp: false,
         localWorkspace: false,
         headless: true,
+        structuredOutput: true,
       },
     },
     async execute(request: ModelRequest) {
       try {
-        const result = await client.messages.create({
-          model,
-          max_tokens: 4096,
-          system: systemInstruction(request.messages),
-          messages: conversationMessages(request.messages),
-        });
+        const result = await client.messages.create(messageRequest(model, request));
         const content = result.content
           .filter((block) => block.type === 'text' && typeof block.text === 'string')
           .map((block) => block.text?.trim() ?? '')

@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import type {
   ConversationRepository,
   DatabaseUnitOfWork,
+  KnowledgeCandidateRepository,
   KnowledgeRepository,
   ProjectRepository,
 } from '@engineering-os/database';
@@ -24,13 +25,20 @@ import {
   type ProjectRole,
 } from '@engineering-os/domain';
 import { NoEligibleRouteError, ProviderExecutionError, type ModelGateway } from '@engineering-os/model-gateway';
-import { buildProductPartnerRequest } from './product-partner-context.js';
 import { AuthService, AuthServiceError } from './auth-service.js';
+import { executeProductPartnerTurn } from './product-partner-turn-service.js';
+import {
+  acceptCandidate,
+  KnowledgeCandidateServiceError,
+  rejectCandidate,
+  retryExtractionRun,
+} from './knowledge-candidate-service.js';
 
 export interface AppDependencies {
   projects: ProjectRepository;
   knowledge: KnowledgeRepository;
   conversations: ConversationRepository;
+  knowledgeCandidates?: KnowledgeCandidateRepository;
   unitOfWork: DatabaseUnitOfWork;
   modelGateway: ModelGateway;
   authService?: AuthService;
@@ -483,12 +491,26 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     const messages = conversation
       ? await dependencies.conversations.listMessages(identity.organisationId, projectId, conversation.id)
       : [];
+    // Dev-mode identity has no auth service; requireProductOwner short-circuits for unauthenticated
+    // callers, so we mirror that with an explicit 'product_owner' viewerProjectRole to keep the
+    // studio read contract equivalent to the RBAC gate.
+    const viewerProjectRole = identity.authenticated
+      ? (identity.projectRole ?? null)
+      : ('product_owner' as ProjectRole);
+    // Always route through the UoW so the durable read is available to every deployment,
+    // regardless of whether the top-level optional `knowledgeCandidates` dependency is wired.
+    const latestFailedExtractionRun = await dependencies.unitOfWork.run(
+      async ({ knowledgeCandidates }) =>
+        knowledgeCandidates.getLatestFailedExtractionRun(identity.organisationId, projectId),
+    );
     return reply.send({
       project,
       conversation,
       messages,
       knowledge: records,
       completeness: calculateProductCompleteness(records),
+      viewerProjectRole,
+      latestFailedExtractionRun,
     });
   });
 
@@ -546,87 +568,21 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
       conversation.id,
     );
     const records = await dependencies.knowledge.listByProject(identity.organisationId, projectId);
-    const userMessage = createConversationMessage({
+
+    const result = await executeProductPartnerTurn({
       organisationId: identity.organisationId,
       projectId,
-      conversationId: conversation.id,
-      role: 'user',
-      content: stringField(bodyObject(request.body), 'content'),
-      createdBy: identity.userId,
+      userId: identity.userId,
+      userContent: stringField(bodyObject(request.body), 'content'),
+      project,
+      conversation,
+      history,
+      knowledge: records,
+      modelGateway: dependencies.modelGateway,
+      unitOfWork: dependencies.unitOfWork,
     });
 
-    const modelResponse = await dependencies.modelGateway.execute(
-      buildProductPartnerRequest({
-        project,
-        knowledge: records,
-        messages: history,
-        newUserContent: userMessage.content,
-      }),
-    );
-    const assistantContent = modelResponse.content.trim();
-    if (!assistantContent) throw new ProviderExecutionError(modelResponse.provider);
-
-    const agentId = `product-partner:${modelResponse.provider}`;
-    const assistantMessage = createConversationMessage({
-      organisationId: identity.organisationId,
-      projectId,
-      conversationId: conversation.id,
-      role: 'assistant',
-      content: assistantContent,
-      provider: modelResponse.provider,
-      createdBy: agentId,
-    });
-
-    const userEvent = createAuditEvent({
-      organisationId: identity.organisationId,
-      projectId,
-      eventType: 'product_partner.user_message.created',
-      actorType: 'user',
-      actorId: identity.userId,
-      subjectType: 'conversation_message',
-      subjectId: userMessage.id,
-      metadata: { conversationId: conversation.id },
-    });
-    const assistantEvent = createAuditEvent({
-      organisationId: identity.organisationId,
-      projectId,
-      eventType: 'product_partner.assistant_message.created',
-      actorType: 'agent',
-      actorId: agentId,
-      subjectType: 'conversation_message',
-      subjectId: assistantMessage.id,
-      metadata: {
-        conversationId: conversation.id,
-        provider: modelResponse.provider,
-        model: modelResponse.model,
-        routeId: modelResponse.routeId,
-        executionMode: modelResponse.executionMode,
-        costType: modelResponse.costType,
-        usage: modelResponse.usage ?? null,
-      },
-    });
-
-    await dependencies.unitOfWork.run(async ({ conversations, audit }) => {
-      await conversations.appendMessage(userMessage);
-      await audit.append(userEvent);
-      await conversations.appendMessage(assistantMessage);
-      await audit.append(assistantEvent);
-    });
-
-    const execution: Record<string, unknown> = {
-      provider: modelResponse.provider,
-      model: modelResponse.model,
-      routeId: modelResponse.routeId,
-      executionMode: modelResponse.executionMode,
-      costType: modelResponse.costType,
-    };
-    if (modelResponse.usage?.inputTokens !== undefined) {
-      execution.inputTokens = modelResponse.usage.inputTokens;
-    }
-    if (modelResponse.usage?.outputTokens !== undefined) {
-      execution.outputTokens = modelResponse.usage.outputTokens;
-    }
-    return reply.code(201).send({ userMessage, assistantMessage, execution });
+    return reply.code(201).send(result);
   });
   app.post('/projects/:id/messages', async (request, reply) => {
     const identity = await resolveIdentity(request, dependencies);
@@ -752,5 +708,125 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     return reply.send(revised);
   });
 
+  app.get('/projects/:id/knowledge-candidates', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const projectId = routeId(request);
+    const project = await projectOrNull(dependencies, identity.organisationId, projectId);
+    if (!project) return reply.code(404).send({ error: 'Project not found' });
+    const query = request.query as { status?: unknown };
+    const status = typeof query.status === 'string' ? query.status : undefined;
+    const resolvedStatus = status === 'pending' || status === 'accepted' || status === 'rejected' ? status : undefined;
+    const rows = await dependencies.unitOfWork.run(async ({ knowledgeCandidates }) =>
+      knowledgeCandidates.listByProjectWithSourceRun(
+        identity.organisationId,
+        projectId,
+        resolvedStatus,
+      ),
+    );
+    return reply.send(rows);
+  });
+
+  app.post('/projects/:id/knowledge-candidates/:candidateId/accept', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    requireProductOwner(identity);
+    const projectId = routeId(request);
+    const project = await projectOrNull(dependencies, identity.organisationId, projectId);
+    if (!project) return reply.code(404).send({ error: 'Project not found' });
+    const params = request.params as { candidateId?: unknown };
+    const candidateId = typeof params.candidateId === 'string' ? params.candidateId : '';
+    const body = bodyObject(request.body);
+    const acceptInput: Parameters<typeof acceptCandidate>[1] = {
+      organisationId: identity.organisationId,
+      projectId,
+      candidateId,
+      reviewerId: identity.userId,
+    };
+    if (typeof body.category === 'string') acceptInput.category = body.category;
+    if (typeof body.title === 'string') acceptInput.title = body.title;
+    if (typeof body.content === 'string') acceptInput.content = body.content;
+    try {
+      const result = await acceptCandidate(dependencies.unitOfWork, acceptInput);
+      return reply.code(201).send(result);
+    } catch (error) {
+      if (error instanceof KnowledgeCandidateServiceError) {
+        return reply.code(error.statusCode).send({ error: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.post('/projects/:id/knowledge-candidates/:candidateId/reject', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    requireProductOwner(identity);
+    const projectId = routeId(request);
+    const project = await projectOrNull(dependencies, identity.organisationId, projectId);
+    if (!project) return reply.code(404).send({ error: 'Project not found' });
+    const params = request.params as { candidateId?: unknown };
+    const candidateId = typeof params.candidateId === 'string' ? params.candidateId : '';
+    const body = bodyObject(request.body);
+    const rejectInput: Parameters<typeof rejectCandidate>[1] = {
+      organisationId: identity.organisationId,
+      projectId,
+      candidateId,
+      reviewerId: identity.userId,
+    };
+    if (typeof body.reason === 'string') rejectInput.reason = body.reason;
+    try {
+      const result = await rejectCandidate(dependencies.unitOfWork, rejectInput);
+      return reply.send(result);
+    } catch (error) {
+      if (error instanceof KnowledgeCandidateServiceError) {
+        return reply.code(error.statusCode).send({ error: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.post('/projects/:id/extraction-runs/:runId/retry', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    requireProductOwner(identity);
+    const projectId = routeId(request);
+    const project = await projectOrNull(dependencies, identity.organisationId, projectId);
+    if (!project) return reply.code(404).send({ error: 'Project not found' });
+    const params = request.params as { runId?: unknown };
+    const runId = typeof params.runId === 'string' ? params.runId : '';
+    const canonical = await dependencies.knowledge.listByProject(identity.organisationId, projectId);
+    // The retry service reads the original run outside its write UoW. Prefer an explicit
+    // top-level dependency; otherwise fall back to a UoW-scoped read adapter.
+    const candidatesRepo = dependencies.knowledgeCandidates
+      ?? new UoWScopedKnowledgeCandidatesReadonly(dependencies.unitOfWork);
+    try {
+      const result = await retryExtractionRun(dependencies.unitOfWork, {
+        organisationId: identity.organisationId,
+        projectId,
+        runId,
+        requestedBy: identity.userId,
+        project,
+        knowledge: canonical,
+        modelGateway: dependencies.modelGateway,
+        conversations: dependencies.conversations,
+        candidates: candidatesRepo as KnowledgeCandidateRepository,
+      });
+      return reply.code(201).send(result);
+    } catch (error) {
+      if (error instanceof KnowledgeCandidateServiceError) {
+        return reply.code(error.statusCode).send({ error: error.message });
+      }
+      throw error;
+    }
+  });
+
   return app;
+}
+
+// Minimal adapter to satisfy the retry service's `getRunById` need without requiring callers to
+// wire a KnowledgeCandidateRepository. Implements only the surface the service actually calls
+// outside the UoW.
+class UoWScopedKnowledgeCandidatesReadonly {
+  constructor(private readonly unitOfWork: DatabaseUnitOfWork) {}
+  async getRunById(organisationId: string, projectId: string, runId: string) {
+    return this.unitOfWork.run(async ({ knowledgeCandidates }) =>
+      knowledgeCandidates.getRunById(organisationId, projectId, runId),
+    );
+  }
 }

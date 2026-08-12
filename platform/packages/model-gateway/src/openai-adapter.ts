@@ -28,10 +28,32 @@ function instructions(messages: ModelMessage[]): string | undefined {
     .join('\n\n');
   return content || undefined;
 }
+
 function responseInput(messages: ModelMessage[]) {
   return messages
     .filter((message) => message.role === 'user' || message.role === 'assistant')
     .map((message) => ({ role: message.role, content: message.content }));
+}
+
+function responseRequest(model: string, request: ModelRequest): Record<string, unknown> {
+  const input: Record<string, unknown> = {
+    model,
+    instructions: instructions(request.messages),
+    input: responseInput(request.messages),
+  };
+
+  if (request.responseContract) {
+    input.text = {
+      format: {
+        type: 'json_schema',
+        name: request.responseContract.name,
+        schema: request.responseContract.schema,
+        strict: true,
+      },
+    };
+  }
+
+  return input;
 }
 
 export function createOpenAIAdapter(options: OpenAIAdapterOptions): ModelAdapter {
@@ -55,15 +77,12 @@ export function createOpenAIAdapter(options: OpenAIAdapterOptions): ModelAdapter
         mcp: false,
         localWorkspace: false,
         headless: true,
+        structuredOutput: true,
       },
     },
     async execute(request: ModelRequest) {
       try {
-        const result = await client.responses.create({
-          model,
-          instructions: instructions(request.messages),
-          input: responseInput(request.messages),
-        });
+        const result = await client.responses.create(responseRequest(model, request));
         const content = result.output_text?.trim();
         if (!content) throw new ProviderExecutionError('openai');
         const usage = normaliseUsage(result.usage?.input_tokens, result.usage?.output_tokens);

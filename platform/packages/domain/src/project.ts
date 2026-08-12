@@ -1,8 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { DomainValidationError, requireNonBlank } from './validation.js';
+import {
+  DomainValidationError,
+  requireNonBlank,
+  requireStableIdentifier,
+} from './validation.js';
 
-export const PRODUCT_PARTNERS = ['auto', 'openai', 'anthropic', 'google'] as const;
-export type ProductPartner = (typeof PRODUCT_PARTNERS)[number];
+export const INITIAL_PRODUCT_PARTNERS = ['openai', 'anthropic', 'google'] as const;
+export type ProductPartner = string;
 
 export const PROJECT_STAGES = [
   'discovery',
@@ -39,13 +43,18 @@ export interface CreateProjectInput {
 }
 
 function requireProductPartner(value: unknown): ProductPartner {
-  if (typeof value !== 'string' || !PRODUCT_PARTNERS.includes(value as ProductPartner)) {
-    throw new DomainValidationError(
-      'preferredProductPartner',
-      'preferredProductPartner must be auto, openai, anthropic, or google',
-    );
+  if (value === 'auto') return value;
+  try {
+    return requireStableIdentifier(value, 'preferredProductPartner');
+  } catch (error) {
+    if (error instanceof DomainValidationError) {
+      throw new DomainValidationError(
+        'preferredProductPartner',
+        'preferredProductPartner must be auto or a valid lower-case provider identifier',
+      );
+    }
+    throw error;
   }
-  return value as ProductPartner;
 }
 
 export function createProject(input: CreateProjectInput): Project {

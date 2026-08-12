@@ -44,8 +44,16 @@ describe('API runtime composition', () => {
         'SELECT id FROM organisations WHERE id = $1', ['org-001'],
       );
       expect(organisations.rowCount).toBe(1);
-      const migrations = await runtime.pool.query('SELECT name FROM schema_migrations');
-      expect(migrations.rowCount).toBe(3);
+      const migrations = await runtime.pool.query<{ name: string }>(
+        'SELECT name FROM schema_migrations ORDER BY name ASC',
+      );
+      expect(migrations.rows.map((row) => row.name)).toEqual([
+        '001_initial.sql',
+        '002_product_studio.sql',
+        '003_auth_collaboration.sql',
+        '004_extensible_execution_routes.sql',
+        '005_product_knowledge_candidates.sql',
+      ]);
     } finally {
       await runtime.close();
     }

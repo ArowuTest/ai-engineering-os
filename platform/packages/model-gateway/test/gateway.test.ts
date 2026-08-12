@@ -24,14 +24,21 @@ function route(overrides: Partial<ModelRoute> = {}): ModelRoute {
       mcp: true,
       localWorkspace: true,
       headless: true,
-    },
+      structuredOutput: false,
+    } as ModelRoute['capabilities'],
     ...overrides,
   };
 }
-function adapter(modelRoute: ModelRoute, content = modelRoute.id): ModelAdapter {
+
+function adapter(
+  modelRoute: ModelRoute,
+  content = modelRoute.id,
+  execute?: ModelAdapter['execute'],
+): ModelAdapter {
   return {
     route: modelRoute,
-    async execute() {
+    async execute(request) {
+      if (execute) return execute(request);
       return {
         content,
         usage: { inputTokens: 12, outputTokens: 7 },
@@ -55,24 +62,76 @@ function request(overrides: Partial<ModelRequest> = {}): ModelRequest {
 }
 
 describe('ModelGateway', () => {
-  it('registers multiple execution routes for the same provider', () => {
-    const gateway = new ModelGateway();    gateway.register(adapter(route()));
+  it('registers multiple execution routes and models for the same provider', () => {
+    const gateway = new ModelGateway();
+    gateway.register(adapter(route({ id: 'anthropic-sonnet', model: 'claude-sonnet' })));
     gateway.register(
       adapter(
         route({
-          id: 'anthropic-api',
+          id: 'anthropic-opus',
+          model: 'claude-opus',
           executionMode: 'api',
           costType: 'metered_api',
-          localWorkspace: undefined,
           priority: 20,
-        } as Partial<ModelRoute>),
+        }),
       ),
     );
 
-    expect(gateway.listRoutes('anthropic').map((item) => item.id)).toEqual([
-      'claude-subscription',
-      'anthropic-api',
+    expect(gateway.listRoutes('anthropic').map((item) => [item.id, item.model])).toEqual([
+      ['anthropic-sonnet', 'claude-sonnet'],
+      ['anthropic-opus', 'claude-opus'],
     ]);
+  });
+
+  it('executes an arbitrary valid future provider route', async () => {
+    const gateway = new ModelGateway();
+    gateway.register(
+      adapter(
+        route({
+          id: 'future-provider-api',
+          provider: 'future-provider' as ModelRoute['provider'],
+          model: 'future-model-v1',
+          executionMode: 'api',
+          costType: 'metered_api',
+        }),
+        'future-result',
+      ),
+    );
+
+    const response = await gateway.execute(request({ routing: { subscriptionFirst: false, allowMeteredApi: true } }));
+    expect(response.provider).toBe('future-provider');
+    expect(response.routeId).toBe('future-provider-api');
+    expect(response.model).toBe('future-model-v1');
+    expect(response.content).toBe('future-result');
+  });
+
+  it('rejects duplicate route identifiers even across different models', () => {
+    const gateway = new ModelGateway();
+    gateway.register(adapter(route({ id: 'shared-route', model: 'model-a' })));
+
+    expect(() =>
+      gateway.register(
+        adapter(
+          route({
+            id: 'shared-route',
+            provider: 'openai',
+            model: 'model-b',
+          }),
+        ),
+      ),
+    ).toThrow('model route already registered: shared-route');
+  });
+
+  it.each([
+    [{ id: '' }, 'route id'],
+    [{ id: 'Bad Route' }, 'route id'],
+    [{ provider: 'auto' as ModelRoute['provider'] }, 'provider'],
+    [{ provider: 'OpenAI' as ModelRoute['provider'] }, 'provider'],
+    [{ provider: 'bad provider' as ModelRoute['provider'] }, 'provider'],
+    [{ model: '   ' }, 'model'],
+  ])('rejects invalid route registration %#', (overrides, expectedField) => {
+    const gateway = new ModelGateway();
+    expect(() => gateway.register(adapter(route(overrides)))).toThrow(expectedField);
   });
 
   it('prefers an eligible subscription route over a metered API route', async () => {
@@ -91,6 +150,7 @@ describe('ModelGateway', () => {
     expect(response.routeId).toBe('claude-subscription');
     expect(response.costType).toBe('included_subscription');
   });
+
   it('falls back to an API route when subscription execution is unavailable', async () => {
     const gateway = new ModelGateway();
     gateway.register(adapter(route({ available: false }), 'unavailable'));
@@ -123,7 +183,8 @@ describe('ModelGateway', () => {
             mcp: true,
             localWorkspace: true,
             headless: true,
-          },
+            structuredOutput: false,
+          } as ModelRoute['capabilities'],
         }),
       ),
     );
@@ -132,6 +193,66 @@ describe('ModelGateway', () => {
     expect(response.provider).toBe('google');
     expect(response.routeId).toBe('gemini-vision-subscription');
   });
+
+  it('keeps ordinary chat eligible when structured output is not required', async () => {
+    const gateway = new ModelGateway();
+    gateway.register(adapter(route({ id: 'plain-chat' }), 'plain-chat-result'));
+
+    const response = await gateway.execute(
+      request({ requiredCapabilities: ['chat'] }),
+    );
+    expect(response.routeId).toBe('plain-chat');
+  });
+
+  it('requires a route that explicitly advertises structured output', async () => {
+    const gateway = new ModelGateway();
+    gateway.register(adapter(route({ id: 'plain-chat', priority: 1 })));
+    gateway.register(
+      adapter(
+        route({
+          id: 'structured-chat',
+          priority: 50,
+          capabilities: {
+            ...route().capabilities,
+            structuredOutput: true,
+          } as ModelRoute['capabilities'],
+        }),
+        'structured-result',
+      ),
+    );
+
+    const response = await gateway.execute(
+      request({
+        requiredCapabilities: ['chat', 'structuredOutput' as never],
+      }),
+    );
+    expect(response.routeId).toBe('structured-chat');
+    expect(response.content).toBe('structured-result');
+  });
+
+  it('does not infer structured-output eligibility merely because a response contract exists', async () => {
+    const gateway = new ModelGateway();
+    let captured: ModelRequest | undefined;
+    gateway.register(
+      adapter(route({ id: 'plain-chat' }), 'plain', async (modelRequest) => {
+        captured = modelRequest;
+        return { content: 'plain' };
+      }),
+    );
+
+    const withContract = {
+      ...request({ requiredCapabilities: ['chat'] }),
+      responseContract: {
+        type: 'json_schema',
+        name: 'example_v1',
+        schema: { type: 'object', properties: { answer: { type: 'string' } } },
+      },
+    } as ModelRequest;
+
+    await gateway.execute(withContract);
+    expect(captured).toBe(withContract);
+  });
+
   it('refuses metered API routes when policy disables them', async () => {
     const gateway = new ModelGateway();
     gateway.register(

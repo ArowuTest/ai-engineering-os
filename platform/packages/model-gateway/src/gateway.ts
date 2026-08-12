@@ -7,10 +7,29 @@ import type {
   RoutingPolicy,
 } from './types.js';
 
+const STABLE_IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
 export class NoEligibleRouteError extends Error {
   constructor() {
     super('No eligible model execution route satisfies this request');
     this.name = 'NoEligibleRouteError';
+  }
+}
+
+function requireStableIdentifier(value: string, field: string): void {
+  if (!STABLE_IDENTIFIER_PATTERN.test(value)) {
+    throw new Error(`${field} must be a valid lower-case stable identifier`);
+  }
+}
+
+function validateRoute(route: ModelRoute): void {
+  requireStableIdentifier(route.id, 'route id');
+  requireStableIdentifier(route.provider, 'provider');
+  if (route.provider === 'auto') {
+    throw new Error('provider cannot use the reserved auto routing sentinel');
+  }
+  if (route.model.trim().length === 0) {
+    throw new Error('model must be a non-blank string');
   }
 }
 
@@ -29,7 +48,8 @@ function compareRoutes(a: ModelRoute, b: ModelRoute, policy: RoutingPolicy): num
 
   if (policy.preferredProvider) {
     const providerRankA = a.provider === policy.preferredProvider ? 0 : 1;
-    const providerRankB = b.provider === policy.preferredProvider ? 0 : 1;    if (providerRankA !== providerRankB) return providerRankA - providerRankB;
+    const providerRankB = b.provider === policy.preferredProvider ? 0 : 1;
+    if (providerRankA !== providerRankB) return providerRankA - providerRankB;
   }
 
   if (a.priority !== b.priority) return a.priority - b.priority;
@@ -40,6 +60,7 @@ export class ModelGateway {
   private readonly adapters = new Map<string, ModelAdapter>();
 
   register(adapter: ModelAdapter): void {
+    validateRoute(adapter.route);
     if (this.adapters.has(adapter.route.id)) {
       throw new Error(`model route already registered: ${adapter.route.id}`);
     }

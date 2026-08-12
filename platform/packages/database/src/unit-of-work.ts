@@ -2,6 +2,7 @@ import type { Pool } from 'pg';
 import { AuditRepository } from './audit-repository.js';
 import { ConversationRepository } from './conversation-repository.js';
 import { InvitationRepository } from './invitation-repository.js';
+import { KnowledgeCandidateRepository } from './knowledge-candidate-repository.js';
 import { KnowledgeRepository } from './knowledge-repository.js';
 import { MembershipRepository } from './membership-repository.js';
 import { ProjectRepository } from './project-repository.js';
@@ -12,6 +13,7 @@ export interface TransactionRepositories {
   projects: ProjectRepository;
   conversations: ConversationRepository;
   knowledge: KnowledgeRepository;
+  knowledgeCandidates: KnowledgeCandidateRepository;
   users: UserRepository;
   memberships: MembershipRepository;
   invitations: InvitationRepository;
@@ -30,6 +32,7 @@ export class DatabaseUnitOfWork {
         projects: new ProjectRepository(client),
         conversations: new ConversationRepository(client),
         knowledge: new KnowledgeRepository(client),
+        knowledgeCandidates: new KnowledgeCandidateRepository(client),
         users: new UserRepository(client),
         memberships: new MembershipRepository(client),
         invitations: new InvitationRepository(client),
