@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import { AIConnectionRepository } from './ai-connection-repository.js';
 import { AuditRepository } from './audit-repository.js';
 import { ConversationRepository } from './conversation-repository.js';
 import { InvitationRepository } from './invitation-repository.js';
@@ -19,6 +20,7 @@ export interface TransactionRepositories {
   invitations: InvitationRepository;
   sessions: SessionRepository;
   audit: AuditRepository;
+  aiConnections: AIConnectionRepository;
 }
 
 export class DatabaseUnitOfWork {
@@ -38,6 +40,7 @@ export class DatabaseUnitOfWork {
         invitations: new InvitationRepository(client),
         sessions: new SessionRepository(client),
         audit: new AuditRepository(client),
+        aiConnections: new AIConnectionRepository(client),
       });
       await client.query('COMMIT');
       return result;

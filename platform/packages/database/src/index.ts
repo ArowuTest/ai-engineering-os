@@ -1,3 +1,4 @@
+export * from './ai-connection-repository.js';
 export * from './audit-repository.js';
 export * from './client.js';
 export * from './conversation-repository.js';
