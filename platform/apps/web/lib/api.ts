@@ -458,3 +458,172 @@ export function setUserStatus(userId: string, status: 'active' | 'suspended') {
 export function revokeOrganisationAccess(userId: string): Promise<void> {
   return apiFetch<void>(`/admin/users/${userId}/organisation-access`, { method: 'DELETE' });
 }
+
+// -------------------- AI Connections --------------------
+
+export type AIConnectionOwnership = 'personal' | 'organisation';
+export type AIConnectionStatus = 'configured' | 'available' | 'reauth_required' | 'disabled' | 'revoked';
+export type AIConnectionShareMode = 'online_only' | 'persistent';
+export type ProjectExecutionPoolTier = 'requester' | 'project_pool' | 'organisation';
+export type ProjectExecutionPoolReason =
+  | 'connection_unavailable'
+  | 'policy_not_delegatable'
+  | 'owner_offline'
+  | 'runner_unavailable'
+  | 'usage_window_not_started'
+  | 'usage_window_expired'
+  | 'persistent_not_supported';
+
+export interface SafeConnectionFamilyPolicy {
+  id: string;
+  providerId: string;
+  displayName: string;
+  executionMode: 'subscription' | 'api' | 'manual';
+  harnessId?: string;
+  allowedOwnership: readonly AIConnectionOwnership[];
+  delegatable: boolean;
+  requiresRunner: boolean;
+  persistentSupported: boolean;
+}
+
+export interface AIConnectionSummary {
+  id: string;
+  organisationId: string;
+  ownership: AIConnectionOwnership;
+  ownerUserId?: string;
+  providerId: string;
+  connectionFamilyId: string;
+  status: AIConnectionStatus;
+  credentialConfigured: boolean;
+  createdAt: string;
+  updatedAt: string;
+  revokedAt?: string;
+}
+
+export interface ProjectExecutionPoolShareState {
+  id: string;
+  mode: AIConnectionShareMode;
+  availableFrom?: string;
+  availableUntil?: string;
+}
+
+export interface ProjectExecutionPoolEntry {
+  connectionId: string;
+  tier: 'requester' | 'project_pool' | 'organisation';
+  providerId: string;
+  connectionFamilyId: string;
+  ownerUserId?: string;
+  shareMode?: AIConnectionShareMode;
+  share?: ProjectExecutionPoolShareState;
+  eligible: boolean;
+  reasons: ProjectExecutionPoolReason[];
+}
+
+export interface ProjectExecutionPoolApiRoute {
+  routeId: string;
+  providerId: string;
+  model: string;
+  executionMode: string;
+  costType: string;
+  available: boolean;
+}
+
+export interface ProjectExecutionPool {
+  entries: ProjectExecutionPoolEntry[];
+  apiFallbackRoutes: ProjectExecutionPoolApiRoute[];
+}
+
+export function listAIConnectionFamilies(): Promise<SafeConnectionFamilyPolicy[]> {
+  return apiFetch<SafeConnectionFamilyPolicy[]>('/ai-connection-families');
+}
+
+export function listAIConnections(): Promise<AIConnectionSummary[]> {
+  return apiFetch<AIConnectionSummary[]>('/ai-connections');
+}
+
+export function registerPersonalAIConnection(input: {
+  connectionFamilyId: string;
+}): Promise<AIConnectionSummary> {
+  return apiFetch<AIConnectionSummary>('/ai-connections/personal', {
+    method: 'POST',
+    body: JSON.stringify({ connectionFamilyId: input.connectionFamilyId }),
+  });
+}
+
+export function registerOrganisationAIConnection(input: {
+  connectionFamilyId: string;
+  secretRefId?: string;
+}): Promise<AIConnectionSummary> {
+  const body: Record<string, string> = { connectionFamilyId: input.connectionFamilyId };
+  if (input.secretRefId !== undefined && input.secretRefId.trim() !== '') {
+    body.secretRefId = input.secretRefId.trim();
+  }
+  return apiFetch<AIConnectionSummary>('/admin/ai-connections', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function revokeAIConnection(connectionId: string): Promise<void> {
+  return apiFetch<void>(`/ai-connections/${connectionId}`, { method: 'DELETE' });
+}
+
+export function listProjectAIExecutionPool(projectId: string): Promise<ProjectExecutionPool> {
+  return apiFetch<ProjectExecutionPool>(`/projects/${projectId}/ai-connections`);
+}
+
+export function shareAIConnectionWithProject(input: {
+  projectId: string;
+  connectionId: string;
+  availableFrom?: string;
+  availableUntil?: string;
+}): Promise<{ status: 'shared'; mode: 'online_only' }> {
+  const body: Record<string, string> = {};
+  if (input.availableFrom) body.availableFrom = input.availableFrom;
+  if (input.availableUntil) body.availableUntil = input.availableUntil;
+  return apiFetch<{ status: 'shared'; mode: 'online_only' }>(
+    `/projects/${input.projectId}/ai-connections/${input.connectionId}/share`,
+    { method: 'POST', body: JSON.stringify(body) },
+  );
+}
+
+export function setAIConnectionShareMode(input: {
+  projectId: string;
+  connectionId: string;
+  mode: AIConnectionShareMode;
+}): Promise<void> {
+  return apiFetch<void>(
+    `/projects/${input.projectId}/ai-connections/${input.connectionId}/share`,
+    { method: 'PATCH', body: JSON.stringify({ mode: input.mode }) },
+  );
+}
+
+export function updateAIConnectionShareWindow(input: {
+  projectId: string;
+  connectionId: string;
+  availableFrom?: string | null;
+  availableUntil?: string | null;
+}): Promise<void> {
+  // Explicit null on either bound is the owner clear contract: the HTTP route
+  // sees `hasWindow=true` (field present) but `optionalDate` returns undefined
+  // for null, so the service clears both bounds atomically via empty usagePolicy.
+  const body: Record<string, string | null> = {};
+  if (input.availableFrom === null) body.availableFrom = null;
+  else if (typeof input.availableFrom === 'string') body.availableFrom = input.availableFrom;
+  if (input.availableUntil === null) body.availableUntil = null;
+  else if (typeof input.availableUntil === 'string') body.availableUntil = input.availableUntil;
+  return apiFetch<void>(
+    `/projects/${input.projectId}/ai-connections/${input.connectionId}/share`,
+    { method: 'PATCH', body: JSON.stringify(body) },
+  );
+}
+
+export function revokeAIConnectionProjectShare(input: {
+  projectId: string;
+  connectionId: string;
+}): Promise<void> {
+  return apiFetch<void>(
+    `/projects/${input.projectId}/ai-connections/${input.connectionId}/share`,
+    { method: 'DELETE' },
+  );
+}

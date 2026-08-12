@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  AIConnectionRepository,
   AuditRepository,
   ConversationRepository,
   createDatabasePool,
@@ -15,6 +16,8 @@ import {
 import { createAuditEvent, hashPassword, normalizeUserId } from '@engineering-os/domain';
 import { buildApp } from './app.js';
 import { AuthService } from './auth-service.js';
+import { AIConnectionService } from './ai-connection-service.js';
+import { productionConnectionFamilyPolicyRegistry } from './ai-connection-policy.js';
 import { createConfiguredModelGateway, type ModelRuntimeEnvironment } from './model-runtime.js';
 
 export interface RuntimeEnvironment extends ModelRuntimeEnvironment {
@@ -61,13 +64,25 @@ function createAuthService(pool: ReturnType<typeof createDatabasePool>) {
 export function createRuntimeApp(environment: RuntimeEnvironment) {
   const pool = createDatabasePool(environment.DATABASE_URL);
   const unitOfWork = new DatabaseUnitOfWork(pool);
+  const modelGateway = createConfiguredModelGateway(environment);
+  const aiConnectionService = new AIConnectionService({
+    unitOfWork,
+    aiConnections: new AIConnectionRepository(pool),
+    memberships: new MembershipRepository(pool),
+    projects: new ProjectRepository(pool),
+    sessions: new SessionRepository(pool),
+    policy: productionConnectionFamilyPolicyRegistry,
+    modelGateway,
+  });
   const app = buildApp({
     projects: new ProjectRepository(pool),
     knowledge: new KnowledgeRepository(pool),
     conversations: new ConversationRepository(pool),
     unitOfWork,
-    modelGateway: createConfiguredModelGateway(environment),
+    modelGateway,
     authService: createAuthService(pool),
+    aiConnectionService,
+    aiConnectionPolicy: productionConnectionFamilyPolicyRegistry,
     allowDevIdentityHeaders: environment.ALLOW_DEV_IDENTITY_HEADERS === 'true',
   });
 

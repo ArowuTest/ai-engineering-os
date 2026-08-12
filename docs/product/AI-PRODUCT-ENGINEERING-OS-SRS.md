@@ -1,14 +1,27 @@
 # AI Product & Engineering Operating System
 ## Product Requirements & Software Requirements Specification
 
-**Document version:** 1.3
+**Document version:** 1.4
 **Status:** Approved baseline for V1 planning
-**Date:** 11 August 2026
+**Date:** 12 August 2026
 **Working name:** AI Engineering OS
 **Parent initiative:** Private AI-native product and software engineering platform
 **Execution design:** `docs/superpowers/specs/2026-08-11-extensible-ai-execution-routing-and-shared-entitlements-design.md`
+**ECC-native capability design:** `docs/superpowers/specs/2026-08-12-ecc-native-capability-productisation-design.md`
 
 ## 0. Change record
+
+### Version 1.4
+
+This revision makes explicit that AI Engineering OS is the enhanced, privately branded and productised evolution of the inherited ECC foundation rather than a separate platform that later imports ECC features.
+
+1. Existing ECC agents, skills, commands, workflows, continuous learning, unified memory, evals, verification, security patterns, autonomous loops and MCP definitions are native product capabilities and must be preserved unless deliberately superseded or excluded with recorded rationale.
+2. The engineering default is **reuse before rebuild; preserve before replace; generalise before discard**. Platform work productises and governs inherited capability instead of duplicating it.
+3. Continuous Learning v2.1 becomes a first-class product capability: project-scoped observations/instincts, confidence scoring, controlled promotion and evolution into skills/commands/agents are retained and generalised across supported harnesses.
+4. Unified Memory remains distinct from learning and supplies durable cross-harness project/team/user handoff context.
+5. The Skills Registry and MCP/Tool Registry are seeded from the approved inherited ECC estate; they do not begin empty. External sources such as OneSkill are used to find missing capability only after trust/security/licence/compatibility review.
+6. Advanced inherited ECC capabilities including team-agent orchestration, eval-harness/agent-eval, verification-loop, browser QA, canary-watch, context-budget, skill-compliance/health, benchmark optimisation, council, enterprise-agent-ops, cost tracking and iterative retrieval are retained for progressive productisation.
+7. The product UI is project/team-centred with Auto/Recommended defaults plus advanced controls for models/routes, agents, skills and MCPs, and Platform/Organisation/Project administration scopes.
 
 ### Version 1.3
 
@@ -194,7 +207,7 @@ User sign-out, connection loss, model switching, runner failure or collaborator 
 # 4. Open-Source Foundation Strategy
 
 ## 4.1 ECC foundation
-The solution shall use the official ECC project (`affaan-m/ECC`) as the engineering-methodology and agent-harness foundation.
+AI Engineering OS is the enhanced private product evolution of the accepted ECC baseline. The inherited ECC repository is the native engineering-methodology, agent, skill, workflow, learning, memory, evaluation, verification and harness foundation of the product.
 
 Relevant ECC capabilities include:
 
@@ -214,7 +227,7 @@ Relevant ECC capabilities include:
 - worktree lifecycle management;
 - continuous-learning patterns.
 
-ECC agent definitions and skills are reusable capabilities. The private platform shall enumerate and select approved ECC assets through a narrow adapter rather than recreating the complete agent catalogue as hard-coded private roles.
+ECC agent definitions, skills and other inherited engineering subsystems are native reusable capabilities. The platform shall enumerate, govern and select approved inherited assets through stable product contracts rather than recreating them as hard-coded private duplicates. Before replacing a material ECC subsystem, the implementation decision must be recorded as reuse, adapt/generalise, supersede or exclude with rationale.
 
 ## 4.2 Independent private derivative
 The project shall **not** use GitHub's public fork mechanism.
@@ -334,6 +347,13 @@ Version lock
 ## 5.4 Skill upgrades
 A newly released version of an approved external skill is treated as a new artefact requiring re-review.
 
+## 5.5 Continuous learning, memory and capability evolution
+ECC Continuous Learning v2.1 and Unified Memory are inherited first-class capabilities. The platform shall preserve project-scoped observation/instinct learning, confidence scoring, controlled promotion and evolution into skills/commands/agents, while generalising observation and retrieval across approved harnesses.
+
+Memory and learning remain separate: memory preserves durable facts, handoffs and context; learning derives reusable behaviour from evidence. Learned behaviour must not silently become security policy, production authority or a trusted external skill.
+
+The platform shall progressively expose inherited agent evaluation, eval-harness, verification-loop, browser QA, canary-watch, context-budget, skill-compliance/health, benchmark optimisation, team orchestration, council, enterprise-agent operations, cost tracking and iterative retrieval capabilities rather than replacing them with new implementations without cause.
+
 ---
 
 # 6. MCP and Tool Strategy
@@ -421,6 +441,9 @@ Independently evaluates implementation correctness, security and requirement cov
 
 ## 8.4 Administration / AI Connections
 Manages organisation provider configuration and, in the later connection/delegation slice, user-owned AI connections, project sharing, runner status and route availability without exposing provider credentials to collaborators.
+
+## 8.5 Capability & Engineering Administration
+Provides Platform, Organisation and Project scoped management of approved agents, skills, MCP/tools, learning/memory policies, model/route assignments and engineering-team defaults. Normal users receive Auto/Recommended behaviour; advanced/admin users may inspect and override eligible capability assignments subject to security policy.
 
 ---
 

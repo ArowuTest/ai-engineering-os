@@ -76,6 +76,7 @@ describe('004_extensible_execution_routes migration', () => {
     expect(first).toEqual([
       '004_extensible_execution_routes.sql',
       '005_product_knowledge_candidates.sql',
+      '006_ai_connections_and_delegation.sql',
     ]);
     expect(second).toEqual([]);
 

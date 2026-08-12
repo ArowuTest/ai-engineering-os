@@ -15,6 +15,7 @@ import {
   createKnowledgeRecord,
   createProject,
   DomainValidationError,
+  parseAIConnectionDateTime,
   reviseKnowledgeRecord,
   requireOrganisationRole,
   requireProjectRole,
@@ -33,6 +34,8 @@ import {
   rejectCandidate,
   retryExtractionRun,
 } from './knowledge-candidate-service.js';
+import { AIConnectionService, AIConnectionServiceError } from './ai-connection-service.js';
+import type { ConnectionFamilyPolicyRegistry } from './ai-connection-policy.js';
 
 export interface AppDependencies {
   projects: ProjectRepository;
@@ -42,6 +45,8 @@ export interface AppDependencies {
   unitOfWork: DatabaseUnitOfWork;
   modelGateway: ModelGateway;
   authService?: AuthService;
+  aiConnectionService?: AIConnectionService;
+  aiConnectionPolicy?: ConnectionFamilyPolicyRegistry;
   allowDevIdentityHeaders?: boolean;
 }
 
@@ -225,6 +230,13 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
         : error.code === 'forbidden' || error.code === 'account_suspended' ? 403
         : error.code === 'user_id_taken' ? 409
         : 410;
+      return reply.code(status).send({ error: error.code });
+    }
+    if (error instanceof AIConnectionServiceError) {
+      const status = error.code === 'forbidden' ? 403
+        : error.code === 'not_found' ? 404
+        : error.code === 'conflict' ? 409
+        : 400;
       return reply.code(status).send({ error: error.code });
     }
     if (error instanceof DomainValidationError) {
@@ -814,6 +826,187 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
       }
       throw error;
     }
+  });
+
+  // ---------------- AI connection administration ----------------
+
+  function requireAIConnectionService(): AIConnectionService {
+    if (!dependencies.aiConnectionService) {
+      throw new RequestAuthError(401, 'AI connection administration is not configured');
+    }
+    return dependencies.aiConnectionService;
+  }
+
+  function requireAIConnectionPolicy(): ConnectionFamilyPolicyRegistry {
+    if (!dependencies.aiConnectionPolicy) {
+      throw new RequestAuthError(401, 'AI connection policy is not configured');
+    }
+    return dependencies.aiConnectionPolicy;
+  }
+
+  function assertAllowedFields(body: JsonObject, allowed: readonly string[]): void {
+    for (const key of Object.keys(body)) {
+      if (!allowed.includes(key)) {
+        throw new DomainValidationError(
+          key,
+          `field ${key} is not accepted on this endpoint`,
+        );
+      }
+    }
+  }
+
+  function connectionParam(request: FastifyRequest): string {
+    const params = request.params as { connectionId?: unknown };
+    return typeof params.connectionId === 'string' ? params.connectionId : '';
+  }
+
+  function optionalDate(body: JsonObject, field: string): Date | undefined {
+    const value = body[field];
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== 'string') throw new DomainValidationError(field);
+    try {
+      return new Date(parseAIConnectionDateTime(value));
+    } catch {
+      throw new DomainValidationError(field);
+    }
+  }
+
+  app.get('/ai-connection-families', async (request, reply) => {
+    await resolveIdentity(request, dependencies);
+    return reply.send(requireAIConnectionPolicy().listSafe());
+  });
+
+  app.get('/ai-connections', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const summaries = await requireAIConnectionService().listConnections({
+      organisationId: identity.organisationId,
+      actorUserId: identity.userId,
+    });
+    return reply.send(summaries);
+  });
+
+  app.post('/ai-connections/personal', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const body = bodyObject(request.body);
+    assertAllowedFields(body, ['connectionFamilyId']);
+    const connectionFamilyId = stringField(body, 'connectionFamilyId');
+    if (connectionFamilyId.trim() === '') throw new DomainValidationError('connectionFamilyId');
+    const summary = await requireAIConnectionService().registerPersonalConnection({
+      organisationId: identity.organisationId,
+      actorUserId: identity.userId,
+      connectionFamilyId,
+    });
+    return reply.code(201).send(summary);
+  });
+
+  app.post('/admin/ai-connections', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const body = bodyObject(request.body);
+    assertAllowedFields(body, ['connectionFamilyId', 'secretRefId']);
+    const connectionFamilyId = stringField(body, 'connectionFamilyId');
+    if (connectionFamilyId.trim() === '') throw new DomainValidationError('connectionFamilyId');
+    const input: Parameters<AIConnectionService['registerOrganisationConnection']>[0] = {
+      organisationId: identity.organisationId,
+      actorUserId: identity.userId,
+      connectionFamilyId,
+    };
+    if (typeof body.secretRefId === 'string') input.secretRefId = body.secretRefId;
+    const summary = await requireAIConnectionService().registerOrganisationConnection(input);
+    return reply.code(201).send(summary);
+  });
+
+  app.delete('/ai-connections/:connectionId', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    await requireAIConnectionService().revokeConnection({
+      organisationId: identity.organisationId,
+      actorUserId: identity.userId,
+      connectionId: connectionParam(request),
+    });
+    return reply.code(204).send();
+  });
+
+  app.get('/projects/:id/ai-connections', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const pool = await requireAIConnectionService().listProjectExecutionPool({
+      organisationId: identity.organisationId,
+      projectId: routeId(request),
+      requesterUserId: identity.userId,
+    });
+    return reply.send(pool);
+  });
+
+  app.post('/projects/:id/ai-connections/:connectionId/share', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const body = bodyObject(request.body);
+    assertAllowedFields(body, ['availableFrom', 'availableUntil']);
+    const usagePolicy: { availableFrom?: Date; availableUntil?: Date } = {};
+    const from = optionalDate(body, 'availableFrom');
+    const until = optionalDate(body, 'availableUntil');
+    if (from) usagePolicy.availableFrom = from;
+    if (until) usagePolicy.availableUntil = until;
+    await requireAIConnectionService().shareConnectionWithProject({
+      organisationId: identity.organisationId,
+      actorUserId: identity.userId,
+      projectId: routeId(request),
+      connectionId: connectionParam(request),
+      usagePolicy,
+    });
+    return reply.code(201).send({ status: 'shared', mode: 'online_only' });
+  });
+
+  app.patch('/projects/:id/ai-connections/:connectionId/share', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const body = bodyObject(request.body);
+    assertAllowedFields(body, ['mode', 'availableFrom', 'availableUntil']);
+    const hasMode = Object.prototype.hasOwnProperty.call(body, 'mode');
+    const hasWindow = body.availableFrom !== undefined || body.availableUntil !== undefined;
+    // Fail closed: combined mode + window updates are not supported on this endpoint.
+    // Rejecting BEFORE any service call prevents partial mutation.
+    if (hasMode && hasWindow) {
+      throw new DomainValidationError(
+        'mode',
+        'mode and availability window cannot be updated in the same request',
+      );
+    }
+    const service = requireAIConnectionService();
+    if (hasMode) {
+      if (body.mode !== 'online_only' && body.mode !== 'persistent') {
+        throw new DomainValidationError('mode');
+      }
+      await service.setProjectShareMode({
+        organisationId: identity.organisationId,
+        actorUserId: identity.userId,
+        projectId: routeId(request),
+        connectionId: connectionParam(request),
+        mode: body.mode,
+      });
+    }
+    if (hasWindow) {
+      const usagePolicy: { availableFrom?: Date; availableUntil?: Date } = {};
+      const from = optionalDate(body, 'availableFrom');
+      const until = optionalDate(body, 'availableUntil');
+      if (from) usagePolicy.availableFrom = from;
+      if (until) usagePolicy.availableUntil = until;
+      await service.updateProjectShareUsagePolicy({
+        organisationId: identity.organisationId,
+        actorUserId: identity.userId,
+        projectId: routeId(request),
+        connectionId: connectionParam(request),
+        usagePolicy,
+      });
+    }
+    return reply.code(204).send();
+  });
+
+  app.delete('/projects/:id/ai-connections/:connectionId/share', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    await requireAIConnectionService().revokeProjectShare({
+      organisationId: identity.organisationId,
+      actorUserId: identity.userId,
+      projectId: routeId(request),
+      connectionId: connectionParam(request),
+    });
+    return reply.code(204).send();
   });
 
   return app;

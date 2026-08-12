@@ -62,6 +62,17 @@ export class SessionRepository {
     );
   }
 
+  async hasActiveForUser(userId: string, now = new Date()): Promise<boolean> {
+    const result = await this.database.query<{ present: number }>(
+      `SELECT 1 AS present
+       FROM auth_sessions
+       WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > $2
+       LIMIT 1`,
+      [userId, now],
+    );
+    return result.rows.length > 0;
+  }
+
   async revokeById(id: string, revokedAt: Date): Promise<void> {
     await this.database.query(
       `UPDATE auth_sessions SET revoked_at = $2
