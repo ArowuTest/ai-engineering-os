@@ -18,15 +18,23 @@ import {
   logoutUser,
   ORGANISATION_COOKIE,
   redeemInvitation,
+  registerOrganisationAIConnection,
+  registerPersonalAIConnection,
   rejectKnowledgeCandidate,
   retryKnowledgeExtraction,
   reviseKnowledge,
+  revokeAIConnection,
+  revokeAIConnectionProjectShare,
   revokeOrganisationAccess,
   revokeProjectAccess,
   sendProductPartnerTurn,
   SESSION_COOKIE,
+  setAIConnectionShareMode,
   setInvitationPolicy,
   setUserStatus,
+  shareAIConnectionWithProject,
+  updateAIConnectionShareWindow,
+  type AIConnectionShareMode,
   type KnowledgeStatus,
   type OrganisationRole,
   type ProductPartner,
@@ -245,4 +253,93 @@ export async function setUserStatusAction(formData: FormData) {
 export async function revokeOrganisationAccessAction(formData: FormData) {
   await revokeOrganisationAccess(required(formData, 'userId'));
   revalidatePath('/admin/access');
+}
+
+function optionalIsoDate(formData: FormData, key: string): string | undefined {
+  const raw = formData.get(key);
+  if (typeof raw !== 'string' || raw.trim() === '') return undefined;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) throw new Error(`${key} must be a valid ISO date`);
+  return parsed.toISOString();
+}
+
+export async function registerPersonalAIConnectionAction(formData: FormData) {
+  await registerPersonalAIConnection({
+    connectionFamilyId: required(formData, 'connectionFamilyId'),
+  });
+  revalidatePath('/ai-connections');
+}
+
+export async function registerOrganisationAIConnectionAction(formData: FormData) {
+  const secretRefRaw = formData.get('secretRefId');
+  const input: { connectionFamilyId: string; secretRefId?: string } = {
+    connectionFamilyId: required(formData, 'connectionFamilyId'),
+  };
+  if (typeof secretRefRaw === 'string' && secretRefRaw.trim() !== '') {
+    input.secretRefId = secretRefRaw.trim();
+  }
+  await registerOrganisationAIConnection(input);
+  revalidatePath('/ai-connections');
+}
+
+export async function revokeAIConnectionAction(formData: FormData) {
+  await revokeAIConnection(required(formData, 'connectionId'));
+  revalidatePath('/ai-connections');
+}
+
+export async function shareAIConnectionAction(formData: FormData) {
+  const projectId = required(formData, 'projectId');
+  const connectionId = required(formData, 'connectionId');
+  const availableFrom = optionalIsoDate(formData, 'availableFrom');
+  const availableUntil = optionalIsoDate(formData, 'availableUntil');
+  const input: {
+    projectId: string;
+    connectionId: string;
+    availableFrom?: string;
+    availableUntil?: string;
+  } = { projectId, connectionId };
+  if (availableFrom) input.availableFrom = availableFrom;
+  if (availableUntil) input.availableUntil = availableUntil;
+  await shareAIConnectionWithProject(input);
+  revalidatePath('/ai-connections');
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function setAIConnectionShareModeAction(formData: FormData) {
+  const projectId = required(formData, 'projectId');
+  const connectionId = required(formData, 'connectionId');
+  const rawMode = required(formData, 'mode');
+  if (rawMode !== 'online_only' && rawMode !== 'persistent') {
+    throw new Error('mode must be online_only or persistent');
+  }
+  const mode: AIConnectionShareMode = rawMode;
+  await setAIConnectionShareMode({ projectId, connectionId, mode });
+  revalidatePath('/ai-connections');
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function updateAIConnectionShareWindowAction(formData: FormData) {
+  const projectId = required(formData, 'projectId');
+  const connectionId = required(formData, 'connectionId');
+  const availableFrom = optionalIsoDate(formData, 'availableFrom');
+  const availableUntil = optionalIsoDate(formData, 'availableUntil');
+  const input: {
+    projectId: string;
+    connectionId: string;
+    availableFrom?: string;
+    availableUntil?: string;
+  } = { projectId, connectionId };
+  if (availableFrom) input.availableFrom = availableFrom;
+  if (availableUntil) input.availableUntil = availableUntil;
+  await updateAIConnectionShareWindow(input);
+  revalidatePath('/ai-connections');
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function revokeAIConnectionShareAction(formData: FormData) {
+  const projectId = required(formData, 'projectId');
+  const connectionId = required(formData, 'connectionId');
+  await revokeAIConnectionProjectShare({ projectId, connectionId });
+  revalidatePath('/ai-connections');
+  revalidatePath(`/projects/${projectId}`);
 }
