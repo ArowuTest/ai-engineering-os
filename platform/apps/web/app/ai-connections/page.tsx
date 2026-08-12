@@ -12,6 +12,7 @@ import {
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import {
+  clearAIConnectionShareWindowAction,
   registerOrganisationAIConnectionAction,
   registerPersonalAIConnectionAction,
   revokeAIConnectionAction,
@@ -369,7 +370,7 @@ export default async function AIConnectionsPage() {
                                 value={connection.id}
                               />
                               <label>
-                                <span>Available from</span>
+                                <span>Available from (UTC)</span>
                                 <input
                                   className="input"
                                   type="datetime-local"
@@ -380,7 +381,7 @@ export default async function AIConnectionsPage() {
                                 />
                               </label>
                               <label>
-                                <span>Available until</span>
+                                <span>Available until (UTC)</span>
                                 <input
                                   className="input"
                                   type="datetime-local"
@@ -392,6 +393,21 @@ export default async function AIConnectionsPage() {
                               </label>
                               <button className="button-small" type="submit">
                                 Update usage window
+                              </button>
+                            </form>
+                            <form action={clearAIConnectionShareWindowAction}>
+                              <input
+                                type="hidden"
+                                name="projectId"
+                                value={projectId}
+                              />
+                              <input
+                                type="hidden"
+                                name="connectionId"
+                                value={connection.id}
+                              />
+                              <button className="button-small" type="submit">
+                                Clear usage window
                               </button>
                             </form>
                             <form action={revokeAIConnectionShareAction}>

@@ -601,12 +601,17 @@ export function setAIConnectionShareMode(input: {
 export function updateAIConnectionShareWindow(input: {
   projectId: string;
   connectionId: string;
-  availableFrom?: string;
-  availableUntil?: string;
+  availableFrom?: string | null;
+  availableUntil?: string | null;
 }): Promise<void> {
-  const body: Record<string, string> = {};
-  if (input.availableFrom) body.availableFrom = input.availableFrom;
-  if (input.availableUntil) body.availableUntil = input.availableUntil;
+  // Explicit null on either bound is the owner clear contract: the HTTP route
+  // sees `hasWindow=true` (field present) but `optionalDate` returns undefined
+  // for null, so the service clears both bounds atomically via empty usagePolicy.
+  const body: Record<string, string | null> = {};
+  if (input.availableFrom === null) body.availableFrom = null;
+  else if (typeof input.availableFrom === 'string') body.availableFrom = input.availableFrom;
+  if (input.availableUntil === null) body.availableUntil = null;
+  else if (typeof input.availableUntil === 'string') body.availableUntil = input.availableUntil;
   return apiFetch<void>(
     `/projects/${input.projectId}/ai-connections/${input.connectionId}/share`,
     { method: 'PATCH', body: JSON.stringify(body) },

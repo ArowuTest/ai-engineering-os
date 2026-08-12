@@ -273,6 +273,103 @@ test('AI connections page derives owner share state from authoritative entry.sha
   assert.match(page, /persistentSupported/);
 });
 
+test('AI connections page treats usage-window inputs as explicit UTC and offers an owner clear action', async () => {
+  const page = await read('app/ai-connections/page.tsx');
+
+  // Datetime-local inputs must be labelled UTC so operator intent is unambiguous.
+  assert.match(
+    page,
+    /Available from\s*\(UTC\)/,
+    'availableFrom label must be marked as UTC',
+  );
+  assert.match(
+    page,
+    /Available until\s*\(UTC\)/,
+    'availableUntil label must be marked as UTC',
+  );
+
+  // An explicit owner clear action must be wired to a dedicated server action.
+  assert.match(
+    page,
+    /action=\{clearAIConnectionShareWindowAction\}/,
+    'page must render a form whose action is clearAIConnectionShareWindowAction',
+  );
+  assert.match(
+    page,
+    /Clear usage window/i,
+    'clear action must be user-visible as "Clear usage window"',
+  );
+});
+
+test('actions.ts parses datetime-local as UTC deterministically and exposes clearAIConnectionShareWindowAction', async () => {
+  const actions = await read('app/actions.ts');
+
+  // A timezone-less datetime-local value (YYYY-MM-DDTHH:MM[:SS]) must be normalised
+  // to UTC BEFORE handing off to new Date(), so parsing is not server-TZ dependent.
+  assert.match(
+    actions,
+    /\/\^\\d\{4\}-\\d\{2\}-\\d\{2\}T\\d\{2\}:\\d\{2\}(?:\(\?:\:\\d\{2\}\)\?)?(?:\\.\\d\+)?\$\/|\/\^\\d\{4\}-\\d\{2\}-\\d\{2\}T\\d\{2\}:\\d\{2\}/,
+    'actions.ts must detect timezone-less datetime-local values with a regex before parsing',
+  );
+  assert.match(
+    actions,
+    /(\+\s*['"]Z['"]|Date\.UTC\()/,
+    'timezone-less datetime-local values must be coerced to UTC (append "Z" or use Date.UTC)',
+  );
+
+  // The dedicated clear action must exist and call the client with explicit nulls.
+  assert.match(
+    actions,
+    /export async function clearAIConnectionShareWindowAction\(/,
+    'clearAIConnectionShareWindowAction must be exported',
+  );
+  const clearAction = actions.match(
+    /export async function clearAIConnectionShareWindowAction\([\s\S]*?\n\}/,
+  );
+  assert.ok(clearAction, 'clearAIConnectionShareWindowAction must be declared');
+  assert.match(
+    clearAction[0],
+    /availableFrom:\s*null[\s\S]*?availableUntil:\s*null/,
+    'clear action must pass explicit null bounds to the client',
+  );
+  assert.match(
+    clearAction[0],
+    /updateAIConnectionShareWindow\(/,
+    'clear action must call updateAIConnectionShareWindow with null bounds',
+  );
+});
+
+test('lib/api.ts updateAIConnectionShareWindow serialises explicit null bounds for owner clear', async () => {
+  const api = await read('lib/api.ts');
+  const fn = api.match(
+    /export function updateAIConnectionShareWindow\([\s\S]*?(?=\nexport |\n\s*$)/,
+  );
+  assert.ok(fn, 'updateAIConnectionShareWindow must be declared');
+  const block = fn[0];
+  // Signature must accept string | null so callers can request an explicit clear.
+  assert.match(
+    block,
+    /availableFrom\?:\s*string\s*\|\s*null/,
+    'availableFrom must accept string | null',
+  );
+  assert.match(
+    block,
+    /availableUntil\?:\s*string\s*\|\s*null/,
+    'availableUntil must accept string | null',
+  );
+  // Null must be forwarded in the JSON body (not stripped by a truthy check).
+  assert.match(
+    block,
+    /availableFrom\s*===\s*null|input\.availableFrom\s*===\s*null/,
+    'null availableFrom must be explicitly forwarded, not filtered by truthiness',
+  );
+  assert.match(
+    block,
+    /availableUntil\s*===\s*null|input\.availableUntil\s*===\s*null/,
+    'null availableUntil must be explicitly forwarded, not filtered by truthiness',
+  );
+});
+
 test('actions.ts guards update-window against blind PATCH and keeps mode & window PATCHes separate', async () => {
   const actions = await read('app/actions.ts');
   // Window update action must NOT issue a PATCH with no window fields (blind overwrite / silent

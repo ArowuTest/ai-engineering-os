@@ -255,10 +255,18 @@ export async function revokeOrganisationAccessAction(formData: FormData) {
   revalidatePath('/admin/access');
 }
 
+// AI connection availability administration is an explicit UTC contract.
+// Browser <input type="datetime-local"> submits timezone-less strings like
+// "2026-08-13T09:30" which `new Date(raw)` would parse in the server's local TZ.
+// We normalise to UTC BEFORE parsing so behaviour is deterministic across hosts.
+const DATETIME_LOCAL_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?$/;
+
 function optionalIsoDate(formData: FormData, key: string): string | undefined {
   const raw = formData.get(key);
   if (typeof raw !== 'string' || raw.trim() === '') return undefined;
-  const parsed = new Date(raw);
+  const trimmed = raw.trim();
+  const normalised = DATETIME_LOCAL_RE.test(trimmed) ? trimmed + 'Z' : trimmed;
+  const parsed = new Date(normalised);
   if (Number.isNaN(parsed.getTime())) throw new Error(`${key} must be a valid ISO date`);
   return parsed.toISOString();
 }
@@ -340,6 +348,19 @@ export async function updateAIConnectionShareWindowAction(formData: FormData) {
   if (availableFrom) input.availableFrom = availableFrom;
   if (availableUntil) input.availableUntil = availableUntil;
   await updateAIConnectionShareWindow(input);
+  revalidatePath('/ai-connections');
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function clearAIConnectionShareWindowAction(formData: FormData) {
+  const projectId = required(formData, 'projectId');
+  const connectionId = required(formData, 'connectionId');
+  await updateAIConnectionShareWindow({
+    projectId,
+    connectionId,
+    availableFrom: null,
+    availableUntil: null,
+  });
   revalidatePath('/ai-connections');
   revalidatePath(`/projects/${projectId}`);
 }
