@@ -1,11 +1,11 @@
 # AI Engineering OS — Living Handover
 
 **Purpose:** Operational continuation document for a new ChatGPT/Claude/Codex agent if the current thread ends.
-**Last updated:** 12 August 2026, during Task 8 final hardening after offset-date fix `104a6be0`.
+**Last updated:** 12 August 2026, after Task 8 merge, GitHub verification and feature-branch cleanup.
 **Repository:** `ArowuTest/ai-engineering-os`
 **Local repo:** `<LOCAL_REPO_ROOT>`
 **Current source-of-truth branch:** `main`
-**Current remote/local main SHA:** `e51a3c183fa9dc704cb756d471afb515a9c8aed6`
+**Task 8 product merge SHA:** `69ebe73b549f2fa2c1e63a7fcf13c28771290a2d` (subsequent documentation-only closeout commits may advance `main`).
 
 ## 1. Product principle
 
@@ -23,7 +23,8 @@ AI Engineering OS is the master orchestrator. Hermes/Codex/Claude Code/Antigravi
 
 The routing foundation + review-first Product Knowledge extraction slice is complete and merged.
 Merge commit: `e51a3c18 merge: routing foundation and review-first extraction`.
-GitHub `main` passed Platform Verification and ECC Compatibility on that exact merge.Delivered on `main`:
+GitHub `main` passed Platform Verification and ECC Compatibility on that exact merge.
+Delivered on `main`:
 - Fastify API/orchestrator, Next.js Product Studio and PostgreSQL persistence.
 - User ID/password authentication, invitations, organisation/project RBAC and immediate revocation.
 - Persistent Product Partner conversations and canonical Product Knowledge/revisions.
@@ -36,13 +37,19 @@ GitHub `main` passed Platform Verification and ECC Compatibility on that exact m
 - Product Knowledge Review Queue with Product Owner Accept / Edit & Accept / Reject / Retry.
 - Accepted candidates become canonical `confirmed`; client cannot override status.
 - Retry uses original source turn and creates no duplicate conversation messages.
-- Migrations on `main`: 001–005 only.
+- Migrations on `main`: 001–006.
 - Full local smoke and Docker PostgreSQL verification completed before merge.
+The AI connection delegation/administration slice is also merged to `main`:
+- reviewed feature tip: `ae72181d fix: complete AI connection delegation hardening`;
+- merge commit: `69ebe73b merge: AI connection delegation administration`;
+- GitHub feature CI run #95: ECC Compatibility + Platform Verification PASS;
+- GitHub main CI run #96 on `69ebe73b`: ECC Compatibility + Platform Verification PASS;
+- merged-main fresh Docker verification: 33 static + 131 unit + 185 integration tests, typecheck, production build, dependency audit and ECC/security gates all PASS.
 
 ## 3. Approved architecture for the current phase
 
 Design: `docs/superpowers/specs/2026-08-11-extensible-ai-execution-routing-and-shared-entitlements-design.md`.
-SRS and Technical Architecture are v1.3.
+SRS and Technical Architecture are v1.4.
 
 Personal connection default sequence:
 `Do Not Share` (absence of share) → explicit project share creates `Online Only` → owner may separately enable `Persistent` when trusted policy supports it.
@@ -56,16 +63,14 @@ Default execution tiering:
 Credentials are never delegated to collaborators; only an eligible execution route is delegated.
 Personal provider passwords, cookies, refresh tokens and web sessions must never be stored or exposed by the platform.
 
-## 4. Current implementation branch / worktree
+## 4. Current implementation state
 
-Branch: `feature/ai-connection-delegation-administration`
-Isolated worktree:
-`<LOCAL_REPO_ROOT>/.worktrees/ai-connection-delegation-administration`
+No AI-connection feature branch/worktree remains. The slice is merged to `main`, verified on GitHub, and the merged feature branch/worktree have been removed.
 
 Implementation plan:
 `docs/superpowers/plans/2026-08-12-ai-connection-delegation-administration.md`
 
-Current accepted commits on the feature branch:
+Historical accepted commits from the merged feature branch:
 - `7ae5d5df` — docs: plan AI connection delegation administration
 - `4947db2f` — feat: define AI connection policy contracts
 - `5b4ebbbe` — feat: persist AI connections and project delegation
@@ -74,8 +79,7 @@ Current accepted commits on the feature branch:
 - `004dc663` — feat: add project-scoped AI connection sharing
 - `7bb782f8` — feat: expose project AI execution pool policy
 
-Tasks 1–7 are implemented and independently approved with zero Critical/Important findings.
-Task 8 verification/hardening is complete through product smoke and final whole-branch review; commit/push/merge verification remains.
+Tasks 1–8 are complete. Final whole-branch review found zero Critical/Important issues; feature and merged-main CI both passed; the feature branch/worktree were cleaned after containment was proven.
 
 ## 5. What Tasks 1–7 delivered
 
@@ -169,7 +173,7 @@ Keep ECC scratch/reviewer output outside the repo. Ignored scratch containing Un
 Established workflow is NOT PR-first:
 feature worktree/branch → verify/review → merge locally into `main` → verify merged `main` → push GitHub `main`.
 After proving a feature branch is fully contained in `main`, delete the stale remote feature branch so GitHub does not misleadingly show outstanding product branches.
-Preserve `ecc-seed` and `ecc-upstream`; never merge `ecc-upstream` wholesale.Dependabot branches are proposals and must be reviewed independently before merge.
+Preserve `ecc-seed` and `ecc-upstream`; never merge `ecc-upstream` wholesale. Dependabot branches are proposals and must be reviewed independently before merge.
 
 ## 10. Future providers/models
 
@@ -183,6 +187,7 @@ Before implementing any new provider, reverify its CURRENT official API, authent
 
 Next major slice: Agent Bridge / runner execution.
 Add durable runner registration/heartbeat/trust/revocation and real subscription-backed harness adapters incrementally (Codex, Claude Code, Antigravity, then future harnesses).
+Wire OpenRouter early in that provider/harness phase so Qwen 3.8 Max can become the primary external engineering reviewer and GLM-5.2 can shadow-review during calibration; this reduces dependence on remaining Opus subscription capacity without changing the platform-owned verification gates.
 Provider credentials should remain on the authorised runner where practical; the platform receives safe connection/runner metadata and dispatch capability, not personal passwords/cookies.
 Online Only then requires both owner platform presence and authorised personal runner online.
 Persistent allows use after owner sign-out only when an authorised persistent runner remains reachable and trusted policy allows it.
@@ -190,6 +195,10 @@ Persistent allows use after owner sign-out only when an authorised persistent ru
 After Agent Bridge: deeper ECC-native Engineering Studio productisation.
 Preserve and progressively surface the inherited ECC capability estate — agents/skills, Continuous Learning, Unified Memory, team orchestration, evals, verification, browser QA/canary, context-budget, skill-compliance/health, benchmark optimisation, security and the MCP catalogue — through platform governance rather than recreating it.
 The private `ecc-adapter` currently provides accepted ECC provenance only; future bounded slices add discovery/normalisation contracts while leaving mature ECC implementations in place wherever suitable.
+Future product surfaces already agreed:
+- terminal/CLI access (including VS Code integrated terminal) must be a first-class client of the same platform API/orchestrator, not a separate state owner;
+- the web UI must be responsive/mobile-optimised across phone, tablet and desktop, with dense operational views collapsing into mobile-friendly layouts;
+- the conversational product must support general chat and research as well as engineering, with the orchestrator selecting the appropriate agent/model/tools rather than forcing users to choose a coding model for every request.
 
 ## 12. Continuation instructions for the next agent
 
@@ -199,7 +208,7 @@ The private `ecc-adapter` currently provides accepted ECC provenance only; futur
 4. Read the current task plan and archived implementer/reviewer reports.
 5. Do not repeat completed questions or redesign locked decisions.
 6. Resume from the first unfinished review/TDD gate, not from memory.
-7. Maintain Docker PostgreSQL verification and independent Opus review discipline.
+7. Maintain Docker PostgreSQL verification and independent multi-model review discipline; use Opus where available and transition external calibration to Qwen 3.8 Max + GLM-5.2 once OpenRouter is wired through the runtime.
 8. Keep this handover's `Last updated`, current SHA/task, delivered items and next step current after each task closes.
 ## 13. Live checkpoint at document creation
 
@@ -269,3 +278,15 @@ The latest datetime fix has targeted GREEN evidence for 13 parser tests, 14 AI C
 The product architecture has also been clarified and documented as SRS/Technical Architecture v1.4: AI Engineering OS is the enhanced/productised evolution of ECC. Existing ECC learning, memory, skills, agents, MCPs, evals, verification, orchestration and related engineering capabilities are native assets to preserve and surface rather than duplicate. See `docs/superpowers/specs/2026-08-12-ecc-native-capability-productisation-design.md`.
 
 **Latest Task 8 checkpoint:** fresh Docker/platform/ECC/security/product-smoke gates and final whole-branch review are green with 0 Critical / 0 Important. The remaining sequence is hardening commit → feature push/exact CI → local merge → merged-main verification → GitHub main push/CI verification.
+### Final Task 8 completion checkpoint
+
+Task 8 is complete.
+- hardening commit: `ae72181df0860a68c16d176b04416b492df8e43a`;
+- explicit merge commit: `69ebe73b549f2fa2c1e63a7fcf13c28771290a2d`;
+- merge tree exactly matched the reviewed feature tree;
+- feature CI run #95 and main CI run #96 both passed ECC Compatibility and Platform Verification;
+- local merged-main verification passed 33 static, 131 unit and 185 integration tests plus typecheck, production Next/Turbopack build, dependency audit and ECC/security checks;
+- feature branch and `.worktrees/ai-connection-delegation-administration` were removed after ancestry/containment was proven;
+- `main` is now the sole source of truth for this slice.
+
+**Immediate next action:** create/review the Agent Bridge + subscription-harness implementation plan, including an early OpenRouter route for Qwen 3.8 Max / GLM-5.2 engineering-review calibration, then implement under the existing TDD/Docker/security gates.
