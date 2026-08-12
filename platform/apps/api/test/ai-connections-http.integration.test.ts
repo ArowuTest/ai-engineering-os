@@ -512,10 +512,12 @@ describe('AI connections HTTP boundary', () => {
 
     // A different member — one who has active project membership AND org
     // membership — must still be rejected when trying to clear another user's
-    // window. Giving the stranger project access removes project-visibility as
-    // a rejection path, so the ONLY remaining gate is connection ownership /
-    // organisation-admin authority. We therefore assert an exact 403 (not
-    // [403,404]), proving the null-bounds PATCH is authority-gated end to end.
+    // window. We seed project membership defensively so the assertion cannot
+    // be satisfied by an unrelated project-visibility rejection if the
+    // service's check order is ever reshuffled; the authority gate
+    // (connection ownership or organisation admin/owner) is what actually
+    // fires today. We therefore assert an exact 403 (not [403,404]), proving
+    // the null-bounds PATCH is authority-gated end to end.
     const strangerId = await seedUser('window.clear.stranger', 'Stranger-2026!');
     await seedOrgMembership('org-001', strangerId, 'member');
     await pool.query(

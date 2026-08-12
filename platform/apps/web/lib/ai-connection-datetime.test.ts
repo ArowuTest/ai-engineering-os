@@ -75,4 +75,17 @@ describe('parseAIConnectionDateTime', () => {
     expect(() => parseAIConnectionDateTime('2026-08-13T24:00')).toThrow(/valid ISO/);
     expect(() => parseAIConnectionDateTime('2026-08-13T09:60')).toThrow(/valid ISO/);
   });
+
+  it('fails closed on a calendar-invalid day carried on a Z-suffixed ISO string', () => {
+    // Host `new Date('2026-02-30T09:30:00Z')` silently rolls the day forward
+    // to 2026-03-02 and returns a valid instant. The parser must reject the
+    // value instead of normalising a nonexistent calendar day.
+    expect(() => parseAIConnectionDateTime('2026-02-30T09:30:00Z')).toThrow(/valid ISO/);
+  });
+
+  it('fails closed on a calendar-invalid day carried on an offset-bearing ISO string', () => {
+    // Same guarantee for numeric offsets: 2026-02-30 does not exist regardless
+    // of the trailing +02:00.
+    expect(() => parseAIConnectionDateTime('2026-02-30T09:30:00+02:00')).toThrow(/valid ISO/);
+  });
 });
