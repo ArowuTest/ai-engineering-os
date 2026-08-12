@@ -1,7 +1,7 @@
 # AI Engineering OS â€” Living Handover
 
 **Purpose:** Operational continuation document for a new ChatGPT/Claude/Codex agent if the current thread ends.
-**Last updated:** 12 August 2026, after AI Connection / Delegation Task 7 acceptance.
+**Last updated:** 12 August 2026, during Task 8 final hardening after offset-date fix `104a6be0`.
 **Repository:** `ArowuTest/ai-engineering-os`
 **Local repo:** `C:\Users\sanus\Desktop\AI-Engineering-OS`
 **Current source-of-truth branch:** `main`
@@ -11,6 +11,8 @@
 
 AI Engineering OS is an "AI-powered software company in a box".
 The web application owns the project; models, agents and harnesses are replaceable workers.
+AI Engineering OS is the enhanced, privately branded and productised evolution of the inherited ECC repository. ECC agents, skills, commands, workflows, Continuous Learning v2.1, Unified Memory, MCP definitions, evals, verification, security and autonomous-engineering patterns are native product assets, not an external capability package to rebuild later.
+The default rule is **reuse before rebuild; preserve before replace; generalise before discard**. `platform/` adds SaaS/product governance, tenancy, durable state, routing, RBAC, audit, entitlement controls and UI around that inherited engineering estate.
 Canonical project state must survive provider switches, sign-out, runner loss and individual collaborators leaving.
 
 Keep these concepts separate:
@@ -178,14 +180,14 @@ Provider credentials should remain on the authorised runner where practical; the
 Online Only then requires both owner platform presence and authorised personal runner online.
 Persistent allows use after owner sign-out only when an authorised persistent runner remains reachable and trusted policy allows it.
 
-After Agent Bridge: deeper ECC Engineering Studio integration.
-Reuse the inherited ECC agent/skill substrate (Planner, Architect, Engineer, Reviewer, Security Reviewer, DB Reviewer, TDD, etc.) through the private `ecc-adapter` rather than coupling agents to providers.
-The private `ecc-adapter` currently provides accepted ECC provenance only; future work must add agent/skill enumeration, task translation, session normalization and verification-result normalization.
+After Agent Bridge: deeper ECC-native Engineering Studio productisation.
+Preserve and progressively surface the inherited ECC capability estate — agents/skills, Continuous Learning, Unified Memory, team orchestration, evals, verification, browser QA/canary, context-budget, skill-compliance/health, benchmark optimisation, security and the MCP catalogue — through platform governance rather than recreating it.
+The private `ecc-adapter` currently provides accepted ECC provenance only; future bounded slices add discovery/normalisation contracts while leaving mature ECC implementations in place wherever suitable.
 
 ## 12. Continuation instructions for the next agent
 
 1. Read this handover first.
-2. Read SRS v1.3, Technical Architecture v1.3 and the approved shared-entitlements design.
+2. Read SRS v1.4, Technical Architecture v1.4, the approved shared-entitlements design and `docs/superpowers/specs/2026-08-12-ecc-native-capability-productisation-design.md`.
 3. Inspect `git status`, current branch, HEAD, `main`, `origin/main` before changing anything.
 4. Read the current task plan and archived implementer/reviewer reports.
 5. Do not repeat completed questions or redesign locked decisions.
@@ -246,3 +248,17 @@ No migrations, HTTP routes, trusted policy, model gateway, runner/Agent Bridge o
 Non-blocking notes: `datetime-local` currently formats stored timestamps using UTC digits; there is no explicit one-click clear-both-window-bounds affordance yet. Backend authority and durable state are correct.
 
 **Immediate next action:** Task 8 fresh-volume full platform/ECC/security verification, product smoke, whole-branch Opus review, then local merge to `main`, merged-main verification and GitHub `main` push if every gate is green.
+
+### Live checkpoint update — Task 8 hardening and architecture clarification
+
+Task 8 hardening commits now include:
+- `84d40d6d fix: harden AI connection usage window controls`
+- `a106700e test: harden AI connection usage window coverage`
+- `6d3132c7 fix: harden AI connection datetime parser and tests`
+- `104a6be0 fix: reject calendar-invalid offset-bearing AI connection dates`
+
+The latest datetime fix has targeted GREEN evidence for 13 parser tests, 14 AI Connections HTTP integration tests, 11 UI contract tests, platform typecheck and `git diff --check`. It still requires fresh independent whole-branch review plus the complete Task 8 fresh-volume platform/ECC/security/product-smoke gates before merge readiness can be claimed.
+
+The product architecture has also been clarified and documented as SRS/Technical Architecture v1.4: AI Engineering OS is the enhanced/productised evolution of ECC. Existing ECC learning, memory, skills, agents, MCPs, evals, verification, orchestration and related engineering capabilities are native assets to preserve and surface rather than duplicate. See `docs/superpowers/specs/2026-08-12-ecc-native-capability-productisation-design.md`.
+
+**Immediate next action:** independently review `104a6be0` and the new documentation-only architecture delta, then run Task 8 fresh-volume Docker/platform/ECC/security/product smoke and whole-branch review. Only after every gate is green should the branch merge locally to `main`, merged `main` be reverified, and GitHub `main` be pushed.

@@ -53,3 +53,12 @@ A long-running ECC baseline test pass progressed successfully across the normal 
 - `claude-vscode`.
 
 Denied-entrypoint cases passed and another Python-dependent security-monitor case skipped. The full ECC suite is therefore **not recorded as fully passing** on this machine. The finding is environmental and pre-dates the private platform implementation.
+## Inherited Capability Productisation Note — 12 August 2026
+
+The accepted ECC baseline is not merely source material for selected agents. It is the native engineering estate of AI Engineering OS and currently includes 67 agent definitions and 284 skill directories plus commands, workflows, hooks, rules and a managed MCP catalogue.
+
+A direct repository audit confirmed important inherited capabilities including Continuous Learning v2.1, Unified Memory, team-agent orchestration, autonomous loops, agent-eval/eval-harness, verification-loop, browser QA, canary-watch, context-budget, skill-scout/stocktake/health/compliance, benchmark optimisation, council, enterprise-agent-ops, cost tracking, security review/scanning and iterative retrieval/research workflows.
+
+`mcp-configs/mcp-servers.json` currently contains 35 MCP server definitions, including GitHub, Playwright, Railway, Vercel, Supabase, Jira, Confluence, Context7, Firecrawl/Exa, filesystem, memory and Cloudflare-related entries. Presence in the inherited catalogue does not grant credentials or execution authority; product trust, organisation/project permission and task activation remain platform-controlled.
+
+Continuous Learning v2.1 is implemented, not merely documented: hooks capture observations; project/global confidence-scored instincts can be injected into later sessions and evolved into skills/commands/agents. Its background observer is disabled by default in the inherited `skills/continuous-learning-v2/config.json`; AI Engineering OS productisation must enable/generalise it deliberately under scoped governance rather than assume it is currently running.

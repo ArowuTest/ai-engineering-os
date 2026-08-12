@@ -1,13 +1,27 @@
 # AI Product & Engineering Operating System
 ## Technical Architecture & Detailed Module Specification
 
-**Document version:** 1.3
+**Document version:** 1.4
 **Status:** Approved technical baseline for V1 planning
-**Date:** 11 August 2026
+**Date:** 12 August 2026
 **Parent:** `docs/product/AI-PRODUCT-ENGINEERING-OS-SRS.md`
 **Execution design:** `docs/superpowers/specs/2026-08-11-extensible-ai-execution-routing-and-shared-entitlements-design.md`
+**ECC-native capability design:** `docs/superpowers/specs/2026-08-12-ecc-native-capability-productisation-design.md`
 
 ## 0. Change Record
+
+### Version 1.4
+
+Version 1.4 records the approved ECC-native productisation architecture.
+
+- AI Engineering OS is the enhanced, privately branded and productised evolution of the inherited ECC repository, not a separate application that later imports ECC as an external capability system.
+- Existing ECC agents, skills, commands, workflows, Continuous Learning v2.1, Unified Memory, MCP definitions, evals, verification, security and autonomous-engineering patterns remain native implementation assets unless deliberately superseded or excluded.
+- The default is reuse before rebuild, preserve before replace and generalise before discard.
+- `platform/` adds SaaS tenancy, RBAC, durable canonical state, AI connection/entitlement governance, routing, audit, budgets and UI around the inherited engineering estate; it does not duplicate that estate.
+- The runtime control concept is a thin Capability Registry/Resolver that discovers and permissions existing assets and resolves the smallest task-relevant agent/skill/MCP set.
+- Continuous learning and unified memory are first-class cross-harness product capabilities with scoped promotion/governance rather than Claude-only optional extras.
+- Skills and MCP registries are seeded from the approved inherited ECC estate; external sources such as OneSkill are additive discovery channels subject to trust review.
+- Engineering Studio will progressively surface inherited team orchestration, evals, verification, browser QA, canary monitoring, context-budget, skill-compliance, benchmarking, council, enterprise-agent-ops and cost/research capabilities.
 
 ### Version 1.3
 
@@ -61,8 +75,9 @@ PLATFORM API + MASTER ORCHESTRATOR
  ├── Execution-Route Gateway
  ├── Provider + Model Registry
  ├── Harness + Runner Registry
- ├── Agent + Skill Registry
- ├── MCP / Tool Capability Layer
+ ├── Capability Registry / Resolver
+ │    ├── Agents + Skills
+ │    └── MCP / Tools
  ├── Connection / Entitlement Policy
  └── Cost / Risk / Review Router
         │
@@ -75,7 +90,7 @@ EXECUTION ROUTES
  └── future providers / harnesses
         │
         ▼
-ECC-backed agents + secure sandboxes/worktrees + GitHub + CI/CD
+Native ECC engineering estate + secure sandboxes/worktrees + GitHub + CI/CD
 ```
 
 The platform owns durable workflow state. Models, harnesses, agents, connections and user sessions are replaceable execution resources.
@@ -159,28 +174,21 @@ ai-engineering-os/
 └── UPSTREAM.md
 ```
 
-## 5. ECC Integration Boundary
+## 5. ECC-Native Productisation Boundary
 
-ECC provides the engineering operating substrate. We reuse or adapt:
+The inherited ECC estate is the native engineering foundation of AI Engineering OS. It already contains agents, skills, commands, workflows, learning, memory, MCP definitions, evals, verification, security and autonomous-engineering patterns. Platform development must preserve and expose these capabilities rather than recreate them in a second tree.
 
-- agents and skills;
-- TDD, planning, review and verification workflows;
-- rules and hooks;
-- AgentShield/security patterns;
-- orchestration skills;
-- session-adapter concepts;
-- MCP inventory concepts;
-- worktree lifecycle management.
+The default decision sequence is: reuse as-is → adapt/generalise → supersede only with recorded rationale → exclude only with recorded security/product rationale.
 
-A narrow `platform/packages/ecc-adapter` boundary prevents the private product from depending directly on arbitrary ECC internals.
+A narrow `platform/packages/ecc-adapter` boundary gives the SaaS/product layer stable discovery and normalisation contracts without making it depend on arbitrary ECC file layouts or harness-specific internals. The boundary is not a copy of ECC and is not an external capability subsystem.
 
-The adapter shall be responsible for:
+The adapter shall progressively support:
 
-- enumerating approved ECC agents and skills;
-- translating platform tasks into ECC-compatible execution inputs;
-- normalising ECC worker/session outputs;
-- mapping ECC verification output into platform quality gates;
-- exposing accepted ECC baseline metadata.
+- enumerating approved inherited agents, skills, commands, workflows and MCP metadata;
+- invoking or translating bounded platform tasks into compatible ECC/harness execution inputs;
+- normalising worker/session outputs, memory/handoff state and learning evidence;
+- mapping ECC eval/verification/security results into platform quality gates;
+- exposing accepted ECC baseline and capability-version metadata.
 
 The existing ECC agent definitions are reusable capabilities, not hard-coded provider/model assignments. Platform roles such as Product Partner, Engineer, Reviewer and Security Reviewer may map to one or more approved agent definitions according to task type and policy.
 
@@ -388,7 +396,7 @@ Normal consumer chat sessions are not scraped, impersonated or converted into un
 
 ## 13. Skills and OneSkill
 
-ECC skills are the trusted baseline. External skills are quarantined before use.
+The approved inherited ECC skill estate seeds the product Skills Registry and remains the trusted baseline. External skills are additive and quarantined before use.
 
 External intake records source, version/commit, checksum, scripts, dependencies, permissions, network destinations, scan evidence and approval status.
 
@@ -396,7 +404,7 @@ OneSkill is a discovery source, not a trust authority. A new version of an appro
 
 ## 14. MCP / Tool Registry
 
-ECC's MCP inventory concepts are reused through the ECC adapter. The private platform owns project permissions and activation policy.
+The approved inherited ECC MCP catalogue seeds the product MCP/Tool Registry. The platform owns trust classification, project permissions, credential scope and activation policy; an MCP definition being present in the repository never grants access by itself.
 
 Each tool records:
 
@@ -415,7 +423,7 @@ V2 engineering work runs in isolated worktrees/sandboxes, never as arbitrary cod
 
 Default lifecycle: create isolated workspace → select authorised agent/model/harness/route → inject only scoped credentials → implement/test → collect evidence → persist checkpoint → commit revision → destroy or release ephemeral environment.
 
-ECC agent definitions are selected independently from model/provider/harness assignment. ECC's canonical session/worker concepts and worktree lifecycle are adapted rather than duplicated.
+ECC agent definitions are selected independently from model/provider/harness assignment. Existing ECC team orchestration, eval, verification, browser-QA, canary, autonomous-loop and worktree/session concepts are productised and generalised rather than duplicated.
 
 Hermes is initially a harness/operator runtime beneath AI Engineering OS orchestration. Codex, Claude Code, Antigravity, OpenCode and other supported harnesses follow the same principle: execution state is normalised at the adapter boundary; canonical project truth remains in the platform/repository.
 
@@ -570,6 +578,6 @@ The approved execution design is delivered in bounded, independently testable sl
 2. **Review-first Product Knowledge extraction:** candidate runs/queue, failure isolation, Product Owner review/promotion, UI and audit.
 3. **AI connection/delegation administration:** personal/organisation ownership, project sharing modes, usage policy, RBAC and audit.
 4. **Agent Bridge/subscription harness adapters:** Codex, Claude Code, Antigravity and other officially supported routes incrementally.
-5. **Engineering Studio ECC execution:** approved ECC agents/skills, harness/session adapters, worktrees, checkpoints and independent review.
+5. **ECC-native Engineering Studio productisation:** surface the inherited agent/skill estate, Unified Memory, Continuous Learning, team orchestration, eval/verification/security, worktrees, dynamic MCP resolution, checkpoints and independent review through platform governance and harness-neutral contracts.
 
 Each later slice builds on the same execution-route contracts rather than introducing a parallel provider-specific architecture.
