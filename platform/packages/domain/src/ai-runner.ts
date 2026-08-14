@@ -94,6 +94,20 @@ function requireDate(value: unknown, field: string): Date {
   return value;
 }
 
+export function validateAIRunnerConnectionBinding(binding: AIRunnerConnectionBinding): AIRunnerConnectionBinding {
+  const normalized: AIRunnerConnectionBinding = {
+    id: requireStableIdentifier(binding.id, 'id'),
+    organisationId: requireStableIdentifier(binding.organisationId, 'organisationId'),
+    runnerId: requireStableIdentifier(binding.runnerId, 'runnerId'),
+    connectionId: requireStableIdentifier(binding.connectionId, 'connectionId'),
+    createdBy: requireNonBlank(binding.createdBy, 'createdBy'),
+    createdAt: requireDate(binding.createdAt, 'createdAt')
+  };
+  if (binding.revokedAt !== undefined) {
+    normalized.revokedAt = requireDate(binding.revokedAt, 'revokedAt');
+  }
+  return normalized;
+}
 function requireBoolean(value: unknown, field: string): boolean {
   if (typeof value !== 'boolean') {
     throw new DomainValidationError(field, `${field} must be a boolean`);

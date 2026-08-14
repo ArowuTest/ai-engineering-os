@@ -5,6 +5,7 @@ import {
   DomainValidationError,
   createAIRunnerRecord,
   validateAIRunnerCapabilities,
+  validateAIRunnerConnectionBinding,
   validateRunnerTaskEnvelope,
   type AIRunnerConnectionBinding,
   type AIRunnerRecord,
@@ -154,18 +155,56 @@ describe('AI runner domain contracts', () => {
     }
   });
 
-  it('defines safe runner-to-connection binding metadata only', () => {
-    const binding: AIRunnerConnectionBinding = {
+  it('strips credential-like unknown input fields from produced runner and envelope contracts', () => {
+    const runnerInput = {
+      organisationId: 'org-1',
+      ownership: 'organisation',
+      harnessId: 'codex',
+      persistentSupported: false,
+      capabilities: ['workspace'],
+      createdBy: 'admin',
+      apiKey: 'forbidden',
+      token: 'forbidden',
+      cookie: 'forbidden',
+      providerSession: 'forbidden'
+    } as Parameters<typeof createAIRunnerRecord>[0] & Record<string, unknown>;
+    const record = createAIRunnerRecord(runnerInput);
+    const envelope = validateRunnerTaskEnvelope({
+      ...validEnvelope(),
+      apiKey: 'forbidden',
+      token: 'forbidden',
+      cookie: 'forbidden',
+      providerSession: 'forbidden',
+      credentials: 'forbidden',
+      secret: 'forbidden'
+    } as RunnerTaskEnvelope & Record<string, unknown>);
+    const forbidden = ['apiKey', 'token', 'cookie', 'providerSession', 'credentials', 'secret'];
+    for (const key of forbidden) {
+      expect(Object.prototype.hasOwnProperty.call(record, key)).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(envelope, key)).toBe(false);
+    }
+  });
+  it('validates and normalizes safe runner-to-connection binding metadata', () => {
+    const input = {
       id: 'binding-1',
       organisationId: 'org-1',
       runnerId: 'runner-1',
       connectionId: 'connection-1',
       createdBy: 'user-1',
-      createdAt: now
-    };
+      createdAt: now,
+      token: 'forbidden',
+      apiKey: 'forbidden',
+      providerSession: 'forbidden'
+    } as AIRunnerConnectionBinding & Record<string, unknown>;
+    const binding = validateAIRunnerConnectionBinding(input);
     expect(binding.connectionId).toBe('connection-1');
-    expect(Object.keys(binding)).not.toContain('credential');
-    expect(Object.keys(binding)).not.toContain('token');
+    for (const key of ['credential', 'token', 'apiKey', 'providerSession', 'cookie', 'secret']) {
+      expect(Object.prototype.hasOwnProperty.call(binding, key)).toBe(false);
+    }
+    expect(() => validateAIRunnerConnectionBinding({ ...input, runnerId: 'Bad Runner' })).toThrowError(DomainValidationError);
+    expect(() => validateAIRunnerConnectionBinding({ ...input, connectionId: '' })).toThrowError(DomainValidationError);
+    expect(() => validateAIRunnerConnectionBinding({ ...input, createdAt: new Date('invalid') })).toThrowError(DomainValidationError);
+    expect(() => validateAIRunnerConnectionBinding({ ...input, revokedAt: new Date('invalid') })).toThrowError(DomainValidationError);
   });
 
   it('accepts a complete scoped task envelope', () => {
