@@ -29,6 +29,9 @@ CREATE TABLE ai_runners (
   CONSTRAINT ai_runners_last_seen_chronology_ck CHECK (
     last_seen_at IS NULL OR last_seen_at >= created_at
   ),
+  CONSTRAINT ai_runners_status_revocation_ck CHECK (
+    (status = 'revoked') = (revoked_at IS NOT NULL)
+  ),
   CONSTRAINT ai_runners_revoked_chronology_ck CHECK (
     revoked_at IS NULL OR revoked_at >= created_at
   ),

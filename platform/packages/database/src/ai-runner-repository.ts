@@ -180,7 +180,7 @@ export class AIRunnerRepository {
       `UPDATE ai_runners
        SET status = $3, updated_at = $4,
            revoked_at = CASE WHEN $3 = 'revoked' THEN $4 ELSE revoked_at END
-       WHERE organisation_id = $1 AND id = $2 AND revoked_at IS NULL`,
+       WHERE organisation_id = $1 AND id = $2 AND revoked_at IS NULL AND status <> 'revoked'`,
       [organisationId, id, status, when]
     );
     if (result.rowCount !== 1) throw new Error('ai runner not found for status update');
@@ -189,7 +189,7 @@ export class AIRunnerRepository {
   async setRunnerTrustState(organisationId: string, id: string, trustState: AIRunnerTrustState, when: Date): Promise<void> {
     const result = await this.database.query(
       `UPDATE ai_runners SET trust_state = $3, updated_at = $4
-       WHERE organisation_id = $1 AND id = $2 AND revoked_at IS NULL`,
+       WHERE organisation_id = $1 AND id = $2 AND revoked_at IS NULL AND trust_state <> 'revoked'`,
       [organisationId, id, trustState, when]
     );
     if (result.rowCount !== 1) throw new Error('active ai runner not found for trust update');
@@ -249,7 +249,7 @@ export class AIRunnerRepository {
          ON r.organisation_id = c.organisation_id AND r.id = c.runner_id
        WHERE c.credential_hash = $1 AND c.revoked_at IS NULL
          AND (c.expires_at IS NULL OR c.expires_at > $2)
-         AND r.revoked_at IS NULL AND r.status NOT IN ('disabled', 'revoked')`,
+         AND r.revoked_at IS NULL AND r.status NOT IN ('disabled', 'revoked') AND r.trust_state <> 'revoked'`,
       [credentialHash, at]
     );
     const row = result.rows[0];
@@ -286,8 +286,9 @@ export class AIRunnerRepository {
        SET status = 'online', last_seen_at = $3, heartbeat_expires_at = $4,
            updated_at = GREATEST(updated_at, $3)
        WHERE organisation_id = $1 AND id = $2
-         AND revoked_at IS NULL AND status <> 'disabled'
-         AND (last_seen_at IS NULL OR last_seen_at <= $3)`,
+         AND revoked_at IS NULL AND status NOT IN ('disabled', 'revoked')
+         AND trust_state <> 'revoked'
+         AND (last_seen_at IS NULL OR last_seen_at < $3)`,
       [organisationId, runnerId, seenAt, expiresAt]
     );
     if (result.rowCount !== 1) throw new Error('active ai runner not found for heartbeat');

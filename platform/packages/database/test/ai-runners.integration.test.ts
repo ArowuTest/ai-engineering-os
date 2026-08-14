@@ -256,6 +256,24 @@ describe('AIRunnerRepository', () => {
     expect(rows.rows[0]?.revoked_at).not.toBeNull();
   });
 
+  it('bulk-revokes active runner credentials and reports the affected count', async () => {
+    const owner = await seedUser('runner.bulk-revoke.owner');
+    const repo = new AIRunnerRepository(pool);
+    const runner = runnerRecord('org-001', owner);
+    await repo.createRunner(runner);
+    const hash = '1'.repeat(64);
+    await repo.createCredentialHash({
+      id: randomUUID(),
+      organisationId: 'org-001',
+      runnerId: runner.id,
+      credentialHash: hash,
+      createdAt: new Date('2026-08-14T04:00:00Z')
+    });
+
+    expect(await repo.revokeActiveCredentialsForRunner('org-001', runner.id, new Date('2026-08-14T04:10:00Z'))).toBe(1);
+    expect(await repo.getActiveCredentialByHash(hash, new Date('2026-08-14T04:11:00Z'))).toBeNull();
+    expect(await repo.revokeActiveCredentialsForRunner('org-001', runner.id, new Date('2026-08-14T04:12:00Z'))).toBe(0);
+  });
   it('persists heartbeat health and survives a fresh repository instance', async () => {
     const owner = await seedUser('runner.heartbeat.owner');
     const runner = runnerRecord('org-001', owner);
@@ -284,6 +302,19 @@ describe('AIRunnerRepository', () => {
     expect(fetched?.lastSeenAt?.toISOString()).toBe('2026-08-14T05:00:00.000Z');
     expect(fetched?.heartbeatExpiresAt?.toISOString()).toBe('2026-08-14T05:02:00.000Z');
   });
+  it('rejects an equal-timestamp heartbeat replay that tries to extend expiry', async () => {
+    const owner = await seedUser('runner.heartbeat.equal-replay');
+    const repo = new AIRunnerRepository(pool);
+    const runner = runnerRecord('org-001', owner);
+    await repo.createRunner(runner);
+    const seenAt = new Date('2026-08-14T05:00:00Z');
+    const firstExpiry = new Date('2026-08-14T05:02:00Z');
+    await repo.recordHeartbeat('org-001', runner.id, seenAt, firstExpiry);
+
+    await expect(repo.recordHeartbeat('org-001', runner.id, seenAt, new Date('2026-08-14T05:05:00Z'))).rejects.toThrow();
+    const fetched = await repo.getRunner('org-001', runner.id);
+    expect(fetched?.heartbeatExpiresAt?.toISOString()).toBe(firstExpiry.toISOString());
+  });
   it('rejects heartbeat expiry that is not strictly after the seen time', async () => {
     const owner = await seedUser('runner.heartbeat.invalid');
     const repo = new AIRunnerRepository(pool);
@@ -309,6 +340,79 @@ describe('AIRunnerRepository', () => {
 });
 
 // Persistence-level revocation must remain fail-closed even before Task 3 service policy.
+describe('ai_runners revocation invariants', () => {
+  beforeEach(async () => resetDatabase());
+
+  it('rejects status/revoked_at disagreement at the database boundary', async () => {
+    const owner = await seedUser('runner.revocation.schema');
+    await expect(
+      pool.query(
+        `INSERT INTO ai_runners
+       (id, organisation_id, ownership, owner_user_id, harness_id, status, trust_state,
+        persistent_supported, capabilities, created_by, created_at, updated_at, revoked_at)
+       VALUES ($1, 'org-001', 'personal', $2, 'claude-code', 'revoked', 'revoked',
+               true, ARRAY['workspace'], $3, '2026-08-14T04:00:00Z',
+               '2026-08-14T04:00:00Z', NULL)`,
+        [randomUUID(), owner, owner]
+      )
+    ).rejects.toThrow();
+
+    await expect(
+      pool.query(
+        `INSERT INTO ai_runners
+       (id, organisation_id, ownership, owner_user_id, harness_id, status, trust_state,
+        persistent_supported, capabilities, created_by, created_at, updated_at, revoked_at)
+       VALUES ($1, 'org-001', 'personal', $2, 'claude-code', 'registered', 'pending',
+               true, ARRAY['workspace'], $3, '2026-08-14T04:00:00Z',
+               '2026-08-14T04:00:00Z', '2026-08-14T04:01:00Z')`,
+        [randomUUID(), owner, owner]
+      )
+    ).rejects.toThrow();
+  });
+});
+describe('AIRunnerRepository authentication hardening', () => {
+  beforeEach(async () => resetDatabase());
+
+  it('fails credential authentication for trust-revoked runners', async () => {
+    const owner = await seedUser('runner.trust-revoked.owner');
+    const repo = new AIRunnerRepository(pool);
+    const runner = runnerRecord('org-001', owner);
+    await repo.createRunner(runner);
+    const hash = 'e'.repeat(64);
+    await repo.createCredentialHash({
+      id: randomUUID(),
+      organisationId: 'org-001',
+      runnerId: runner.id,
+      credentialHash: hash,
+      createdAt: new Date('2026-08-14T04:00:00Z')
+    });
+    await repo.setRunnerTrustState('org-001', runner.id, 'revoked', new Date('2026-08-14T04:10:00Z'));
+    expect(await repo.getActiveCredentialByHash(hash, new Date('2026-08-14T04:11:00Z'))).toBeNull();
+    await expect(repo.recordHeartbeat('org-001', runner.id, new Date('2026-08-14T04:12:00Z'), new Date('2026-08-14T04:14:00Z'))).rejects.toThrow();
+    await expect(repo.setRunnerTrustState('org-001', runner.id, 'trusted', new Date('2026-08-14T04:15:00Z'))).rejects.toThrow();
+    expect((await repo.getRunner('org-001', runner.id))?.trustState).toBe('revoked');
+  });
+
+  it('keeps disabled runners unauthenticated until explicitly re-enabled', async () => {
+    const owner = await seedUser('runner.disabled.owner');
+    const repo = new AIRunnerRepository(pool);
+    const runner = runnerRecord('org-001', owner);
+    await repo.createRunner(runner);
+    const hash = 'f'.repeat(64);
+    await repo.createCredentialHash({
+      id: randomUUID(),
+      organisationId: 'org-001',
+      runnerId: runner.id,
+      credentialHash: hash,
+      createdAt: new Date('2026-08-14T04:00:00Z')
+    });
+    await repo.setRunnerStatus('org-001', runner.id, 'disabled', new Date('2026-08-14T04:10:00Z'));
+    expect(await repo.getActiveCredentialByHash(hash, new Date('2026-08-14T04:11:00Z'))).toBeNull();
+    await repo.setRunnerStatus('org-001', runner.id, 'online', new Date('2026-08-14T04:12:00Z'));
+    expect(await repo.getActiveCredentialByHash(hash, new Date('2026-08-14T04:13:00Z'))).not.toBeNull();
+  });
+});
+
 describe('AIRunnerRepository revocation hardening', () => {
   beforeEach(async () => resetDatabase());
 
