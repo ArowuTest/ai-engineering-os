@@ -205,6 +205,7 @@ describe('AI runner domain contracts', () => {
     expect(() => validateAIRunnerConnectionBinding({ ...input, connectionId: '' })).toThrowError(DomainValidationError);
     expect(() => validateAIRunnerConnectionBinding({ ...input, createdAt: new Date('invalid') })).toThrowError(DomainValidationError);
     expect(() => validateAIRunnerConnectionBinding({ ...input, revokedAt: new Date('invalid') })).toThrowError(DomainValidationError);
+    expect(() => validateAIRunnerConnectionBinding({ ...input, revokedAt: new Date(now.getTime() - 1) })).toThrowError(DomainValidationError);
   });
 
   it('accepts a complete scoped task envelope', () => {
@@ -234,6 +235,10 @@ describe('AI runner domain contracts', () => {
     ).toThrowError(DomainValidationError);
   });
 
+  it('explicitly rejects malformed replay nonces', () => {
+    expect(() => validateRunnerTaskEnvelope({ ...validEnvelope(), nonce: '' })).toThrowError(DomainValidationError);
+    expect(() => validateRunnerTaskEnvelope({ ...validEnvelope(), nonce: 'Bad Nonce' })).toThrowError(DomainValidationError);
+  });
   it('requires valid task-envelope timestamps with expiry strictly after issue time', () => {
     expect(() =>
       validateRunnerTaskEnvelope({

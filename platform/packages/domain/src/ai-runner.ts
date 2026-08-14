@@ -104,7 +104,11 @@ export function validateAIRunnerConnectionBinding(binding: AIRunnerConnectionBin
     createdAt: requireDate(binding.createdAt, 'createdAt')
   };
   if (binding.revokedAt !== undefined) {
-    normalized.revokedAt = requireDate(binding.revokedAt, 'revokedAt');
+    const revokedAt = requireDate(binding.revokedAt, 'revokedAt');
+    if (revokedAt.getTime() < normalized.createdAt.getTime()) {
+      throw new DomainValidationError('revokedAt', 'revokedAt must not precede createdAt');
+    }
+    normalized.revokedAt = revokedAt;
   }
   return normalized;
 }
