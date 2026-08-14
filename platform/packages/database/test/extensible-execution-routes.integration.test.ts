@@ -77,6 +77,7 @@ describe('004_extensible_execution_routes migration', () => {
       '004_extensible_execution_routes.sql',
       '005_product_knowledge_candidates.sql',
       '006_ai_connections_and_delegation.sql',
+      '007_ai_runners.sql',
     ]);
     expect(second).toEqual([]);
 
