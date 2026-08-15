@@ -7,6 +7,8 @@ import type {
   ProjectRepository,
 } from '@engineering-os/database';
 import {
+  AI_RUNNER_OWNERSHIPS,
+  AI_RUNNER_TRUST_STATES,
   calculateProductCompleteness,
   changeProjectProductPartner,
   createAuditEvent,
@@ -17,6 +19,7 @@ import {
   DomainValidationError,
   parseAIConnectionDateTime,
   reviseKnowledgeRecord,
+  validateAIRunnerCapabilities,
   requireOrganisationRole,
   requireProjectRole,
   type CreateKnowledgeInput,
@@ -35,6 +38,7 @@ import {
   retryExtractionRun,
 } from './knowledge-candidate-service.js';
 import { AIConnectionService, AIConnectionServiceError } from './ai-connection-service.js';
+import { AIRunnerService } from './ai-runner-service.js';
 import type { ConnectionFamilyPolicyRegistry } from './ai-connection-policy.js';
 
 export interface AppDependencies {
@@ -46,6 +50,7 @@ export interface AppDependencies {
   modelGateway: ModelGateway;
   authService?: AuthService;
   aiConnectionService?: AIConnectionService;
+  aiRunnerService?: AIRunnerService;
   aiConnectionPolicy?: ConnectionFamilyPolicyRegistry;
   allowDevIdentityHeaders?: boolean;
 }
@@ -68,6 +73,15 @@ class RequestAuthError extends Error {
   }
 }
 
+class AIRunnerRequestError extends Error {
+  constructor(
+    readonly statusCode: 400 | 401 | 403 | 404 | 409,
+    readonly code: string,
+  ) {
+    super(code);
+    this.name = 'AIRunnerRequestError';
+  }
+}
 interface RequestIdentity {
   organisationId: string;
   userId: string;
@@ -224,6 +238,9 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof RequestAuthError) {
       return reply.code(error.statusCode).send({ error: error.message });
+    }
+    if (error instanceof AIRunnerRequestError) {
+      return reply.code(error.statusCode).send({ error: error.code });
     }
     if (error instanceof AuthServiceError) {
       const status = error.code === 'invalid_credentials' ? 401
@@ -825,6 +842,198 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
         return reply.code(error.statusCode).send({ error: error.message });
       }
       throw error;
+    }
+  });
+
+  // ---------------- AI runner administration ----------------
+
+  function requireAIRunnerService(): AIRunnerService {
+    if (!dependencies.aiRunnerService) {
+      throw new RequestAuthError(401, 'AI runner administration is not configured');
+    }
+    return dependencies.aiRunnerService;
+  }
+
+  function runnerParam(request: FastifyRequest): string {
+    const params = request.params as { runnerId?: unknown };
+    return typeof params.runnerId === 'string' ? params.runnerId : '';
+  }
+
+  function runnerBearerCredential(request: FastifyRequest): string {
+    const value = request.headers.authorization;
+    if (typeof value !== 'string') {
+      throw new AIRunnerRequestError(401, 'runner_authentication_required');
+    }
+    const match = /^Bearer\s+(.+)$/i.exec(value.trim());
+    const credential = match?.[1]?.trim();
+    if (!credential) {
+      throw new AIRunnerRequestError(401, 'runner_authentication_required');
+    }
+    return credential;
+  }
+
+  function requiredRunnerDate(body: JsonObject, field: string): Date {
+    const value = body[field];
+    if (typeof value !== 'string') throw new DomainValidationError(field);
+    try {
+      return new Date(parseAIConnectionDateTime(value));
+    } catch {
+      throw new DomainValidationError(field);
+    }
+  }
+
+  function throwAIRunnerServiceError(error: unknown): never {
+    if (error instanceof DomainValidationError) throw error;
+    if (error instanceof Error) {
+      if (error.message === 'forbidden') throw new AIRunnerRequestError(403, 'forbidden');
+      if (error.message === 'runner_not_found') throw new AIRunnerRequestError(404, 'runner_not_found');
+      if (error.message === 'unauthorized') throw new AIRunnerRequestError(401, 'unauthorized');
+      if (error.message === 'invalid_heartbeat_expiry') {
+        throw new AIRunnerRequestError(400, 'invalid_heartbeat_expiry');
+      }
+      if (error.message === 'heartbeat timestamp outside allowed clock skew') {
+        throw new AIRunnerRequestError(400, 'invalid_heartbeat_timestamp');
+      }
+      if (error.message === 'active ai runner not found for heartbeat') {
+        throw new AIRunnerRequestError(409, 'heartbeat_rejected');
+      }
+    }
+    if ((error as { code?: unknown } | null)?.code === '23505') {
+      throw new AIRunnerRequestError(409, 'conflict');
+    }
+    throw error;
+  }
+
+  app.post('/ai-runners', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const body = bodyObject(request.body);
+    assertAllowedFields(body, ['ownership', 'harnessId', 'persistentSupported', 'capabilities']);
+    const ownershipValue = stringField(body, 'ownership');
+    if (!AI_RUNNER_OWNERSHIPS.includes(ownershipValue as (typeof AI_RUNNER_OWNERSHIPS)[number])) {
+      throw new DomainValidationError('ownership');
+    }
+    const persistentSupported = body.persistentSupported;
+    if (typeof persistentSupported !== 'boolean') {
+      throw new DomainValidationError('persistentSupported');
+    }
+    const harnessId = stringField(body, 'harnessId');
+    if (harnessId.trim() === '') throw new DomainValidationError('harnessId');
+    const input: Parameters<AIRunnerService['registerRunner']>[0] = {
+      organisationId: identity.organisationId,
+      actorUserId: identity.userId,
+      ownership: ownershipValue as Parameters<AIRunnerService['registerRunner']>[0]['ownership'],
+      harnessId,
+      persistentSupported,
+      capabilities: validateAIRunnerCapabilities(body.capabilities)
+    };
+    if (input.ownership === 'personal') input.ownerUserId = identity.userId;
+    try {
+      return reply.code(201).send(await requireAIRunnerService().registerRunner(input));
+    } catch (error) {
+      throwAIRunnerServiceError(error);
+    }
+  });
+
+  app.get('/ai-runners', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    try {
+      return reply.send(
+        await requireAIRunnerService().listRunners({
+          organisationId: identity.organisationId,
+          actorUserId: identity.userId
+        })
+      );
+    } catch (error) {
+      throwAIRunnerServiceError(error);
+    }
+  });
+
+  app.post('/ai-runners/:runnerId/rotate', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    assertAllowedFields(bodyObject(request.body), []);
+    try {
+      return reply.send(
+        await requireAIRunnerService().rotateRunnerCredential({
+          organisationId: identity.organisationId,
+          actorUserId: identity.userId,
+          runnerId: runnerParam(request)
+        })
+      );
+    } catch (error) {
+      throwAIRunnerServiceError(error);
+    }
+  });
+
+  app.patch('/ai-runners/:runnerId/trust', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const body = bodyObject(request.body);
+    assertAllowedFields(body, ['trustState']);
+    const trustValue = stringField(body, 'trustState');
+    if (!AI_RUNNER_TRUST_STATES.includes(trustValue as (typeof AI_RUNNER_TRUST_STATES)[number])) {
+      throw new DomainValidationError('trustState');
+    }
+    try {
+      await requireAIRunnerService().setRunnerTrust({
+        organisationId: identity.organisationId,
+        actorUserId: identity.userId,
+        runnerId: runnerParam(request),
+        trustState: trustValue as Parameters<AIRunnerService['setRunnerTrust']>[0]['trustState']
+      });
+      return reply.code(204).send();
+    } catch (error) {
+      throwAIRunnerServiceError(error);
+    }
+  });
+
+  app.post('/ai-runners/:runnerId/disable', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    assertAllowedFields(bodyObject(request.body), []);
+    try {
+      await requireAIRunnerService().disableRunner({
+        organisationId: identity.organisationId,
+        actorUserId: identity.userId,
+        runnerId: runnerParam(request)
+      });
+      return reply.code(204).send();
+    } catch (error) {
+      throwAIRunnerServiceError(error);
+    }
+  });
+
+  app.delete('/ai-runners/:runnerId', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    try {
+      await requireAIRunnerService().revokeRunner({
+        organisationId: identity.organisationId,
+        actorUserId: identity.userId,
+        runnerId: runnerParam(request)
+      });
+      return reply.code(204).send();
+    } catch (error) {
+      throwAIRunnerServiceError(error);
+    }
+  });
+
+  app.get('/runner/status', async (request, reply) => {
+    const credential = runnerBearerCredential(request);
+    const identity = await requireAIRunnerService().authenticateRunner(credential, new Date());
+    if (!identity) throw new AIRunnerRequestError(401, 'unauthorized');
+    return reply.send({ authenticated: true, ...identity });
+  });
+
+  app.post('/runner/heartbeat', async (request, reply) => {
+    const credential = runnerBearerCredential(request);
+    const body = bodyObject(request.body);
+    assertAllowedFields(body, ['seenAt', 'expiresAt']);
+    try {
+      await requireAIRunnerService().recordHeartbeat({
+        credential,
+        seenAt: requiredRunnerDate(body, 'seenAt'),
+        expiresAt: requiredRunnerDate(body, 'expiresAt')
+      });
+      return reply.code(204).send();
+    } catch (error) {
+      throwAIRunnerServiceError(error);
     }
   });
 
