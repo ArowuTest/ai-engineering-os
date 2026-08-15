@@ -80,15 +80,26 @@ The signing private key remains runtime secret configuration. Provider credentia
 New persistence starts with a forward `008_*` migration for dispatch/evidence only, adjusted if another migration number exists by implementation time. No second runner migration is permitted.
 
 Execution evidence is bounded, append-oriented, and common across providers/harnesses. It records safe execution identity, timestamps, outcome, route/model when known, runner/harness, worktree/commit/checkpoint references, usage/quota metadata where available, and allowed artefact references.
+## 8. Execution environment boundary
 
-## 8. Outbound local runner
+Execution environment is orthogonal to harness. A task selects both **how** it runs (`harnessId`) and **where** it runs (`executionEnvironment`); neither dimension may be inferred from the other.
+
+The platform owns an `ExecutionEnvironmentProvider` boundary with at least `local` and managed-provider implementations. Harness adapters consume this boundary rather than directly owning machine/container lifecycle. Harness-native sandboxing and permission controls remain enabled where supported as defence in depth; they do not replace platform execution-environment isolation.
+
+The initial local provider preserves the existing trusted-runner/worktree model. OpenSandbox is the first managed sandbox candidate behind the same boundary and begins in `trial` status. The platform integrates it through a pinned SDK/API adapter and does not vendor or expose OpenSandbox internals as AI Engineering OS domain contracts.
+
+OpenSandbox POC is a separately gated dependent slice. The minimum managed-provider contract is: prepare an isolated workspace from approved source/context, execute structured argv with `shell:false`, stream bounded output/events, perform scoped file/artifact operations, cancel execution, collect safe evidence, and destroy the environment. Pools, snapshots, Kubernetes multi-tenancy, Kata/gVisor selection, Credential Vault, and advanced networking remain provider capabilities enabled only after independent proof.
+
+Managed sandbox tenancy never replaces AI Engineering OS tenancy/RBAC/audit authority. Provider credentials and personal subscription auth stores must not be copied into sandbox files, environment variables, snapshots, logs, or evidence merely to enable a managed execution path.
+
+## 9. Outbound local runner
 
 The runner uses outbound connectivity only: authenticate -> heartbeat -> claim -> verify signed envelope -> mark running -> execute -> checkpoint -> complete/fail.
 
 It never exposes a general inbound remote-shell port. Workspace access is constrained beneath configured approved roots and task-specific worktrees. Traversal, absolute-path escape, and symlink escape are rejected.
 
 Harness processes are invoked using structured command/argument arrays with `shell:false`. Untrusted task text never becomes shell syntax. Cancellation targets only the spawned task process tree.
-## 9. Concrete harness adapters
+## 10. Concrete harness adapters
 
 The generic harness boundary on `main` is retained. Concrete adapters are thin runner-side implementations, not new platform architectures.
 
@@ -104,7 +115,7 @@ ECC already knows multiple harnesses including Codex, Claude Code, Cursor, Antig
 
 Production connection families remain `delegatable=false` until the corresponding real terminal vertical slice passes independently. `persistentSupported=true` is likewise enabled only when independently proven safe for that harness/runner behavior.
 
-## 10. Native Review Council
+## 11. Native Review Council
 
 The current manual review process becomes a first-class platform subsystem rather than an external convention.
 
@@ -123,7 +134,7 @@ Any material source change invalidates the prior comparative review for acceptan
 
 Calibration may improve future model selection by role/task/domain, but it records evidence such as observed correctness, false-positive rate, useful defect discovery, latency, cost, and availability against a model route/version. It must not encode `model X = permanent role Y`.
 
-## 11. Council model selection
+## 12. Council model selection
 
 Council seats are roles/capability requirements, not model names. Example roles include general correctness, security, database/concurrency, architecture, and specialist domain review.
 
@@ -131,12 +142,12 @@ A council template may use `Auto` for every role, explicit approved models for c
 
 Independence policy may prevent multiple seats from resolving to the same provider/model family where meaningful diversity is required. This is policy, not a hard-coded list of today's vendors.
 
-## 12. Administration and user experience
+## 13. Administration and user experience
 
 Platform administrators manage the approved/trial/disabled model catalogue, role candidate pools, cost/risk constraints, and council templates.
 
 Users normally see `Auto` plus approved routes they are eligible to use through organisation APIs, OpenRouter, or their own authorised subscription harness connections. The UI must distinguish route/source, for example organisation API versus personal subscription, without exposing credentials.
-## 13. Failure handling
+## 14. Failure handling
 
 The system fails closed at every authority boundary:
 
@@ -151,7 +162,7 @@ The system fails closed at every authority boundary:
 
 Canonical project state remains readable and durable across execution/reviewer failures.
 
-## 14. Testing and review strategy
+## 15. Testing and review strategy
 
 All production behavior follows strict TDD: first deterministic RED proof, minimal implementation, focused GREEN, then broader regression.
 
@@ -168,23 +179,24 @@ Required gates include:
 - full platform tests, typecheck, production build, dependency audit, ECC compatibility/security gates, and fresh independent whole-slice review.
 
 Review follows the product's own locked method. Material source changes trigger fresh blind review; no majority vote can waive an independently confirmed Critical/Important defect.
-## 15. Delivery order
+## 16. Delivery order
 
 Implementation proceeds in bounded stages so accepted foundation code stays reviewable:
 
 1. Port and adapt OpenRouter multi-model routing to current `ModelGateway`, including admin-governed catalogue integration points.
 2. Port dispatch/signing/evidence only, using canonical runner contracts and a forward migration.
-3. Complete the outbound runner loop and common workspace/process security boundary.
+3. Add the execution-environment seam and complete the outbound runner loop/common workspace/process security boundary using the local provider.
 4. Add Codex adapter and prove its terminal vertical slice; enable only its policy gate if green.
 5. Add Antigravity adapter and prove its terminal vertical slice; enable only its policy gate if green.
 6. Add Claude Code adapter and prove its terminal vertical slice; enable only its policy gate if green.
 7. Implement native Review Council persistence/orchestration/calibration using swappable approved routes.
 8. Add/administer model catalogue and council policy UI/API needed for production operation.
 9. Run whole-slice security/regression/council gate, merge to local main, re-verify merged main, push, and verify exact remote CI.
+10. Run the separately planned OpenSandbox trial POC behind the execution-environment provider; production enablement is a distinct gate.
 
 Each stage ends with source/test evidence and independent review before the next material authority boundary is enabled.
 
-## 16. Out of scope
+## 17. Out of scope
 
 - copying or pooling users' provider credentials;
 - scraping consumer chat sessions;
@@ -195,7 +207,7 @@ Each stage ends with source/test evidence and independent review before the next
 - enabling deployment/destructive authority merely because a coding harness is connected;
 - claiming persistent execution for a harness that has not independently proven it.
 
-## 17. Acceptance criteria
+## 18. Acceptance criteria
 
 This reconciliation slice is complete only when all of the following are true:
 1. Canonical `main` runner identity/trust/heartbeat/pool/harness foundation remains authoritative and regression-green.
@@ -203,18 +215,18 @@ This reconciliation slice is complete only when all of the following are true:
 3. Admins can govern which configured/discovered models are approved, trial/calibration, or disabled; users see only approved eligible routes plus `Auto`.
 4. Durable signed dispatch/evidence is reconciled without replacing migration 007 or duplicating runner authority.
 5. Only the assigned eligible runner can claim/execute a valid unexpired task envelope, and tamper/replay/cancellation/revocation rules fail closed.
-6. Codex, Antigravity, and Claude Code each have a real thin adapter using supported local authentication and isolated task worktrees without exposing provider credentials to the platform.
-7. Each subscription family becomes delegatable only after its own controlled terminal execution path is independently green.
-8. Review Council runs are durable and blind; findings are normalized, evidence-backed, adjudicated, and re-challenged according to the locked loop.
-9. A confirmed Critical or Important finding blocks acceptance independent of vote count; timeout/empty/malformed reviewer output is not a pass.
-10. Any material source change invalidates acceptance review and requires a fresh blind run against the new source packet.
-11. Calibration records route/model/version performance and can influence future `Auto`/role selection without permanently binding a model to a role.
-12. Existing requester -> project pool -> organisation -> API fallback semantics and personal sharing rules remain unchanged.
-13. No provider credential, runner plaintext token, signing private key, secret reference value, or local auth-store content is exposed in persistence, audit, evidence, logs, repository artefacts, or browser responses.
-14. Fresh PostgreSQL integration tests, full platform tests, typecheck, production build, dependency audit, ECC compatibility/security gates, and independent review are green with zero unresolved Critical/Important findings.
-15. The exact merged `main` SHA is pushed and its configured GitHub CI jobs are verified green before the slice is declared complete.
-
-## 18. Source-branch salvage rule
+6. Execution environment is an explicit orthogonal dimension: harness adapters use a common provider boundary, local execution remains supported, and OpenSandbox can be added without changing harness/domain contracts.
+7. Codex, Antigravity, and Claude Code each have a real thin adapter using supported local authentication and isolated task worktrees without exposing provider credentials to the platform.
+8. Each subscription family becomes delegatable only after its own controlled terminal execution path is independently green.
+9. Review Council runs are durable and blind; findings are normalized, evidence-backed, adjudicated, and re-challenged according to the locked loop.
+10. A confirmed Critical or Important finding blocks acceptance independent of vote count; timeout/empty/malformed reviewer output is not a pass.
+11. Any material source change invalidates acceptance review and requires a fresh blind run against the new source packet.
+12. Calibration records route/model/version performance and can influence future `Auto`/role selection without permanently binding a model to a role.
+13. Existing requester -> project pool -> organisation -> API fallback semantics and personal sharing rules remain unchanged.
+14. No provider credential, runner plaintext token, signing private key, secret reference value, or local auth-store content is exposed in persistence, audit, evidence, logs, repository artefacts, or browser responses.
+15. Fresh PostgreSQL integration tests, full platform tests, typecheck, production build, dependency audit, ECC compatibility/security gates, and independent review are green with zero unresolved Critical/Important findings.
+16. The exact merged `main` SHA is pushed and its configured GitHub CI jobs are verified green before the slice is declared complete.
+## 19. Source-branch salvage rule
 
 Commits/files from `feature/agent-bridge-subscription-execution` are evidence and implementation candidates, not accepted source by ancestry. Every transplanted behavior is re-evaluated against current contracts and receives fresh tests/review in the reconciliation branch.
 
