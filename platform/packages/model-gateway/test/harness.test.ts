@@ -209,6 +209,59 @@ describe('harness-neutral execution boundary', () => {
     ).toThrow(/credential|metadata|openaiAccessToken/i);
   });
 
+  it('rejects credential-key prefix variants and Unicode confusables without blocking safe token metrics', () => {
+    for (const key of ['tokenValue', 'apiKey1', 'authorizationValue', 'api\u043aey', 'tok\u0435n']) {
+      expect(() =>
+        validateHarnessExecutionResult({
+          status: 'completed',
+          events: [],
+          metadata: { [key]: 'forbidden' }
+        })
+      ).toThrow(HarnessExecutionValidationError);
+    }
+    expect(() =>
+      validateHarnessExecutionResult({
+        status: 'completed',
+        events: [],
+        metadata: { tokenCount: 42, tokenUsage: 99 }
+      })
+    ).not.toThrow();
+  });
+
+  it('accepts class-based harness adapters that satisfy the public adapter interface', () => {
+    class CodexClassAdapter implements HarnessExecutionAdapter {
+      readonly id = 'codex-class';
+      readonly harnessId = 'codex';
+      readonly capabilities = capabilities({ tools: true, localWorkspace: true });
+      async execute(): Promise<HarnessExecutionResult> {
+        return { status: 'completed', events: [] };
+      }
+    }
+    const candidate = new CodexClassAdapter();
+    expect(selectHarnessExecutionAdapter([candidate], request(), now)).toBe(candidate);
+  });
+  it('wraps domain envelope validation failures in the harness validation error', () => {
+    expect(() => validateHarnessExecutionRequest(request({ envelope: envelope({ id: '' }) }), now)).toThrow(HarnessExecutionValidationError);
+  });
+
+  it('returns a stable envelope snapshot whose dates cannot be mutated through the input object', () => {
+    const sourceEnvelope = envelope();
+    const validated = validateHarnessExecutionRequest(request({ envelope: sourceEnvelope }), now);
+    const originalExpiry = validated.envelope.expiresAt.getTime();
+    sourceEnvelope.expiresAt.setTime(now.getTime() - 1);
+    sourceEnvelope.issuedAt.setTime(now.getTime() + 1);
+    expect(validated.envelope.expiresAt.getTime()).toBe(originalExpiry);
+    expect(validated.envelope.issuedAt.getTime()).toBeLessThan(now.getTime());
+  });
+
+  it('uses code-unit ordering for deterministic adapter tie-breaking', () => {
+    const selected = selectHarnessExecutionAdapter(
+      [adapter('codex_full', 'codex', capabilities({ tools: true, localWorkspace: true })), adapter('codex-full', 'codex', capabilities({ tools: true, localWorkspace: true }))],
+      request(),
+      now
+    );
+    expect(selected.id).toBe('codex-full');
+  });
   it('rejects malformed result and event shapes with the harness validation error', () => {
     expect(() => validateHarnessExecutionResult(null as unknown as HarnessExecutionResult)).toThrow(HarnessExecutionValidationError);
     expect(() =>

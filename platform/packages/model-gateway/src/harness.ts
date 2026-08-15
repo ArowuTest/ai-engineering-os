@@ -1,4 +1,4 @@
-import { validateRunnerTaskEnvelope, type RunnerTaskEnvelope } from '@engineering-os/domain';
+import { DomainValidationError, validateRunnerTaskEnvelope, type RunnerTaskEnvelope } from '@engineering-os/domain';
 import type { CapabilityName, ModelRoute, ProviderCapabilities } from './types.js';
 
 const STABLE_IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -166,17 +166,44 @@ const FORBIDDEN_METADATA_KEY_SUFFIXES = [
   'authorizationheader'
 ] as const;
 const FORBIDDEN_METADATA_STRUCTURE_KEYS = new Set(['proto', 'prototype', 'constructor']);
+const FORBIDDEN_METADATA_KEY_FRAGMENTS = [
+  'password',
+  'apikey',
+  'accesstoken',
+  'refreshtoken',
+  'bearertoken',
+  'authorization',
+  'credential',
+  'privatekey',
+  'secretkey',
+  'secretaccesskey',
+  'accesskeyid',
+  'signingkey',
+  'passphrase',
+  'clientsecret',
+  'providersession',
+  'usersession',
+  'sessionid',
+  'tokenvalue',
+  'tokensecret'
+] as const;
+
+function metadataKeyIsAsciiMachineKey(key: string): boolean {
+  return key.length > 0 && key.length <= 128 && /^[\x20-\x7e]+$/.test(key);
+}
 
 function metadataKeyIsForbidden(key: string): boolean {
   const normalized = normalizedMetadataKey(key);
   if (FORBIDDEN_METADATA_KEYS.has(normalized)) return true;
-  return FORBIDDEN_METADATA_KEY_SUFFIXES.some(suffix => normalized.length >= suffix.length && normalized.endsWith(suffix));
+  if (FORBIDDEN_METADATA_KEY_SUFFIXES.some(suffix => normalized.length >= suffix.length && normalized.endsWith(suffix))) {
+    return true;
+  }
+  return FORBIDDEN_METADATA_KEY_FRAGMENTS.some(fragment => normalized.includes(fragment));
 }
 
 function metadataKeyIsStructurallyUnsafe(key: string): boolean {
   return FORBIDDEN_METADATA_STRUCTURE_KEYS.has(normalizedMetadataKey(key));
 }
-
 function safeMetadataValue(value: unknown, path: string, depth = 0, seen = new WeakSet<object>()): HarnessMetadataValue {
   if (depth > 12) {
     throw new HarnessExecutionValidationError(`${path} metadata nesting is too deep`);
@@ -205,6 +232,9 @@ function safeMetadataValue(value: unknown, path: string, depth = 0, seen = new W
     }
     const result = Object.create(null) as Record<string, HarnessMetadataValue>;
     for (const [key, item] of Object.entries(value)) {
+      if (!metadataKeyIsAsciiMachineKey(key)) {
+        throw new HarnessExecutionValidationError(`${path}.${key} metadata key must use printable ASCII`);
+      }
       if (metadataKeyIsStructurallyUnsafe(key)) {
         throw new HarnessExecutionValidationError(`${path}.${key} is not allowed in metadata`);
       }
@@ -238,6 +268,12 @@ function requirePlainRecord(value: unknown, field: string): Record<string, unkno
   return value as Record<string, unknown>;
 }
 
+function requireObjectRecord(value: unknown, field: string): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new HarnessExecutionValidationError(`${field} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
 function canonicalCapabilities(value: unknown, field: string): ProviderCapabilities {
   const record = requirePlainRecord(value, field);
   const capabilities = {} as ProviderCapabilities;
@@ -286,7 +322,21 @@ export function validateHarnessExecutionRequest(request: HarnessExecutionRequest
   const now = requireDate(at, 'execution time');
   const requestRecord = requirePlainRecord(request, 'request');
   const envelopeRecord = requirePlainRecord(requestRecord.envelope, 'task envelope');
-  const taskEnvelope = validateRunnerTaskEnvelope(envelopeRecord as unknown as RunnerTaskEnvelope);
+  let validatedEnvelope: RunnerTaskEnvelope;
+  try {
+    validatedEnvelope = validateRunnerTaskEnvelope(envelopeRecord as unknown as RunnerTaskEnvelope);
+  } catch (error) {
+    if (error instanceof DomainValidationError) {
+      throw new HarnessExecutionValidationError(`task envelope is invalid: ${error.message}`);
+    }
+    throw error;
+  }
+  const taskEnvelope: RunnerTaskEnvelope = {
+    ...validatedEnvelope,
+    allowedOperations: [...validatedEnvelope.allowedOperations],
+    issuedAt: new Date(validatedEnvelope.issuedAt.getTime()),
+    expiresAt: new Date(validatedEnvelope.expiresAt.getTime())
+  };
   const modelRoute = canonicalModelRoute(requestRecord.route);
   if (taskEnvelope.issuedAt.getTime() > now.getTime()) {
     throw new HarnessExecutionValidationError('task envelope has not been issued yet');
@@ -389,7 +439,7 @@ export function selectHarnessExecutionAdapter(adapters: readonly HarnessExecutio
   }
   const eligible = adapters
     .map((candidate, index) => {
-      const record = requirePlainRecord(candidate, `adapter[${index}]`);
+      const record = requireObjectRecord(candidate, `adapter[${index}]`);
       const id = requireStableIdentifier(record.id, 'adapter id');
       const harnessId = requireStableIdentifier(record.harnessId, 'adapter harnessId');
       if (typeof record.execute !== 'function') {
@@ -403,7 +453,7 @@ export function selectHarnessExecutionAdapter(adapters: readonly HarnessExecutio
       };
     })
     .filter(({ harnessId, capabilities }) => harnessId === validated.envelope.harnessId && adapterSupports(capabilities, validated.requiredCapabilities))
-    .sort((left, right) => left.id.localeCompare(right.id));
+    .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
 
   const selected = eligible[0]?.candidate;
   if (!selected) throw new NoEligibleHarnessAdapterError();
