@@ -1,10 +1,11 @@
 # AI Engineering OS — Living Handover
 
 **Purpose:** Operational continuation document for a new ChatGPT/Claude/Codex agent if the current thread ends.
-**Last updated:** 12 August 2026, after Task 8 merge, GitHub verification and feature-branch cleanup.
+**Last updated:** 15 August 2026, after Agent Bridge foundation local verification and independent review; the feature remains unmerged.
 **Repository:** `ArowuTest/ai-engineering-os`
 **Local repo:** `<LOCAL_REPO_ROOT>`
 **Current source-of-truth branch:** `main`
+**Current accepted Agent Bridge feature:** `feature/agent-bridge-subscription-harnesses` @ `de947859f57cdfa5806934efc33fae1afe969e86` (locally verified/reviewed; not yet merged or pushed).
 **Task 8 product merge SHA:** `69ebe73b549f2fa2c1e63a7fcf13c28771290a2d` (subsequent documentation-only closeout commits may advance `main`).
 
 ## 1. Product principle
@@ -126,6 +127,43 @@ Task 8 fresh verification is green on the current working tree:
 The trusted-policy integration suite separately proves first-share Online Only, explicit Persistent, owner-offline behavior, revocation, windows and restart durability. Production subscription families remain non-delegatable until Agent Bridge, so the production smoke correctly proves fail-closed behavior rather than weakening policy.
 
 **Immediate next action:** commit the bounded Task 8 hardening, push the feature branch for exact CI, merge locally to `main` only after CI is green, reverify merged `main`, then push/verify GitHub `main`.
+## 6A. Agent Bridge foundation - accepted locally (15 August 2026)
+
+Implementation plan: `docs/superpowers/plans/2026-08-14-agent-bridge-foundation.md`.
+Accepted feature branch: `feature/agent-bridge-subscription-harnesses` at `de947859f57cdfa5806934efc33fae1afe969e86`.
+The branch is locally accepted but has not yet been merged to `main` or pushed as the completed foundation.
+
+Accepted implementation sequence:
+- plan: `76ba0e9a`;
+- runner contracts and domain hardening: `93acdaf1`, `d74b5642`, `d0f172a4`;
+- runner persistence and revocation hardening: `605eb36b`, `f0448b00`;
+- runner governance/service hardening: `ff74f40c`, `395cace0`;
+- runner HTTP/runtime boundary: `df2321be`, `94b65ad7`;
+- runner-aware project execution pools: `643ee38b`;
+- harness-neutral execution boundary and hardening: `f2770c20`, `f1a794e9`, `0b78fc36`, `b8aeabdb`;
+- whole-branch heartbeat chronology remediation: `de947859`.
+
+The foundation now provides durable runner ownership/status/trust/capability contracts and scoped `RunnerTaskEnvelope`s; migration `007_ai_runners.sql`; organisation-scoped runner/binding/credential persistence; hash-only platform runner credentials; RBAC administration; trust/disable/revoke/rotate; credential-authenticated heartbeat and runner authentication; separate user-session and runner-bearer HTTP paths; runtime composition; real runner-aware requester -> project_pool -> organisation connection eligibility; Online Only/Persistent semantics; and a provider-neutral harness request/result/event boundary with scoped envelope validation and recursive credential-safe metadata handling.
+
+Final whole-branch security review identified one real Important clock-skew defect: an allowed first heartbeat from a behind-clock runner could violate PostgreSQL `last_seen_at >= created_at`. A deterministic RED reproduced SQLSTATE `23514`; `de947859` clamps only the persisted `seenAt` to the immutable runner `createdAt` floor, preserving the five-minute skew allowance and stale/equal replay protection. The corrected-source Grok 4.6 security review and an isolated Gemini 3.7 Flash general review both returned `NO FINDINGS` / zero blockers.
+
+Final verification on `de947859`:
+- fresh isolated PostgreSQL 17 volume: 33/33 static + 167/167 unit + 238/238 integration = 438/438 tests GREEN;
+- exact heartbeat remediation staged gate: platform/web typecheck PASS and 53/53 runner/database/server tests GREEN;
+- Next.js 16.3 production build PASS;
+- production dependency audit: 0 vulnerabilities;
+- Harness Adapter Compliance PASS (11 adapters);
+- Harness Audit 80/80 with 0 failing checks;
+- supply-chain IOC scan PASS across 397 files;
+- platform audit exited 0; its only attention item was GitHub-fetch authentication because the local `gh` CLI is unavailable;
+- migrations 001-006 are Git-blob-identical to `main`; only migration 007 is new;
+- provider login/session material is absent from runner persistence, audit metadata and normal read responses; runner platform credentials are plaintext only in the explicit one-time register/rotate response and are hash-only at rest.
+
+The long inherited root ECC `npm test` run has so far observed two README-only assertions in the Itô Compute and Unified Memory surfaces while continuing through many other passing checks. `README.md` is the exact same Git blob as `main`, and those surfaces are unchanged by Agent Bridge; direct adapter, harness and IOC compatibility/security gates are green. Treat those README assertions as inherited baseline debt, not an Agent Bridge regression.
+
+Reviewer transport availability was imperfect: Qwen 3.8 Max and, on some larger packets, GLM/Gemini/Grok calls timed out or returned empty payloads. Those events were recorded as availability failures only and never counted as passes or failures. Acceptance used valid fresh independent reviews plus exact RED/GREEN and platform verification evidence.
+
+**Next slice after integration:** concrete subscription-backed harness adapters for Claude Code, Codex and Antigravity-style runners, plus an early OpenRouter API route. Keep provider login/session credentials runner-local where practical; the platform should continue to receive only safe runner/connection metadata and dispatch capability.
 ## 7. How the Opus subagent/reviewer workflow is being used
 
 The user selected subagent-driven development.
@@ -137,6 +175,8 @@ Each task follows:
 5. Zero Critical/Important findings are required to close the task.
 6. Any blocking finding gets a separate fix round with new RED tests, then scoped re-review.
 7. Final slice gets a fresh whole-branch Opus review against the approved requirements.
+
+Agent Bridge generalises this into the project Review Council: first-pass reviewers are genuinely blind to one another and receive the same canonical packet for comparative runs; findings are normalised only after blind reviews return; every material finding is independently adjudicated as CONFIRMED, PARTIALLY_VALID, REJECTED or INSUFFICIENT_EVIDENCE; confirmed defects use RED -> minimal fix -> GREEN where practical; rejected/partial findings can be privately re-challenged; and any material source change requires a fresh-source review. Reviewer timeouts/empty payloads are availability failures, never verdicts. Builder/model summaries have no acceptance weight without exact source/diff/test evidence.
 
 The development agents are launched through the locally installed Claude Code CLI using the user's authenticated Claude subscription.
 Typical invocation uses `--model opus --effort medium` (high effort for whole-branch review), `--permission-mode bypassPermissions`, `--no-session-persistence`, `--no-chrome`, and a strict empty MCP config.
@@ -185,12 +225,11 @@ Before implementing any new provider, reverify its CURRENT official API, authent
 
 ## 11. What comes after this connection-administration slice
 
-Next major slice: Agent Bridge / runner execution.
-Add durable runner registration/heartbeat/trust/revocation and real subscription-backed harness adapters incrementally (Codex, Claude Code, Antigravity, then future harnesses).
-Wire OpenRouter early in that provider/harness phase so Qwen 3.8 Max can become the primary external engineering reviewer and GLM-5.2 can shadow-review during calibration; this reduces dependence on remaining Opus subscription capacity without changing the platform-owned verification gates.
-Provider credentials should remain on the authorised runner where practical; the platform receives safe connection/runner metadata and dispatch capability, not personal passwords/cookies.
-Online Only then requires both owner platform presence and authorised personal runner online.
-Persistent allows use after owner sign-out only when an authorised persistent runner remains reachable and trusted policy allows it.
+The Agent Bridge foundation is complete on the accepted feature branch and is ready for integration into `main` after the documented local-main verification/push sequence.
+The next engineering slice is concrete subscription-backed harness execution: Claude Code, Codex and Antigravity-style adapters behind the harness-neutral boundary, plus an early OpenRouter API route for external review/model access. Add each adapter incrementally under the same RED/GREEN, runner-auth, tenant, secret and fresh-review gates; do not collapse Harness, Connection and Runner into one abstraction.
+Provider login/session credentials should remain on the authorised runner where practical. The platform receives safe connection/runner metadata, scoped task envelopes and dispatch/results, not personal passwords, cookies, refresh tokens or consumer web sessions.
+Online Only now requires both owner platform presence and a healthy authorised bound runner. Persistent can survive owner sign-out only while a trusted persistent-capable bound runner remains healthy and policy allows it.
+OpenRouter should be wired as an API execution route rather than masquerading as a subscription runner. Qwen 3.8 Max, GLM-5.2, Grok and Gemini can then participate in the review council through explicit provider/model routes while platform-owned verification remains authoritative.
 
 After Agent Bridge: deeper ECC-native Engineering Studio productisation.
 Preserve and progressively surface the inherited ECC capability estate — agents/skills, Continuous Learning, Unified Memory, team orchestration, evals, verification, browser QA/canary, context-budget, skill-compliance/health, benchmark optimisation, security and the MCP catalogue — through platform governance rather than recreating it.
