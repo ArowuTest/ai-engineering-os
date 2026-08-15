@@ -5,6 +5,7 @@ import {
   RUNNER_TASK_ENVELOPE_VERSION,
   digestRunnerTaskPayload,
   signRunnerTaskEnvelope,
+  validateSignedRunnerTaskEnvelope,
   verifyRunnerTaskEnvelope,
   type RunnerTaskDispatch,
   type RunnerTaskPayload,
@@ -258,5 +259,16 @@ describe('runner task envelope hardening', () => {
       ...signed,
       idempotencyKey: 'idem-2',
     }, publicKey, { now: VERIFY_AT })).toEqual({ ok: false, reason: 'invalid_signature' });
+  });
+});
+
+describe('signed envelope structural snapshot', () => {
+  it('validateSignedRunnerTaskEnvelope rejects unknown fields and returns detached data', () => {
+    const { privateKey } = makeKeyPair();
+    const signed = signRunnerTaskEnvelope(makeDispatch(), privateKey);
+    expect(() => validateSignedRunnerTaskEnvelope({ ...signed, extra: 'nope' })).toThrow(/unexpected|missing/i);
+    const validated = validateSignedRunnerTaskEnvelope(signed);
+    signed.payload.contextReferences[0] = 'file:mutated.ts';
+    expect(validated.payload.contextReferences).toEqual(['file:src/index.ts', 'file:src/service.ts']);
   });
 });

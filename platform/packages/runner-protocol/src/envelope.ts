@@ -384,6 +384,24 @@ function normalizeSignedEnvelope(value: unknown): SignedRunnerTaskEnvelope {
   };
 }
 
+function detachedSignedEnvelope(envelope: SignedRunnerTaskEnvelope): SignedRunnerTaskEnvelope {
+  return {
+    ...envelope,
+    taskEnvelope: {
+      ...envelope.taskEnvelope,
+      allowedOperations: [...envelope.taskEnvelope.allowedOperations],
+    },
+    payload: {
+      objective: envelope.payload.objective,
+      contextReferences: [...envelope.payload.contextReferences],
+      requiredCapabilities: [...envelope.payload.requiredCapabilities],
+    },
+  };
+}
+
+export function validateSignedRunnerTaskEnvelope(value: unknown): SignedRunnerTaskEnvelope {
+  return detachedSignedEnvelope(normalizeSignedEnvelope(value));
+}
 function detachedDispatch(envelope: SignedRunnerTaskEnvelope): RunnerTaskDispatch {
   const taskEnvelope = wireToDomain(envelope.taskEnvelope);
   return {

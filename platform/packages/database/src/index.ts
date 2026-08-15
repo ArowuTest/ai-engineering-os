@@ -1,4 +1,5 @@
 export * from './ai-connection-repository.js';
+export * from './ai-dispatch-repository.js';
 export * from './ai-runner-repository.js';
 export * from './audit-repository.js';
 export * from './client.js';

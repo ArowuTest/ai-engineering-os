@@ -565,7 +565,7 @@ describe('SessionRepository.hasActiveForUser', () => {
 
 describe('migration ordering', () => {
 
-  it('applies exactly migrations 001..007 in order', async () => {
+  it('applies exactly migrations 001..008 in order', async () => {
     await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
     const { runMigrations } = await import('../src/index.js');
     const applied = await runMigrations(pool);
@@ -577,6 +577,7 @@ describe('migration ordering', () => {
       '005_product_knowledge_candidates.sql',
       '006_ai_connections_and_delegation.sql',
       '007_ai_runners.sql',
+      '008_ai_dispatches.sql',
     ]);
   });
 });
