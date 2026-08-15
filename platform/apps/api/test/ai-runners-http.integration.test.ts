@@ -350,6 +350,29 @@ describe('AI runners HTTP boundary', () => {
     expect(status.json()).toMatchObject({ organisationId: 'org-001', runnerId: firstRunner.runnerId });
     await app.close();
   });
+  it('rejects unexpected secret or identity payload fields on runner revoke', async () => {
+    const memberId = await seedUser('runner.revoke.fields', 'Runner-revoke-fields-2026!');
+    await seedMembership('org-001', memberId, 'member');
+    const { app } = makeDependencies();
+    const token = await login(app, 'runner.revoke.fields', 'Runner-revoke-fields-2026!');
+    const registered = await app.inject({
+      method: 'POST', url: '/ai-runners', headers: userHeaders(token), payload: personalRegistration(),
+    });
+    const created = registered.json() as { runnerId: string; credential: string };
+
+    const rejected = await app.inject({
+      method: 'DELETE', url: `/ai-runners/${created.runnerId}`, headers: userHeaders(token),
+      payload: { password: 'provider-secret', organisationId: 'forged-org', actorUserId: 'forged-user' },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(JSON.stringify(rejected.json())).not.toContain('provider-secret');
+
+    const status = await app.inject({
+      method: 'GET', url: '/runner/status', headers: { authorization: `Bearer ${created.credential}` },
+    });
+    expect(status.statusCode).toBe(200);
+    await app.close();
+  });
   it('wires the runner service into runtime composition and survives an app restart', async () => {
     const ownerId = await seedUser('runner.runtime.owner', 'Runner-runtime-owner-2026!');
     await seedMembership('org-001', ownerId, 'owner');

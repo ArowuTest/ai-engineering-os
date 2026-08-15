@@ -1002,6 +1002,7 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
 
   app.delete('/ai-runners/:runnerId', async (request, reply) => {
     const identity = await resolveIdentity(request, dependencies);
+    assertAllowedFields(bodyObject(request.body), []);
     try {
       await requireAIRunnerService().revokeRunner({
         organisationId: identity.organisationId,
