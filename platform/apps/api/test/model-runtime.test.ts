@@ -38,3 +38,33 @@ describe('configured model runtime', () => {
     expect(serialized).not.toContain('gemini-secret-value');
   });
 });
+
+describe('configured OpenRouter runtime', () => {
+  it('registers each explicitly configured model as a separate swappable route', () => {
+    const gateway = createConfiguredModelGateway({
+      OPENROUTER_API_KEY: 'openrouter-secret-value',
+      OPENROUTER_MODELS: 'qwen/qwen3.5, z-ai/glm-5, x-ai/grok-4',
+    });
+
+    expect(gateway.listRoutes().map((route) => [route.provider, route.model])).toEqual([
+      ['openrouter', 'qwen/qwen3.5'],
+      ['openrouter', 'z-ai/glm-5'],
+      ['openrouter', 'x-ai/grok-4'],
+    ]);
+    expect(new Set(gateway.listRoutes().map((route) => route.id)).size).toBe(3);
+    expect(JSON.stringify(gateway.listRoutes())).not.toContain('openrouter-secret-value');
+  });
+
+  it('fails closed when an OpenRouter key has no explicit model catalogue', () => {
+    expect(() => createConfiguredModelGateway({ OPENROUTER_API_KEY: 'x' })).toThrow(
+      'OPENROUTER_MODELS must be a non-blank comma-separated list',
+    );
+  });
+
+  it('rejects duplicate configured model slugs instead of silently changing routing', () => {
+    expect(() => createConfiguredModelGateway({
+      OPENROUTER_API_KEY: 'x',
+      OPENROUTER_MODELS: 'qwen/qwen3.5, qwen/qwen3.5',
+    })).toThrow('Duplicate OpenRouter model slug');
+  });
+});

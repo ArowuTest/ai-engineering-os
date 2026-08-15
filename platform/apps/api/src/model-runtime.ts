@@ -3,6 +3,7 @@ import {
   createAnthropicAdapter,
   createGeminiAdapter,
   createOpenAIAdapter,
+  createOpenRouterAdapter,
 } from '@engineering-os/model-gateway';
 
 export interface ModelRuntimeEnvironment {
@@ -12,11 +13,34 @@ export interface ModelRuntimeEnvironment {
   ANTHROPIC_MODEL?: string;
   GEMINI_API_KEY?: string;
   GEMINI_MODEL?: string;
+  OPENROUTER_API_KEY?: string;
+  OPENROUTER_MODELS?: string;
 }
 
 function value(environment: ModelRuntimeEnvironment, key: keyof ModelRuntimeEnvironment) {
   const raw = environment[key];
   return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
+}
+
+function configuredOpenRouterModels(environment: ModelRuntimeEnvironment): string[] {
+  const models = (environment.OPENROUTER_MODELS ?? '')
+    .split(',')
+    .map((model) => model.trim())
+    .filter(Boolean);
+  if (models.length === 0) {
+    throw new Error(
+      'OPENROUTER_MODELS must be a non-blank comma-separated list of model slugs when OPENROUTER_API_KEY is set',
+    );
+  }
+
+  const seen = new Set<string>();
+  for (const model of models) {
+    if (seen.has(model)) {
+      throw new Error(`Duplicate OpenRouter model slug in OPENROUTER_MODELS: ${model}`);
+    }
+    seen.add(model);
+  }
+  return models;
 }
 
 export function createConfiguredModelGateway(environment: ModelRuntimeEnvironment): ModelGateway {
@@ -37,6 +61,13 @@ export function createConfiguredModelGateway(environment: ModelRuntimeEnvironmen
   if (geminiKey) {
     const model = value(environment, 'GEMINI_MODEL');
     gateway.register(createGeminiAdapter(model ? { apiKey: geminiKey, model } : { apiKey: geminiKey }));
+  }
+
+  const openRouterKey = value(environment, 'OPENROUTER_API_KEY');
+  if (openRouterKey) {
+    for (const model of configuredOpenRouterModels(environment)) {
+      gateway.register(createOpenRouterAdapter({ apiKey: openRouterKey, model }));
+    }
   }
 
   return gateway;
