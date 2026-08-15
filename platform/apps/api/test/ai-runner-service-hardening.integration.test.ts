@@ -170,6 +170,23 @@ describe('AIRunnerService hardening', () => {
     expect(runner?.lastSeenAt).toBeUndefined();
   });
 
+  it('accepts an in-window behind-clock heartbeat without violating runner creation chronology', async () => {
+    const { created } = await personalRunner('runner.heartbeat.behind');
+    const repository = new AIRunnerRepository(pool);
+    const before = await repository.getRunner('org-001', created.runnerId);
+    expect(before).toBeDefined();
+    const now = new Date('2026-08-15T10:02:00Z');
+    const seenAt = new Date('2026-08-15T10:00:30Z');
+    const expiresAt = new Date('2026-08-15T10:03:00Z');
+
+    await expect(service().recordHeartbeat({ credential: created.credential, seenAt, expiresAt, now })).resolves.toBeUndefined();
+
+    const after = await repository.getRunner('org-001', created.runnerId);
+    expect(after).toMatchObject({ status: 'online', heartbeatExpiresAt: expiresAt });
+    expect(after?.lastSeenAt).toBeDefined();
+    expect(after!.lastSeenAt!.getTime()).toBeGreaterThanOrEqual(before!.createdAt.getTime());
+    expect(after!.lastSeenAt!.getTime()).toBeLessThanOrEqual(now.getTime());
+  });
   it('rejects a heartbeat timestamp outside the server clock-skew window', async () => {
     const { created } = await personalRunner('runner.heartbeat.future');
     const now = new Date('2026-08-15T10:15:00Z');

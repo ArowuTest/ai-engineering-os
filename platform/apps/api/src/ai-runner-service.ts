@@ -238,7 +238,12 @@ export class AIRunnerService {
       }
       const currentCredential = await aiRunners.getActiveCredentialByHash(credentialHash, now);
       if (!currentCredential) throw new Error('unauthorized');
-      await aiRunners.recordHeartbeat(credential.organisationId, credential.runnerId, input.seenAt, input.expiresAt);
+      const persistedSeenAt =
+        input.seenAt.getTime() < locked.createdAt.getTime()
+          ? new Date(locked.createdAt.getTime())
+          : new Date(input.seenAt.getTime());
+      if (input.expiresAt.getTime() <= persistedSeenAt.getTime()) throw new Error('invalid_heartbeat_expiry');
+      await aiRunners.recordHeartbeat(credential.organisationId, credential.runnerId, persistedSeenAt, input.expiresAt);
     });
   }
   async authenticateRunner(credential: string, at = new Date()): Promise<{ organisationId: string; runnerId: string } | null> {
