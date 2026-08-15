@@ -180,6 +180,8 @@ Each task follows:
 
 Agent Bridge generalises this into the project Review Council: first-pass reviewers are genuinely blind to one another and receive the same canonical packet for comparative runs; findings are normalised only after blind reviews return; every material finding is independently adjudicated as CONFIRMED, PARTIALLY_VALID, REJECTED or INSUFFICIENT_EVIDENCE; confirmed defects use RED -> minimal fix -> GREEN where practical; rejected/partial findings can be privately re-challenged; and any material source change requires a fresh-source review. Reviewer timeouts/empty payloads are availability failures, never verdicts. Builder/model summaries have no acceptance weight without exact source/diff/test evidence.
 
+**Locked product requirement - native Review Council feedback loop:** productise this workflow in platform code rather than leaving it as an external development convention. The native domain should preserve ReviewRun, ReviewFinding, FindingAdjudication, ReviewerRechallenge, CalibrationSnapshot and ArchitectureInvariant concepts (or equivalently narrow interfaces); enforce blind comparative input isolation; classify findings before remediation; route confirmed defects through RED/GREEN remediation where practical; support private reviewer re-challenge for rejected/partial findings; force fresh-source blind review after material source changes; and feed calibration into later model-role selection without exposing peer findings inside a blind run. One independently confirmed Critical/Important finding blocks acceptance; model majority never overrides a valid defect.
+
 The development agents are launched through the locally installed Claude Code CLI using the user's authenticated Claude subscription.
 Typical invocation uses `--model opus --effort medium` (high effort for whole-branch review), `--permission-mode bypassPermissions`, `--no-session-persistence`, `--no-chrome`, and a strict empty MCP config.
 
@@ -222,7 +224,9 @@ Preserve `ecc-seed` and `ecc-upstream`; never merge `ecc-upstream` wholesale. De
 The architecture is deliberately open-ID and route/capability driven.
 Adding Kimi/Moonshot, Grok/xAI, Mistral, DeepSeek or another provider should not require another ownership/domain migration.
 Add trusted provider/family policy and a thin adapter/configuration where request/response semantics differ.
-Do not hard-code future providers into the initial Product Studio OpenAI/Claude/Gemini/Auto selector unless product requirements change.
+
+**Locked product requirement - governed, swappable model catalogue:** provider/model names such as Qwen, GLM, Grok, Gemini, GPT and Claude are never permanent architectural roles. Platform Admin curates which discovered/configured models are Approved, Trial/Calibration or Disabled and may constrain them by organisation, role/capability, cost/risk or route policy. Ordinary users see only platform-approved models that are eligible through their organisation/API routes or their authorised personal connections, with `Auto` as the normal default and explicit model override available where policy permits. Council seats and agent roles select from eligible model routes by capability/policy/availability/cost/risk/evaluation evidence; changing the preferred model for Security, Correctness, Architecture, General Review or another role must be configuration/evaluation-driven, not a code change. Raw provider catalogues (for example the full OpenRouter catalogue) are an admin discovery surface, not the default end-user dropdown.
+
 Before implementing any new provider, reverify its CURRENT official API, authentication, structured-output and subscription-delegation policy; do not rely on stale vendor assumptions.
 
 ## 11. What comes after this connection-administration slice
