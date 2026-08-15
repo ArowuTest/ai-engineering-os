@@ -1,11 +1,11 @@
 # AI Engineering OS — Living Handover
 
 **Purpose:** Operational continuation document for a new ChatGPT/Claude/Codex agent if the current thread ends.
-**Last updated:** 15 August 2026, after Agent Bridge foundation local verification and independent review; the feature remains unmerged.
+**Last updated:** 15 August 2026, after Agent Bridge foundation local `main` merge and merged-main verification; remote push/CI verification still required.
 **Repository:** `ArowuTest/ai-engineering-os`
 **Local repo:** `<LOCAL_REPO_ROOT>`
 **Current source-of-truth branch:** `main`
-**Current accepted Agent Bridge feature:** `feature/agent-bridge-subscription-harnesses` @ `de947859f57cdfa5806934efc33fae1afe969e86` (locally verified/reviewed; not yet merged or pushed).
+**Current Agent Bridge integration:** production feature tip `de947859f57cdfa5806934efc33fae1afe969e86`, handover tip `c4011f978f5358645b5b356cb17b97ee8344aca0`, merged locally into `main` as `cb7597a36f4025a831ae09dd377714d698a6ba69`; verify `origin/main` and GitHub CI before treating remote integration as complete.
 **Task 8 product merge SHA:** `69ebe73b549f2fa2c1e63a7fcf13c28771290a2d` (subsequent documentation-only closeout commits may advance `main`).
 
 ## 1. Product principle
@@ -126,12 +126,12 @@ Task 8 fresh verification is green on the current working tree:
 
 The trusted-policy integration suite separately proves first-share Online Only, explicit Persistent, owner-offline behavior, revocation, windows and restart durability. Production subscription families remain non-delegatable until Agent Bridge, so the production smoke correctly proves fail-closed behavior rather than weakening policy.
 
-**Immediate next action:** commit the bounded Task 8 hardening, push the feature branch for exact CI, merge locally to `main` only after CI is green, reverify merged `main`, then push/verify GitHub `main`.
-## 6A. Agent Bridge foundation - accepted locally (15 August 2026)
+**Historical Task 8 closeout:** completed before Agent Bridge. Current continuation is recorded in Section 6A and Section 11.
+## 6A. Agent Bridge foundation - merged locally (15 August 2026)
 
 Implementation plan: `docs/superpowers/plans/2026-08-14-agent-bridge-foundation.md`.
-Accepted feature branch: `feature/agent-bridge-subscription-harnesses` at `de947859f57cdfa5806934efc33fae1afe969e86`.
-The branch is locally accepted but has not yet been merged to `main` or pushed as the completed foundation.
+Accepted production feature tip: `de947859f57cdfa5806934efc33fae1afe969e86`; Task 7 handover closeout tip: `c4011f978f5358645b5b356cb17b97ee8344aca0`.
+The branch was locally accepted and merged into local `main` via `cb7597a36f4025a831ae09dd377714d698a6ba69`; the merge tree exactly matches the reviewed feature tree. Remote `main` push/CI verification is still required at this checkpoint.
 
 Accepted implementation sequence:
 - plan: `76ba0e9a`;
@@ -142,6 +142,7 @@ Accepted implementation sequence:
 - runner-aware project execution pools: `643ee38b`;
 - harness-neutral execution boundary and hardening: `f2770c20`, `f1a794e9`, `0b78fc36`, `b8aeabdb`;
 - whole-branch heartbeat chronology remediation: `de947859`.
+- Task 7 handover closeout: c4011f97.
 
 The foundation now provides durable runner ownership/status/trust/capability contracts and scoped `RunnerTaskEnvelope`s; migration `007_ai_runners.sql`; organisation-scoped runner/binding/credential persistence; hash-only platform runner credentials; RBAC administration; trust/disable/revoke/rotate; credential-authenticated heartbeat and runner authentication; separate user-session and runner-bearer HTTP paths; runtime composition; real runner-aware requester -> project_pool -> organisation connection eligibility; Online Only/Persistent semantics; and a provider-neutral harness request/result/event boundary with scoped envelope validation and recursive credential-safe metadata handling.
 
@@ -150,6 +151,7 @@ Final whole-branch security review identified one real Important clock-skew defe
 Final verification on `de947859`:
 - fresh isolated PostgreSQL 17 volume: 33/33 static + 167/167 unit + 238/238 integration = 438/438 tests GREEN;
 - exact heartbeat remediation staged gate: platform/web typecheck PASS and 53/53 runner/database/server tests GREEN;
+- local main merge cb7597a36f4025a831ae09dd377714d698a6ba69 has the exact reviewed feature tree and passed 33/33 static + 167/167 unit + 238/238 integration = 438/438 tests, full typecheck, production build, dependency audit, adapter/harness/IOC gates;
 - Next.js 16.3 production build PASS;
 - production dependency audit: 0 vulnerabilities;
 - Harness Adapter Compliance PASS (11 adapters);
@@ -159,7 +161,7 @@ Final verification on `de947859`:
 - migrations 001-006 are Git-blob-identical to `main`; only migration 007 is new;
 - provider login/session material is absent from runner persistence, audit metadata and normal read responses; runner platform credentials are plaintext only in the explicit one-time register/rotate response and are hash-only at rest.
 
-The long inherited root ECC `npm test` run has so far observed two README-only assertions in the Itô Compute and Unified Memory surfaces while continuing through many other passing checks. `README.md` is the exact same Git blob as `main`, and those surfaces are unchanged by Agent Bridge; direct adapter, harness and IOC compatibility/security gates are green. Treat those README assertions as inherited baseline debt, not an Agent Bridge regression.
+The auxiliary inherited root ECC `npm test` mega-suite completed on this Windows host with 3,382/3,498 passing and 116 failing. This mega-suite is not the configured GitHub `ECC Compatibility` release job, and the full set of 116 failures has not been exhaustively baseline-classified; do not describe it as green or assume every failure is caused by Agent Bridge. The configured GitHub compatibility workflow instead runs the bounded agent/hook/command/skill/install/rule/workflow/catalog/registry/Unicode/path/IOC checks, whose local equivalents are green.
 
 Reviewer transport availability was imperfect: Qwen 3.8 Max and, on some larger packets, GLM/Gemini/Grok calls timed out or returned empty payloads. Those events were recorded as availability failures only and never counted as passes or failures. Acceptance used valid fresh independent reviews plus exact RED/GREEN and platform verification evidence.
 
@@ -225,7 +227,7 @@ Before implementing any new provider, reverify its CURRENT official API, authent
 
 ## 11. What comes after this connection-administration slice
 
-The Agent Bridge foundation is complete on the accepted feature branch and is ready for integration into `main` after the documented local-main verification/push sequence.
+The Agent Bridge foundation is integrated into verified local `main` at `cb7597a36f4025a831ae09dd377714d698a6ba69`; confirm `origin/main` and GitHub CI are current before starting the next engineering slice.
 The next engineering slice is concrete subscription-backed harness execution: Claude Code, Codex and Antigravity-style adapters behind the harness-neutral boundary, plus an early OpenRouter API route for external review/model access. Add each adapter incrementally under the same RED/GREEN, runner-auth, tenant, secret and fresh-review gates; do not collapse Harness, Connection and Runner into one abstraction.
 Provider login/session credentials should remain on the authorised runner where practical. The platform receives safe connection/runner metadata, scoped task envelopes and dispatch/results, not personal passwords, cookies, refresh tokens or consumer web sessions.
 Online Only now requires both owner platform presence and a healthy authorised bound runner. Persistent can survive owner sign-out only while a trusted persistent-capable bound runner remains healthy and policy allows it.
