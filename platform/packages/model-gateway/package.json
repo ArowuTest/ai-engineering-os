@@ -5,6 +5,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@engineering-os/domain": "0.1.0",
     "@anthropic-ai/sdk": "0.116.0",
     "@google/genai": "2.16.0",
     "openai": "7.4.0"

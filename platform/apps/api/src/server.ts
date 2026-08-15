@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   AIConnectionRepository,
+  AIRunnerRepository,
   AuditRepository,
   ConversationRepository,
   createDatabasePool,
@@ -16,7 +17,8 @@ import {
 import { createAuditEvent, hashPassword, normalizeUserId } from '@engineering-os/domain';
 import { buildApp } from './app.js';
 import { AuthService } from './auth-service.js';
-import { AIConnectionService } from './ai-connection-service.js';
+import { AIConnectionService, createRepositoryRunnerAvailabilityResolver } from './ai-connection-service.js';
+import { AIRunnerService } from './ai-runner-service.js';
 import { productionConnectionFamilyPolicyRegistry } from './ai-connection-policy.js';
 import { createConfiguredModelGateway, type ModelRuntimeEnvironment } from './model-runtime.js';
 
@@ -65,6 +67,7 @@ export function createRuntimeApp(environment: RuntimeEnvironment) {
   const pool = createDatabasePool(environment.DATABASE_URL);
   const unitOfWork = new DatabaseUnitOfWork(pool);
   const modelGateway = createConfiguredModelGateway(environment);
+  const aiRunners = new AIRunnerRepository(pool);
   const aiConnectionService = new AIConnectionService({
     unitOfWork,
     aiConnections: new AIConnectionRepository(pool),
@@ -73,6 +76,13 @@ export function createRuntimeApp(environment: RuntimeEnvironment) {
     sessions: new SessionRepository(pool),
     policy: productionConnectionFamilyPolicyRegistry,
     modelGateway,
+    runnerAvailability: createRepositoryRunnerAvailabilityResolver(aiRunners),
+  });
+  const aiRunnerService = new AIRunnerService({
+    unitOfWork,
+    aiRunners,
+    memberships: new MembershipRepository(pool),
+    audit: new AuditRepository(pool),
   });
   const app = buildApp({
     projects: new ProjectRepository(pool),
@@ -82,6 +92,7 @@ export function createRuntimeApp(environment: RuntimeEnvironment) {
     modelGateway,
     authService: createAuthService(pool),
     aiConnectionService,
+    aiRunnerService,
     aiConnectionPolicy: productionConnectionFamilyPolicyRegistry,
     allowDevIdentityHeaders: environment.ALLOW_DEV_IDENTITY_HEADERS === 'true',
   });

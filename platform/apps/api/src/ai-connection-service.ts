@@ -13,6 +13,7 @@ import {
 import type {
   AIConnectionProjectShareRecord,
   AIConnectionRepository,
+  AIRunnerRepository,
   DatabaseUnitOfWork,
   MembershipRepository,
   ProjectRepository,
@@ -38,6 +39,21 @@ export class AIConnectionServiceError extends Error {
   }
 }
 
+export interface BoundRunnerAvailabilitySnapshot {
+  harnessId: string;
+  status: 'registered' | 'online' | 'offline' | 'disabled' | 'revoked';
+  trustState: 'pending' | 'trusted' | 'restricted' | 'revoked';
+  persistentSupported: boolean;
+  heartbeatExpiresAt?: Date;
+}
+
+export interface RunnerAvailabilityResolver {
+  listBoundRunners(input: {
+    organisationId: string;
+    connectionId: string;
+  }): Promise<readonly BoundRunnerAvailabilitySnapshot[]>;
+}
+
 export interface AIConnectionServiceDependencies {
   unitOfWork: DatabaseUnitOfWork;
   aiConnections: AIConnectionRepository;
@@ -46,6 +62,7 @@ export interface AIConnectionServiceDependencies {
   sessions: SessionRepository;
   policy: ConnectionFamilyPolicyRegistry;
   modelGateway: ModelGateway;
+  runnerAvailability?: RunnerAvailabilityResolver;
 }
 
 export type ProjectExecutionPoolTier = 'requester' | 'project_pool' | 'organisation';
@@ -163,6 +180,59 @@ function pickOrganisationStrategy(
   return nonSecret[0] ?? null;
 }
 
+export function createRepositoryRunnerAvailabilityResolver(
+  aiRunners: Pick<AIRunnerRepository, 'listActiveBindingsForConnection' | 'getRunner'>,
+): RunnerAvailabilityResolver {
+  return {
+    async listBoundRunners({ organisationId, connectionId }) {
+      const bindings = await aiRunners.listActiveBindingsForConnection(organisationId, connectionId);
+      const seen = new Set<string>();
+      const snapshots: BoundRunnerAvailabilitySnapshot[] = [];
+      for (const binding of bindings) {
+        if (seen.has(binding.runnerId)) continue;
+        seen.add(binding.runnerId);
+        const runner = await aiRunners.getRunner(organisationId, binding.runnerId);
+        if (!runner) continue;
+        const snapshot: BoundRunnerAvailabilitySnapshot = {
+          harnessId: runner.harnessId,
+          status: runner.status,
+          trustState: runner.trustState,
+          persistentSupported: runner.persistentSupported,
+        };
+        if (runner.heartbeatExpiresAt !== undefined) {
+          snapshot.heartbeatExpiresAt = runner.heartbeatExpiresAt;
+        }
+        snapshots.push(snapshot);
+      }
+      return snapshots;
+    },
+  };
+}
+
+async function hasEligibleBoundRunner(
+  resolver: RunnerAvailabilityResolver | undefined,
+  organisationId: string,
+  connectionId: string,
+  familyPolicy: TrustedConnectionFamilyPolicy,
+  now: Date,
+  persistentRequired: boolean,
+): Promise<boolean> {
+  if (!resolver) return false;
+  try {
+    const runners = await resolver.listBoundRunners({ organisationId, connectionId });
+    return runners.some((runner) => {
+      if (runner.status !== 'online' || runner.trustState !== 'trusted') return false;
+      if (familyPolicy.harnessId !== undefined && runner.harnessId !== familyPolicy.harnessId) return false;
+      if (persistentRequired && !runner.persistentSupported) return false;
+      const expiresAt = runner.heartbeatExpiresAt;
+      return expiresAt instanceof Date
+        && Number.isFinite(expiresAt.getTime())
+        && expiresAt.getTime() > now.getTime();
+    });
+  } catch {
+    return false;
+  }
+}
 export class AIConnectionService {
   constructor(private readonly dependencies: AIConnectionServiceDependencies) {}
 
@@ -750,7 +820,12 @@ export class AIConnectionService {
       if (c.status !== 'available') reasons.push('connection_unavailable');
       if (!familyPolicy) {
         reasons.push('policy_not_delegatable');
-      } else if (familyPolicy.requiresRunner) {
+      } else if (
+        familyPolicy.requiresRunner
+        && !(await hasEligibleBoundRunner(
+          this.dependencies.runnerAvailability, input.organisationId, c.id, familyPolicy, now, false,
+        ))
+      ) {
         reasons.push('runner_unavailable');
       }
       const reqEntry: ProjectExecutionPoolEntry = {
@@ -793,7 +868,19 @@ export class AIConnectionService {
       if (!familyPolicy || !familyPolicy.delegatable) {
         reasons.push('policy_not_delegatable');
       } else {
-        if (familyPolicy.requiresRunner) reasons.push('runner_unavailable');
+        if (
+          familyPolicy.requiresRunner
+          && !(await hasEligibleBoundRunner(
+            this.dependencies.runnerAvailability,
+            input.organisationId,
+            conn.id,
+            familyPolicy,
+            now,
+            share.mode === 'persistent',
+          ))
+        ) {
+          reasons.push('runner_unavailable');
+        }
         // Window
         if (share.availableFrom !== undefined && now.getTime() < share.availableFrom.getTime()) {
           reasons.push('usage_window_not_started');
@@ -851,7 +938,12 @@ export class AIConnectionService {
       const familyPolicy = policy.get(c.connectionFamilyId);
       if (!familyPolicy || !familyPolicy.allowedOwnership.includes('organisation')) {
         reasons.push('policy_not_delegatable');
-      } else if (familyPolicy.requiresRunner) {
+      } else if (
+        familyPolicy.requiresRunner
+        && !(await hasEligibleBoundRunner(
+          this.dependencies.runnerAvailability, input.organisationId, c.id, familyPolicy, now, false,
+        ))
+      ) {
         reasons.push('runner_unavailable');
       }
       orgEntries.push({

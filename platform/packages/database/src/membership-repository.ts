@@ -93,6 +93,20 @@ export class MembershipRepository {
     return row ? mapOrganisation(row) : null;
   }
 
+  async getOrganisationForUpdate(
+    organisationId: string,
+    userId: string,
+  ): Promise<OrganisationMembershipRecord | null> {
+    const result = await this.database.query<OrganisationMembershipRow>(
+      `SELECT organisation_id, user_id, role, status, created_by, created_at, updated_at
+       FROM organisation_memberships
+       WHERE organisation_id = $1 AND user_id = $2
+       FOR UPDATE`,
+      [organisationId, userId],
+    );
+    const row = result.rows[0];
+    return row ? mapOrganisation(row) : null;
+  }
   async revokeOrganisation(organisationId: string, userId: string, now: Date): Promise<void> {
     await this.database.query(
       `UPDATE organisation_memberships
