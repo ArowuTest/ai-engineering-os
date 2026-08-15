@@ -3,6 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { hashPassword } from '@engineering-os/domain';
 import {
   AIConnectionRepository,
+  AIRunnerRepository,
   AuditRepository,
   ConversationRepository,
   DatabaseUnitOfWork,
@@ -639,6 +640,74 @@ describe('AI connections HTTP boundary', () => {
     expect(after.rows[0].available_until).toBeNull();
 
     await app.close();
+  });
+
+  it('createRuntimeApp makes requester pool runner-aware from persisted active binding health', async () => {
+    const runtime = createRuntimeApp({ DATABASE_URL: databaseUrl, ALLOW_DEV_IDENTITY_HEADERS: 'false' });
+    try {
+      const ownerId = await seedUser('runtime.runner.pool.owner', 'Runtime-runner-pool-2026!');
+      await seedOrgMembership('org-001', ownerId, 'owner');
+      const projectId = await seedProject('org-001', 'Runtime Runner Pool Project');
+      const loginResponse = await runtime.app.inject({
+        method: 'POST', url: '/auth/login',
+        payload: { userId: 'runtime.runner.pool.owner', password: 'Runtime-runner-pool-2026!' },
+      });
+      expect(loginResponse.statusCode).toBe(200);
+      const token = (loginResponse.json() as { token: string }).token;
+      const headers = { authorization: `Bearer ${token}`, 'x-organisation-id': 'org-001' };
+
+      const connectionResponse = await runtime.app.inject({
+        method: 'POST', url: '/ai-connections/personal', headers,
+        payload: { connectionFamilyId: 'codex-subscription' },
+      });
+      expect(connectionResponse.statusCode).toBe(201);
+      const connectionId = (connectionResponse.json() as { id: string }).id;
+      await pool.query(
+        `UPDATE ai_connections SET status = 'available', updated_at = $3
+         WHERE organisation_id = $1 AND id = $2`,
+        ['org-001', connectionId, new Date()],
+      );
+      const runnerResponse = await runtime.app.inject({
+        method: 'POST', url: '/ai-runners', headers,
+        payload: {
+          ownership: 'personal', harnessId: 'codex', persistentSupported: false,
+          capabilities: ['chat'],
+        },
+      });
+      expect(runnerResponse.statusCode).toBe(201);
+      const runner = runnerResponse.json() as { runnerId: string; credential: string };
+      const trusted = await runtime.app.inject({
+        method: 'PATCH', url: `/ai-runners/${runner.runnerId}/trust`, headers,
+        payload: { trustState: 'trusted' },
+      });
+      expect(trusted.statusCode).toBe(204);
+      await new AIRunnerRepository(pool).createConnectionBinding({
+        id: randomUUID(), organisationId: 'org-001', runnerId: runner.runnerId,
+        connectionId, createdBy: ownerId, createdAt: new Date(),
+      });
+
+      const seenAt = new Date();
+      const heartbeat = await runtime.app.inject({
+        method: 'POST', url: '/runner/heartbeat',
+        headers: { authorization: `Bearer ${runner.credential}` },
+        payload: { seenAt: seenAt.toISOString(), expiresAt: new Date(seenAt.getTime() + 240_000).toISOString() },
+      });
+      expect(heartbeat.statusCode).toBe(204);
+      const poolResponse = await runtime.app.inject({
+        method: 'GET', url: `/projects/${projectId}/ai-connections`, headers,
+      });
+      expect(poolResponse.statusCode).toBe(200);
+      const executionPool = poolResponse.json() as {
+        entries: Array<{ connectionId: string; tier: string; eligible: boolean; reasons: string[] }>;
+      };
+      const entry = executionPool.entries.find(
+        (candidate) => candidate.tier === 'requester' && candidate.connectionId === connectionId,
+      );
+      expect(entry?.eligible).toBe(true);
+      expect(entry?.reasons).toEqual([]);
+    } finally {
+      await runtime.close();
+    }
   });
 
   it('createRuntimeApp composes real AIConnectionService and persists connection/share/audit state across restart', async () => {

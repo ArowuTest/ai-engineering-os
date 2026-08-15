@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   AIConnectionRepository,
+  AIRunnerRepository,
   AuditRepository,
   DatabaseUnitOfWork,
   MembershipRepository,
@@ -11,9 +12,13 @@ import {
 } from '@engineering-os/database';
 import { ModelGateway } from '@engineering-os/model-gateway';
 import type { ModelAdapter, ModelRoute } from '@engineering-os/model-gateway';
-import type { OrganisationRole } from '@engineering-os/domain';
+import { createAIRunnerRecord, type OrganisationRole } from '@engineering-os/domain';
 import { createHash, randomBytes } from 'node:crypto';
-import { AIConnectionService, AIConnectionServiceError } from '../src/ai-connection-service.js';
+import {
+  AIConnectionService,
+  AIConnectionServiceError,
+  createRepositoryRunnerAvailabilityResolver,
+} from '../src/ai-connection-service.js';
 import {
   createConnectionFamilyPolicyRegistry,
   type ConnectionFamilyPolicyRegistry,
@@ -115,9 +120,22 @@ async function seedMember(
   );
 }
 
+interface TestRunnerAvailabilitySnapshot {
+  harnessId: string;
+  status: 'registered' | 'online' | 'offline' | 'disabled' | 'revoked';
+  trustState: 'pending' | 'trusted' | 'restricted' | 'revoked';
+  persistentSupported: boolean;
+  heartbeatExpiresAt?: Date;
+}
+
+interface TestRunnerAvailabilityResolver {
+  listBoundRunners(input: { organisationId: string; connectionId: string }): Promise<readonly TestRunnerAvailabilitySnapshot[]>;
+}
+
 function makeService(
   registry: ConnectionFamilyPolicyRegistry = makeRegistry(),
   modelGateway: ModelGateway = new ModelGateway(),
+  runnerAvailability?: TestRunnerAvailabilityResolver,
 ) {
   return new AIConnectionService({
     unitOfWork: new DatabaseUnitOfWork(pool),
@@ -127,6 +145,7 @@ function makeService(
     sessions: new SessionRepository(pool),
     policy: registry,
     modelGateway,
+    ...(runnerAvailability ? { runnerAvailability } : {}),
   });
 }
 
@@ -1344,6 +1363,18 @@ describe('AIConnectionService', () => {
       persistentSupported: false,
     },
     {
+      id: 'pool-personal-runner-persistent',
+      providerId: 'test',
+      displayName: 'Pool Personal Runner Persistent',
+      executionMode: 'subscription',
+      harnessId: 'test',
+      allowedOwnership: ['personal'],
+      credentialStrategies: ['runner_managed'],
+      delegatable: true,
+      requiresRunner: true,
+      persistentSupported: true,
+    },
+    {
       id: 'pool-personal-nondel',
       providerId: 'test',
       displayName: 'Pool Personal Nondelegatable',
@@ -1660,6 +1691,255 @@ describe('AIConnectionService', () => {
     const entry = result.entries.find((e) => e.tier === 'project_pool' && e.connectionId === conn.id);
     expect(entry?.eligible).toBe(true);
     expect(entry?.shareMode).toBe('persistent');
+    expect(entry?.reasons).toEqual([]);
+  });
+
+  it('repository runner resolver reads only actively bound persisted runner health', async () => {
+    const owner = await seedUser('pool.runner.resolver.owner');
+    await seedMember('org-001', owner.id, 'member');
+    const service = makeService(makePoolRegistry());
+    const connection = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: owner.id, connectionFamilyId: 'pool-personal-runner',
+    });
+    const aiRunners = new AIRunnerRepository(pool);
+    const now = new Date('2026-08-15T12:00:00.000Z');
+    const runner = createAIRunnerRecord({
+      organisationId: 'org-001',
+      ownership: 'personal',
+      ownerUserId: owner.id,
+      harnessId: 'test',
+      status: 'registered',
+      trustState: 'trusted',
+      persistentSupported: true,
+      capabilities: ['chat'],
+      createdBy: owner.id,
+      createdAt: now,
+    });
+    await aiRunners.createRunner(runner);
+    const bindingId = randomUUID();
+    await aiRunners.createConnectionBinding({
+      id: bindingId,
+      organisationId: 'org-001',
+      runnerId: runner.id,
+      connectionId: connection.id,
+      createdBy: owner.id,
+      createdAt: now,
+    });
+    await aiRunners.recordHeartbeat(
+      'org-001', runner.id, now, new Date(now.getTime() + 60_000),
+    );
+
+    const resolver = createRepositoryRunnerAvailabilityResolver(aiRunners);
+    const bound = await resolver.listBoundRunners({
+      organisationId: 'org-001', connectionId: connection.id,
+    });
+    expect(bound).toHaveLength(1);
+    expect(bound[0]).toMatchObject({
+      harnessId: 'test', status: 'online', trustState: 'trusted', persistentSupported: true,
+    });
+    expect(bound[0]?.heartbeatExpiresAt?.toISOString()).toBe(
+      new Date(now.getTime() + 60_000).toISOString(),
+    );
+    await aiRunners.revokeConnectionBinding(
+      'org-001', bindingId, new Date(now.getTime() + 1),
+    );
+    const unbound = await resolver.listBoundRunners({
+      organisationId: 'org-001', connectionId: connection.id,
+    });
+    expect(unbound).toEqual([]);
+  });
+
+  it('listProjectExecutionPool: online_only requires owner presence and a healthy bound runner', async () => {
+    const owner = await seedUser('pool.owner.runner.online');
+    const requester = await seedUser('pool.req.runner.online');
+    await seedMember('org-001', owner.id, 'member');
+    await seedMember('org-001', requester.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    await seedProjectMembership('org-001', projectId, requester.id);
+    const now = new Date('2026-08-15T12:00:00.000Z');
+    const snapshots = new Map<string, TestRunnerAvailabilitySnapshot[]>();
+    const availability: TestRunnerAvailabilityResolver = {
+      async listBoundRunners({ connectionId }) { return snapshots.get(connectionId) ?? []; },
+    };
+    const service = makeService(makePoolRegistry(), new ModelGateway(), availability);
+    const conn = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: owner.id, connectionFamilyId: 'pool-personal-runner',
+    });
+    await setConnectionStatusRaw('org-001', conn.id, 'available');
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+    });
+    snapshots.set(conn.id, [{
+      harnessId: 'test', status: 'online', trustState: 'trusted', persistentSupported: false,
+      heartbeatExpiresAt: new Date(now.getTime() + 60_000),
+    }]);
+
+    let result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id, now,
+    });
+    let entry = result.entries.find((e) => e.tier === 'project_pool' && e.connectionId === conn.id);
+    expect(entry?.eligible).toBe(false);
+    expect(entry?.reasons).toContain('owner_offline');
+    expect(entry?.reasons).not.toContain('runner_unavailable');
+
+    await seedActiveSession(owner.id, new Date('2099-01-01T00:00:00.000Z'));
+    result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id, now,
+    });
+    entry = result.entries.find((e) => e.tier === 'project_pool' && e.connectionId === conn.id);
+    expect(entry?.eligible).toBe(true);
+    expect(entry?.reasons).toEqual([]);
+
+    snapshots.set(conn.id, []);
+    result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id, now,
+    });
+    entry = result.entries.find((e) => e.tier === 'project_pool' && e.connectionId === conn.id);
+    expect(entry?.eligible).toBe(false);
+    expect(entry?.reasons).toContain('runner_unavailable');
+  });
+
+  it('listProjectExecutionPool: persistent ignores owner presence but requires a healthy persistent-capable runner', async () => {
+    const owner = await seedUser('pool.owner.runner.persist');
+    const requester = await seedUser('pool.req.runner.persist');
+    await seedMember('org-001', owner.id, 'member');
+    await seedMember('org-001', requester.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, owner.id);
+    await seedProjectMembership('org-001', projectId, requester.id);
+    const now = new Date('2026-08-15T12:00:00.000Z');
+    const snapshots = new Map<string, TestRunnerAvailabilitySnapshot[]>();
+    const availability: TestRunnerAvailabilityResolver = {
+      async listBoundRunners({ connectionId }) { return snapshots.get(connectionId) ?? []; },
+    };
+    const service = makeService(makePoolRegistry(), new ModelGateway(), availability);
+    const conn = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: owner.id,
+      connectionFamilyId: 'pool-personal-runner-persistent',
+    });
+    await setConnectionStatusRaw('org-001', conn.id, 'available');
+    await service.shareConnectionWithProject({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+    });
+    await service.setProjectShareMode({
+      organisationId: 'org-001', actorUserId: owner.id, projectId, connectionId: conn.id,
+      mode: 'persistent',
+    });
+
+    snapshots.set(conn.id, [{
+      harnessId: 'test', status: 'online', trustState: 'trusted', persistentSupported: false,
+      heartbeatExpiresAt: new Date(now.getTime() + 60_000),
+    }]);
+    let result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id, now,
+    });
+    let entry = result.entries.find((e) => e.tier === 'project_pool' && e.connectionId === conn.id);
+    expect(entry?.eligible).toBe(false);
+    expect(entry?.reasons).toContain('runner_unavailable');
+    expect(entry?.reasons).not.toContain('owner_offline');
+
+    snapshots.set(conn.id, [{
+      harnessId: 'test', status: 'online', trustState: 'trusted', persistentSupported: true,
+      heartbeatExpiresAt: new Date(now.getTime() + 60_000),
+    }]);
+    result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id, now,
+    });
+    entry = result.entries.find((e) => e.tier === 'project_pool' && e.connectionId === conn.id);
+    expect(entry?.eligible).toBe(true);
+    expect(entry?.reasons).toEqual([]);
+  });
+
+  it('listProjectExecutionPool: disabled revoked stale untrusted or wrong-harness runners remain ineligible', async () => {
+    const requester = await seedUser('pool.req.runner.health');
+    await seedMember('org-001', requester.id, 'member');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, requester.id);
+    const now = new Date('2026-08-15T12:00:00.000Z');
+    const snapshots = new Map<string, TestRunnerAvailabilitySnapshot[]>();
+    const availability: TestRunnerAvailabilityResolver = {
+      async listBoundRunners({ connectionId }) { return snapshots.get(connectionId) ?? []; },
+    };
+    const service = makeService(makePoolRegistry(), new ModelGateway(), availability);
+    const conn = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: requester.id, connectionFamilyId: 'pool-personal-runner',
+    });
+    await setConnectionStatusRaw('org-001', conn.id, 'available');
+
+    const assertUnavailable = async (snapshot: TestRunnerAvailabilitySnapshot) => {
+      snapshots.set(conn.id, [snapshot]);
+      const result = await service.listProjectExecutionPool({
+        organisationId: 'org-001', projectId, requesterUserId: requester.id, now,
+      });
+      const entry = result.entries.find((e) => e.tier === 'requester' && e.connectionId === conn.id);
+      expect(entry?.eligible).toBe(false);
+      expect(entry?.reasons).toContain('runner_unavailable');
+    };
+
+    await assertUnavailable({
+      harnessId: 'test', status: 'disabled', trustState: 'trusted', persistentSupported: false,
+      heartbeatExpiresAt: new Date(now.getTime() + 60_000),
+    });
+    await assertUnavailable({
+      harnessId: 'test', status: 'revoked', trustState: 'trusted', persistentSupported: false,
+      heartbeatExpiresAt: new Date(now.getTime() + 60_000),
+    });
+    await assertUnavailable({
+      harnessId: 'test', status: 'online', trustState: 'trusted', persistentSupported: false,
+      heartbeatExpiresAt: new Date(now.getTime() - 1),
+    });
+    await assertUnavailable({
+      harnessId: 'test', status: 'online', trustState: 'pending', persistentSupported: false,
+      heartbeatExpiresAt: new Date(now.getTime() + 60_000),
+    });
+    await assertUnavailable({
+      harnessId: 'wrong-harness', status: 'online', trustState: 'trusted', persistentSupported: false,
+      heartbeatExpiresAt: new Date(now.getTime() + 60_000),
+    });
+    snapshots.set(conn.id, [{
+      harnessId: 'test', status: 'online', trustState: 'trusted', persistentSupported: false,
+      heartbeatExpiresAt: new Date(now.getTime() + 60_000),
+    }]);
+    const healthy = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id, now,
+    });
+    const healthyEntry = healthy.entries.find(
+      (e) => e.tier === 'requester' && e.connectionId === conn.id,
+    );
+    expect(healthyEntry?.eligible).toBe(true);
+    expect(healthyEntry?.reasons).toEqual([]);
+  });
+
+  it('listProjectExecutionPool: organisation runner-required connection becomes eligible with a healthy bound runner', async () => {
+    const requester = await seedUser('pool.req.org.runner.healthy');
+    const admin = await seedUser('pool.admin.org.runner.healthy');
+    await seedMember('org-001', requester.id, 'member');
+    await seedMember('org-001', admin.id, 'admin');
+    const projectId = await seedProject('org-001');
+    await seedProjectMembership('org-001', projectId, requester.id);
+    const now = new Date('2026-08-15T12:00:00.000Z');
+    const snapshots = new Map<string, TestRunnerAvailabilitySnapshot[]>();
+    const availability: TestRunnerAvailabilityResolver = {
+      async listBoundRunners({ connectionId }) { return snapshots.get(connectionId) ?? []; },
+    };
+    const service = makeService(makePoolRegistry(), new ModelGateway(), availability);
+    const connection = await service.registerOrganisationConnection({
+      organisationId: 'org-001', actorUserId: admin.id,
+      connectionFamilyId: 'pool-org-runner', secretRefId: 'vault:org-runner-healthy',
+    });
+    await setConnectionStatusRaw('org-001', connection.id, 'available');
+    snapshots.set(connection.id, [{
+      harnessId: 'any-bound-harness', status: 'online', trustState: 'trusted',
+      persistentSupported: false, heartbeatExpiresAt: new Date(now.getTime() + 60_000),
+    }]);
+    const result = await service.listProjectExecutionPool({
+      organisationId: 'org-001', projectId, requesterUserId: requester.id, now,
+    });
+    const entry = result.entries.find(
+      (candidate) => candidate.tier === 'organisation' && candidate.connectionId === connection.id,
+    );
+    expect(entry?.eligible).toBe(true);
     expect(entry?.reasons).toEqual([]);
   });
 
