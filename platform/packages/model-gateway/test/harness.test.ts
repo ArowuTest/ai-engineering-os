@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RunnerTaskEnvelope } from '@engineering-os/domain';
 import {
+  HarnessExecutionValidationError,
   NoEligibleHarnessAdapterError,
   executeHarnessRequest,
   selectHarnessExecutionAdapter,
@@ -208,6 +209,49 @@ describe('harness-neutral execution boundary', () => {
     ).toThrow(/credential|metadata|openaiAccessToken/i);
   });
 
+  it('rejects malformed result and event shapes with the harness validation error', () => {
+    expect(() => validateHarnessExecutionResult(null as unknown as HarnessExecutionResult)).toThrow(HarnessExecutionValidationError);
+    expect(() =>
+      validateHarnessExecutionResult({
+        status: 'completed',
+        events: [null]
+      } as unknown as HarnessExecutionResult)
+    ).toThrow(HarnessExecutionValidationError);
+  });
+
+  it('rejects unknown execution event types instead of coercing them to status events', () => {
+    expect(() =>
+      validateHarnessExecutionResult({
+        status: 'completed',
+        events: [{ type: 'log', at: now, status: 'running', message: 'x' }]
+      } as unknown as HarnessExecutionResult)
+    ).toThrow(HarnessExecutionValidationError);
+  });
+
+  it('rejects malformed adapter capability maps with a controlled validation error', () => {
+    const malformed = {
+      ...adapter('codex-malformed', 'codex', capabilities({ tools: true, localWorkspace: true })),
+      capabilities: null
+    } as unknown as HarnessExecutionAdapter;
+    expect(() => selectHarnessExecutionAdapter([malformed], request(), now)).toThrow(HarnessExecutionValidationError);
+  });
+  it('rejects common provider credential key variants recursively', () => {
+    const forbiddenKeys = ['privateKey', 'secretKey', 'signingKey', 'passphrase', 'accessKeyId', 'awsSecretAccessKey', 'sessionId', 'userSession'];
+    for (const key of forbiddenKeys) {
+      expect(() =>
+        validateHarnessExecutionResult({
+          status: 'completed',
+          events: [],
+          metadata: { nested: [{ [key]: 'forbidden' }] }
+        })
+      ).toThrow(HarnessExecutionValidationError);
+    }
+  });
+
+  it('rejects prototype-mutating metadata keys instead of materializing inherited values', () => {
+    const metadata = JSON.parse('{"__proto__":{"injected":1}}') as Record<string, unknown>;
+    expect(() => validateHarnessExecutionResult({ status: 'completed', events: [], metadata } as HarnessExecutionResult)).toThrow(HarnessExecutionValidationError);
+  });
   it('accepts safe status/checkpoint metadata and preserves no provider secrets', () => {
     const result = validateHarnessExecutionResult({
       status: 'completed',

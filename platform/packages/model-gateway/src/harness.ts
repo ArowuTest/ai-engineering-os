@@ -80,7 +80,7 @@ function requireNonBlank(value: unknown, field: string): string {
   }
   return value;
 }
-function requireCapabilityList(value: readonly CapabilityName[]): CapabilityName[] {
+function requireCapabilityList(value: unknown): CapabilityName[] {
   if (!Array.isArray(value)) {
     throw new HarnessExecutionValidationError('requiredCapabilities must be an array');
   }
@@ -99,7 +99,7 @@ function requireCapabilityList(value: readonly CapabilityName[]): CapabilityName
   return result;
 }
 
-function requireOperationList(value: readonly string[]): string[] {
+function requireOperationList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     throw new HarnessExecutionValidationError('operations must be an array');
   }
@@ -146,19 +146,35 @@ const FORBIDDEN_METADATA_KEY_SUFFIXES = [
   'bearertoken',
   'cookie',
   'cookies',
+  'session',
+  'sessionid',
   'providersession',
   'credential',
   'credentials',
   'secret',
+  'secretkey',
+  'secretaccesskey',
+  'accesskey',
+  'accesskeyid',
+  'privatekey',
+  'privatekeyid',
+  'signingkey',
+  'signingkeyid',
+  'passphrase',
   'secretrefid',
   'authorization',
   'authorizationheader'
 ] as const;
+const FORBIDDEN_METADATA_STRUCTURE_KEYS = new Set(['proto', 'prototype', 'constructor']);
 
 function metadataKeyIsForbidden(key: string): boolean {
   const normalized = normalizedMetadataKey(key);
   if (FORBIDDEN_METADATA_KEYS.has(normalized)) return true;
-  return FORBIDDEN_METADATA_KEY_SUFFIXES.some(suffix => normalized.length > suffix.length && normalized.endsWith(suffix));
+  return FORBIDDEN_METADATA_KEY_SUFFIXES.some(suffix => normalized.length >= suffix.length && normalized.endsWith(suffix));
+}
+
+function metadataKeyIsStructurallyUnsafe(key: string): boolean {
+  return FORBIDDEN_METADATA_STRUCTURE_KEYS.has(normalizedMetadataKey(key));
 }
 
 function safeMetadataValue(value: unknown, path: string, depth = 0, seen = new WeakSet<object>()): HarnessMetadataValue {
@@ -187,8 +203,11 @@ function safeMetadataValue(value: unknown, path: string, depth = 0, seen = new W
     if (prototype !== Object.prototype && prototype !== null) {
       throw new HarnessExecutionValidationError(`${path} metadata must use plain objects`);
     }
-    const result: Record<string, HarnessMetadataValue> = {};
+    const result = Object.create(null) as Record<string, HarnessMetadataValue>;
     for (const [key, item] of Object.entries(value)) {
+      if (metadataKeyIsStructurallyUnsafe(key)) {
+        throw new HarnessExecutionValidationError(`${path}.${key} is not allowed in metadata`);
+      }
       if (metadataKeyIsForbidden(key)) {
         throw new HarnessExecutionValidationError(`${path}.${key} contains provider credential metadata`);
       }
@@ -208,38 +227,67 @@ function safeMetadata(value: unknown, path: string): Record<string, HarnessMetad
   return normalized;
 }
 
-function canonicalModelRoute(route: ModelRoute): ModelRoute {
-  const id = requireStableIdentifier(route.id, 'route id');
-  const provider = requireStableIdentifier(route.provider, 'route provider');
+function requirePlainRecord(value: unknown, field: string): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new HarnessExecutionValidationError(`${field} must be an object`);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new HarnessExecutionValidationError(`${field} must use a plain object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function canonicalCapabilities(value: unknown, field: string): ProviderCapabilities {
+  const record = requirePlainRecord(value, field);
+  const capabilities = {} as ProviderCapabilities;
+  for (const capability of CAPABILITY_NAMES) {
+    if (typeof record[capability] !== 'boolean') {
+      throw new HarnessExecutionValidationError(`${field}.${capability} must be boolean`);
+    }
+    capabilities[capability] = record[capability] as boolean;
+  }
+  return capabilities;
+}
+function canonicalModelRoute(route: unknown): ModelRoute {
+  const record = requirePlainRecord(route, 'route');
+  const id = requireStableIdentifier(record.id, 'route id');
+  const provider = requireStableIdentifier(record.provider, 'route provider');
   if (provider === 'auto') {
     throw new HarnessExecutionValidationError('route provider cannot be auto');
   }
-  const model = requireNonBlank(route.model, 'route model');
-  if (!['subscription', 'api', 'manual'].includes(route.executionMode)) {
+  const model = requireNonBlank(record.model, 'route model');
+  const executionMode = record.executionMode;
+  if (executionMode !== 'subscription' && executionMode !== 'api' && executionMode !== 'manual') {
     throw new HarnessExecutionValidationError('route executionMode is invalid');
   }
-  if (!['included_subscription', 'provider_credit', 'metered_api', 'manual'].includes(route.costType)) {
+  const costType = record.costType;
+  if (costType !== 'included_subscription' && costType !== 'provider_credit' && costType !== 'metered_api' && costType !== 'manual') {
     throw new HarnessExecutionValidationError('route costType is invalid');
   }
-  if (typeof route.available !== 'boolean') {
+  if (typeof record.available !== 'boolean') {
     throw new HarnessExecutionValidationError('route available must be boolean');
   }
-  if (!Number.isFinite(route.priority)) {
+  if (typeof record.priority !== 'number' || !Number.isFinite(record.priority)) {
     throw new HarnessExecutionValidationError('route priority must be finite');
   }
-  const capabilities = {} as ProviderCapabilities;
-  for (const capability of CAPABILITY_NAMES) {
-    if (typeof route.capabilities?.[capability] !== 'boolean') {
-      throw new HarnessExecutionValidationError(`route capability ${capability} must be boolean`);
-    }
-    capabilities[capability] = route.capabilities[capability];
-  }
-  return { id, provider, model, executionMode: route.executionMode, costType: route.costType, available: route.available, priority: route.priority, capabilities };
+  return {
+    id,
+    provider,
+    model,
+    executionMode,
+    costType,
+    available: record.available,
+    priority: record.priority,
+    capabilities: canonicalCapabilities(record.capabilities, 'route capabilities')
+  };
 }
 export function validateHarnessExecutionRequest(request: HarnessExecutionRequest, at = new Date()): HarnessExecutionRequest {
   const now = requireDate(at, 'execution time');
-  const taskEnvelope = validateRunnerTaskEnvelope(request.envelope);
-  const modelRoute = canonicalModelRoute(request.route);
+  const requestRecord = requirePlainRecord(request, 'request');
+  const envelopeRecord = requirePlainRecord(requestRecord.envelope, 'task envelope');
+  const taskEnvelope = validateRunnerTaskEnvelope(envelopeRecord as unknown as RunnerTaskEnvelope);
+  const modelRoute = canonicalModelRoute(requestRecord.route);
   if (taskEnvelope.issuedAt.getTime() > now.getTime()) {
     throw new HarnessExecutionValidationError('task envelope has not been issued yet');
   }
@@ -249,18 +297,18 @@ export function validateHarnessExecutionRequest(request: HarnessExecutionRequest
   if (modelRoute.id !== taskEnvelope.routeId) {
     throw new HarnessExecutionValidationError('route does not match task envelope route');
   }
-  const workspaceScope = requireNonBlank(request.workspaceScope, 'workspaceScope');
+  const workspaceScope = requireNonBlank(requestRecord.workspaceScope, 'workspaceScope');
   if (workspaceScope !== taskEnvelope.workspaceScope) {
     throw new HarnessExecutionValidationError('workspace scope exceeds or differs from task envelope scope');
   }
-  const operations = requireOperationList(request.operations);
+  const operations = requireOperationList(requestRecord.operations);
   for (const operation of operations) {
     if (!taskEnvelope.allowedOperations.includes(operation)) {
       throw new HarnessExecutionValidationError(`operation ${operation} is outside task envelope scope`);
     }
   }
-  const requiredCapabilities = requireCapabilityList(request.requiredCapabilities);
-  const instruction = requireNonBlank(request.instruction, 'instruction');
+  const requiredCapabilities = requireCapabilityList(requestRecord.requiredCapabilities);
+  const instruction = requireNonBlank(requestRecord.instruction, 'instruction');
 
   return {
     envelope: taskEnvelope,
@@ -271,56 +319,61 @@ export function validateHarnessExecutionRequest(request: HarnessExecutionRequest
     instruction
   };
 }
-
-function validateHarnessExecutionEvent(event: HarnessExecutionEvent): HarnessExecutionEvent {
-  const at = requireDate(event.at, 'event.at');
-  if (event.type === 'checkpoint') {
+function validateHarnessExecutionEvent(event: unknown): HarnessExecutionEvent {
+  const record = requirePlainRecord(event, 'event');
+  const type = record.type;
+  if (type !== 'checkpoint' && type !== 'status') {
+    throw new HarnessExecutionValidationError('execution event type must be checkpoint or status');
+  }
+  const at = requireDate(record.at, 'event.at');
+  if (type === 'checkpoint') {
     const normalized: HarnessCheckpointEvent = {
       type: 'checkpoint',
       at,
-      checkpointId: requireStableIdentifier(event.checkpointId, 'checkpointId')
+      checkpointId: requireStableIdentifier(record.checkpointId, 'checkpointId')
     };
-    const metadata = safeMetadata(event.metadata, 'checkpoint');
+    const metadata = safeMetadata(record.metadata, 'checkpoint');
     if (metadata !== undefined) normalized.metadata = metadata;
     return normalized;
   }
+
   const allowedStatuses: readonly HarnessStatusEventState[] = ['starting', 'running', 'completed', 'failed', 'paused'];
-  if (!allowedStatuses.includes(event.status)) {
+  if (typeof record.status !== 'string' || !allowedStatuses.includes(record.status as HarnessStatusEventState)) {
     throw new HarnessExecutionValidationError('status event contains an unknown state');
   }
   const normalized: HarnessStatusEvent = {
     type: 'status',
     at,
-    status: event.status
+    status: record.status as HarnessStatusEventState
   };
-  const metadata = safeMetadata(event.metadata, 'status');
+  const metadata = safeMetadata(record.metadata, 'status');
   if (metadata !== undefined) normalized.metadata = metadata;
   return normalized;
 }
 
 export function validateHarnessExecutionResult(result: HarnessExecutionResult): HarnessExecutionResult {
+  const record = requirePlainRecord(result, 'result');
   const allowedStatuses: readonly HarnessExecutionStatus[] = ['completed', 'failed', 'paused'];
-  if (!allowedStatuses.includes(result.status)) {
+  if (typeof record.status !== 'string' || !allowedStatuses.includes(record.status as HarnessExecutionStatus)) {
     throw new HarnessExecutionValidationError('result contains an unknown status');
   }
-  if (!Array.isArray(result.events)) {
+  if (!Array.isArray(record.events)) {
     throw new HarnessExecutionValidationError('result events must be an array');
   }
   const normalized: HarnessExecutionResult = {
-    status: result.status,
-    events: result.events.map(validateHarnessExecutionEvent)
+    status: record.status as HarnessExecutionStatus,
+    events: record.events.map(validateHarnessExecutionEvent)
   };
-  if (result.output !== undefined) {
-    if (typeof result.output !== 'string') {
+  if (record.output !== undefined) {
+    if (typeof record.output !== 'string') {
       throw new HarnessExecutionValidationError('result output must be a string');
     }
-    normalized.output = result.output;
+    normalized.output = record.output;
   }
-  const metadata = safeMetadata(result.metadata, 'result');
+  const metadata = safeMetadata(record.metadata, 'result');
   if (metadata !== undefined) normalized.metadata = metadata;
   return normalized;
 }
-
 function adapterSupports(capabilities: ProviderCapabilities, requiredCapabilities: readonly CapabilityName[]): boolean {
   return requiredCapabilities.every(capability => capabilities[capability] === true);
 }
@@ -331,13 +384,25 @@ export function selectHarnessExecutionAdapter(adapters: readonly HarnessExecutio
     throw new NoEligibleHarnessAdapterError();
   }
 
+  if (!Array.isArray(adapters)) {
+    throw new HarnessExecutionValidationError('adapters must be an array');
+  }
   const eligible = adapters
-    .map(candidate => ({
-      candidate,
-      id: requireStableIdentifier(candidate.id, 'adapter id'),
-      harnessId: requireStableIdentifier(candidate.harnessId, 'adapter harnessId')
-    }))
-    .filter(({ candidate, harnessId }) => harnessId === validated.envelope.harnessId && adapterSupports(candidate.capabilities, validated.requiredCapabilities))
+    .map((candidate, index) => {
+      const record = requirePlainRecord(candidate, `adapter[${index}]`);
+      const id = requireStableIdentifier(record.id, 'adapter id');
+      const harnessId = requireStableIdentifier(record.harnessId, 'adapter harnessId');
+      if (typeof record.execute !== 'function') {
+        throw new HarnessExecutionValidationError(`adapter ${id} execute must be a function`);
+      }
+      return {
+        candidate,
+        id,
+        harnessId,
+        capabilities: canonicalCapabilities(record.capabilities, `adapter ${id} capabilities`)
+      };
+    })
+    .filter(({ harnessId, capabilities }) => harnessId === validated.envelope.harnessId && adapterSupports(capabilities, validated.requiredCapabilities))
     .sort((left, right) => left.id.localeCompare(right.id));
 
   const selected = eligible[0]?.candidate;
