@@ -155,6 +155,16 @@ export class AIRunnerRepository {
     return row ? mapRunner(row) : null;
   }
 
+  async getRunnerForUpdate(organisationId: string, id: string): Promise<AIRunnerPersistenceRecord | null> {
+    const result = await this.database.query<AIRunnerRow>(
+      `SELECT ${RUNNER_COLUMNS} FROM ai_runners
+       WHERE organisation_id = $1 AND id = $2
+       FOR UPDATE`,
+      [organisationId, id]
+    );
+    const row = result.rows[0];
+    return row ? mapRunner(row) : null;
+  }
   async listForUser(organisationId: string, ownerUserId: string): Promise<AIRunnerPersistenceRecord[]> {
     const result = await this.database.query<AIRunnerRow>(
       `SELECT ${RUNNER_COLUMNS} FROM ai_runners
@@ -249,7 +259,16 @@ export class AIRunnerRepository {
          ON r.organisation_id = c.organisation_id AND r.id = c.runner_id
        WHERE c.credential_hash = $1 AND c.revoked_at IS NULL
          AND (c.expires_at IS NULL OR c.expires_at > $2)
-         AND r.revoked_at IS NULL AND r.status NOT IN ('disabled', 'revoked') AND r.trust_state <> 'revoked'`,
+         AND r.revoked_at IS NULL AND r.status NOT IN ('disabled', 'revoked') AND r.trust_state <> 'revoked'
+         AND (
+           r.ownership = 'organisation'
+           OR EXISTS (
+             SELECT 1 FROM organisation_memberships om
+             WHERE om.organisation_id = r.organisation_id
+               AND om.user_id = r.owner_user_id
+               AND om.status = 'active'
+           )
+         )`,
       [credentialHash, at]
     );
     const row = result.rows[0];

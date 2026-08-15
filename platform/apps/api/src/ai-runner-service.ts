@@ -10,9 +10,9 @@ export interface AIRunnerServiceDependencies {
 }
 
 async function requireRunnerAdministrator(aiRunners: AIRunnerRepository, memberships: MembershipRepository, organisationId: string, runnerId: string, actorUserId: string) {
-  const membership = await memberships.getOrganisation(organisationId, actorUserId);
+  const membership = await memberships.getOrganisationForUpdate(organisationId, actorUserId);
   if (!membership || membership.status !== 'active') throw new Error('forbidden');
-  const runner = await aiRunners.getRunner(organisationId, runnerId);
+  const runner = await aiRunners.getRunnerForUpdate(organisationId, runnerId);
   if (!runner || runner.status === 'revoked' || runner.trustState === 'revoked') {
     throw new Error('runner_not_found');
   }
@@ -54,7 +54,7 @@ export class AIRunnerService {
     });
 
     await this.dependencies.unitOfWork.run(async ({ memberships, aiRunners, audit }) => {
-      const membership = await memberships.getOrganisation(input.organisationId, input.actorUserId);
+      const membership = await memberships.getOrganisationForUpdate(input.organisationId, input.actorUserId);
       if (!membership || membership.status !== 'active') {
         throw new Error('forbidden');
       }
@@ -147,17 +147,22 @@ export class AIRunnerService {
   async setRunnerTrust(input: { organisationId: string; actorUserId: string; runnerId: string; trustState: AIRunnerTrustState; now?: Date }): Promise<void> {
     const now = input.now ?? new Date();
     await this.dependencies.unitOfWork.run(async ({ memberships, aiRunners, audit }) => {
-      const membership = await memberships.getOrganisation(input.organisationId, input.actorUserId);
+      const membership = await memberships.getOrganisationForUpdate(input.organisationId, input.actorUserId);
       if (!membership || membership.status !== 'active' || !['owner', 'admin'].includes(membership.role)) {
         throw new Error('forbidden');
       }
-      const runner = await aiRunners.getRunner(input.organisationId, input.runnerId);
+      const runner = await aiRunners.getRunnerForUpdate(input.organisationId, input.runnerId);
       if (!runner || runner.status === 'revoked' || runner.trustState === 'revoked') {
         throw new Error('runner_not_found');
       }
       await aiRunners.setRunnerTrustState(input.organisationId, input.runnerId, input.trustState, now);
       if (input.trustState === 'revoked') {
         await aiRunners.revokeActiveCredentialsForRunner(input.organisationId, input.runnerId, now);
+        const bindings = await aiRunners.listActiveBindingsForRunner(input.organisationId, input.runnerId);
+        for (const binding of bindings) {
+          await aiRunners.revokeConnectionBinding(input.organisationId, binding.id, now);
+        }
+        await aiRunners.setRunnerStatus(input.organisationId, input.runnerId, 'revoked', now);
       }
       await audit.append(
         createAuditEvent({
@@ -202,15 +207,37 @@ export class AIRunnerService {
 
     return { credential };
   }
-  async recordHeartbeat(input: { credential: string; seenAt: Date; expiresAt: Date }): Promise<void> {
+  async recordHeartbeat(input: { credential: string; seenAt: Date; expiresAt: Date; now?: Date }): Promise<void> {
+    const now = input.now ?? new Date();
+    const maxWindowMs = 5 * 60_000;
     const lifetimeMs = input.expiresAt.getTime() - input.seenAt.getTime();
-    if (!Number.isFinite(lifetimeMs) || lifetimeMs <= 0 || lifetimeMs > 5 * 60_000) {
+    if (!Number.isFinite(lifetimeMs) || lifetimeMs <= 0 || lifetimeMs > maxWindowMs) {
       throw new Error('invalid_heartbeat_expiry');
     }
+    if (
+      !Number.isFinite(now.getTime()) ||
+      Math.abs(input.seenAt.getTime() - now.getTime()) > maxWindowMs ||
+      input.expiresAt.getTime() <= now.getTime() ||
+      input.expiresAt.getTime() - now.getTime() > maxWindowMs
+    ) {
+      throw new Error('heartbeat timestamp outside allowed clock skew');
+    }
     const credentialHash = hashOpaqueToken(input.credential);
-    await this.dependencies.unitOfWork.run(async ({ aiRunners }) => {
-      const credential = await aiRunners.getActiveCredentialByHash(credentialHash, input.seenAt);
+    await this.dependencies.unitOfWork.run(async ({ aiRunners, memberships }) => {
+      const credential = await aiRunners.getActiveCredentialByHash(credentialHash, now);
       if (!credential) throw new Error('unauthorized');
+      const snapshot = await aiRunners.getRunner(credential.organisationId, credential.runnerId);
+      if (!snapshot) throw new Error('unauthorized');
+      if (snapshot.ownership === 'personal') {
+        const membership = await memberships.getOrganisationForUpdate(credential.organisationId, snapshot.ownerUserId!);
+        if (!membership || membership.status !== 'active') throw new Error('unauthorized');
+      }
+      const locked = await aiRunners.getRunnerForUpdate(credential.organisationId, credential.runnerId);
+      if (!locked || locked.status === 'disabled' || locked.status === 'revoked' || locked.trustState === 'revoked') {
+        throw new Error('unauthorized');
+      }
+      const currentCredential = await aiRunners.getActiveCredentialByHash(credentialHash, now);
+      if (!currentCredential) throw new Error('unauthorized');
       await aiRunners.recordHeartbeat(credential.organisationId, credential.runnerId, input.seenAt, input.expiresAt);
     });
   }

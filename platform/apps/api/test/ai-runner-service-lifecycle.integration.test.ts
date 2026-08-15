@@ -94,7 +94,7 @@ describe('AIRunnerService lifecycle', () => {
     const expiresAt = new Date('2026-08-15T09:21:00Z');
     const auditBefore = await new AuditRepository(pool).listByOrganisation('org-001');
 
-    await runners.recordHeartbeat({ credential: created.credential, seenAt, expiresAt });
+    await runners.recordHeartbeat({ credential: created.credential, seenAt, expiresAt, now: seenAt });
 
     expect(await new AIRunnerRepository(pool).getRunner('org-001', created.runnerId)).toMatchObject({
       status: 'online',
@@ -120,7 +120,8 @@ describe('AIRunnerService lifecycle', () => {
       runners.recordHeartbeat({
         credential: created.credential,
         seenAt: new Date('2026-08-15T09:31:00Z'),
-        expiresAt: new Date('2026-08-15T09:32:00Z')
+        expiresAt: new Date('2026-08-15T09:32:00Z'),
+        now: new Date('2026-08-15T09:31:00Z')
       })
     ).rejects.toThrow('unauthorized');
     expect((await new AuditRepository(pool).listByOrganisation('org-001')).map(e => e.eventType)).toContain('ai.runner.disabled');

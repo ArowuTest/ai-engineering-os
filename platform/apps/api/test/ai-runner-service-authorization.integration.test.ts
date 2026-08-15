@@ -173,4 +173,50 @@ describe('AIRunnerService authorization', () => {
     expect(listed.map(runner => runner.id).sort()).toEqual([own.runnerId, organisation.runnerId].sort());
     expect(JSON.stringify(listed)).not.toContain('credentialHash');
   });
+  it('enforces owner/admin lifecycle control for organisation-owned runners', async () => {
+    const admin = await setupUser('admin', 'runner.lifecycle.admin');
+    const owner = await setupUser('owner', 'runner.lifecycle.owner');
+    const member = await setupUser('member', 'runner.lifecycle.member');
+    const runners = service();
+    const created = await runners.registerRunner({
+      ...runnerInput,
+      actorUserId: admin.id,
+      ownership: 'organisation'
+    });
+
+    await expect(runners.rotateRunnerCredential({ organisationId: 'org-001', actorUserId: member.id, runnerId: created.runnerId })).rejects.toThrow('forbidden');
+    await expect(runners.disableRunner({ organisationId: 'org-001', actorUserId: member.id, runnerId: created.runnerId })).rejects.toThrow('forbidden');
+    await expect(runners.revokeRunner({ organisationId: 'org-001', actorUserId: member.id, runnerId: created.runnerId })).rejects.toThrow('forbidden');
+
+    const rotated = await runners.rotateRunnerCredential({
+      organisationId: 'org-001',
+      actorUserId: owner.id,
+      runnerId: created.runnerId,
+      now: new Date('2026-08-15T08:55:00Z')
+    });
+    expect(await runners.authenticateRunner(created.credential, new Date('2026-08-15T08:56:00Z'))).toBeNull();
+    expect(await runners.authenticateRunner(rotated.credential, new Date('2026-08-15T08:56:00Z'))).not.toBeNull();
+    await runners.disableRunner({ organisationId: 'org-001', actorUserId: admin.id, runnerId: created.runnerId, now: new Date('2026-08-15T08:57:00Z') });
+    expect(await runners.authenticateRunner(rotated.credential, new Date('2026-08-15T08:58:00Z'))).toBeNull();
+    await runners.revokeRunner({ organisationId: 'org-001', actorUserId: owner.id, runnerId: created.runnerId, now: new Date('2026-08-15T08:59:00Z') });
+    expect(await new AIRunnerRepository(pool).getRunner('org-001', created.runnerId)).toMatchObject({ status: 'revoked' });
+  });
+
+  it('denies runner administration after the actor organisation membership is revoked', async () => {
+    const member = await setupUser('member', 'runner.revoked.member');
+    const runners = service();
+    const created = await runners.registerRunner({
+      ...runnerInput,
+      actorUserId: member.id,
+      ownership: 'personal',
+      ownerUserId: member.id
+    });
+    await new MembershipRepository(pool).revokeOrganisation('org-001', member.id, new Date('2026-08-15T08:54:00Z'));
+
+    await expect(runners.listRunners({ organisationId: 'org-001', actorUserId: member.id })).rejects.toThrow('forbidden');
+    await expect(runners.rotateRunnerCredential({ organisationId: 'org-001', actorUserId: member.id, runnerId: created.runnerId })).rejects.toThrow('forbidden');
+    await expect(runners.disableRunner({ organisationId: 'org-001', actorUserId: member.id, runnerId: created.runnerId })).rejects.toThrow('forbidden');
+    await expect(runners.revokeRunner({ organisationId: 'org-001', actorUserId: member.id, runnerId: created.runnerId })).rejects.toThrow('forbidden');
+    expect(await new AIRunnerRepository(pool).getRunner('org-001', created.runnerId)).toMatchObject({ status: 'registered' });
+  });
 });
