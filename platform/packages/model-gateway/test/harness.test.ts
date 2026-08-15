@@ -228,6 +228,28 @@ describe('harness-neutral execution boundary', () => {
     ).not.toThrow();
   });
 
+  it('rejects generic provider-key aliases and legacy credential names recursively', () => {
+    for (const key of ['openaiKey', 'openai_key', 'anthropicKey', 'passwd', 'bearer', 'sessionKey']) {
+      expect(() =>
+        validateHarnessExecutionResult({
+          status: 'completed',
+          events: [],
+          metadata: { nested: [{ [key]: 'forbidden' }] }
+        })
+      ).toThrow(HarnessExecutionValidationError);
+    }
+  });
+
+  it('allows non-secret operational key metadata', () => {
+    expect(() =>
+      validateHarnessExecutionResult({
+        status: 'completed',
+        events: [],
+        metadata: { cacheKey: 'cache-v1', idempotencyKey: 'request-1', partitionKey: 'tenant-1', sortKey: 'task-1' }
+      })
+    ).not.toThrow();
+  });
+
   it('accepts class-based harness adapters that satisfy the public adapter interface', () => {
     class CodexClassAdapter implements HarnessExecutionAdapter {
       readonly id = 'codex-class';
@@ -305,6 +327,17 @@ describe('harness-neutral execution boundary', () => {
     const metadata = JSON.parse('{"__proto__":{"injected":1}}') as Record<string, unknown>;
     expect(() => validateHarnessExecutionResult({ status: 'completed', events: [], metadata } as HarnessExecutionResult)).toThrow(HarnessExecutionValidationError);
   });
+  it('snapshots event timestamps so callers cannot mutate validated results', () => {
+    const sourceTime = new Date(now.getTime() + 10);
+    const result = validateHarnessExecutionResult({
+      status: 'completed',
+      events: [{ type: 'status', at: sourceTime, status: 'running' }]
+    });
+    const original = result.events[0]!.at.getTime();
+    sourceTime.setTime(0);
+    expect(result.events[0]!.at.getTime()).toBe(original);
+  });
+
   it('accepts safe status/checkpoint metadata and preserves no provider secrets', () => {
     const result = validateHarnessExecutionResult({
       status: 'completed',

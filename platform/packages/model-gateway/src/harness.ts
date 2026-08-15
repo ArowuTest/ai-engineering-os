@@ -117,6 +117,8 @@ function requireOperationList(value: unknown): string[] {
 }
 const FORBIDDEN_METADATA_KEYS = new Set([
   'password',
+  'passwd',
+  'bearer',
   'apikey',
   'token',
   'accesstoken',
@@ -139,6 +141,8 @@ function normalizedMetadataKey(key: string): string {
 }
 const FORBIDDEN_METADATA_KEY_SUFFIXES = [
   'password',
+  'passwd',
+  'bearer',
   'apikey',
   'token',
   'accesstoken',
@@ -166,8 +170,11 @@ const FORBIDDEN_METADATA_KEY_SUFFIXES = [
   'authorizationheader'
 ] as const;
 const FORBIDDEN_METADATA_STRUCTURE_KEYS = new Set(['proto', 'prototype', 'constructor']);
+const SAFE_OPERATIONAL_KEY_NAMES = new Set(['cachekey', 'idempotencykey', 'partitionkey', 'sortkey', 'primarykey', 'foreignkey', 'routingkey', 'dedupekey']);
 const FORBIDDEN_METADATA_KEY_FRAGMENTS = [
   'password',
+  'passwd',
+  'bearer',
   'apikey',
   'accesstoken',
   'refreshtoken',
@@ -195,6 +202,7 @@ function metadataKeyIsAsciiMachineKey(key: string): boolean {
 function metadataKeyIsForbidden(key: string): boolean {
   const normalized = normalizedMetadataKey(key);
   if (FORBIDDEN_METADATA_KEYS.has(normalized)) return true;
+  if (normalized.endsWith('key') && !SAFE_OPERATIONAL_KEY_NAMES.has(normalized)) return true;
   if (FORBIDDEN_METADATA_KEY_SUFFIXES.some(suffix => normalized.length >= suffix.length && normalized.endsWith(suffix))) {
     return true;
   }
@@ -375,7 +383,7 @@ function validateHarnessExecutionEvent(event: unknown): HarnessExecutionEvent {
   if (type !== 'checkpoint' && type !== 'status') {
     throw new HarnessExecutionValidationError('execution event type must be checkpoint or status');
   }
-  const at = requireDate(record.at, 'event.at');
+  const at = new Date(requireDate(record.at, 'event.at').getTime());
   if (type === 'checkpoint') {
     const normalized: HarnessCheckpointEvent = {
       type: 'checkpoint',
