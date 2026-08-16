@@ -1,5 +1,7 @@
 # ECC Memory Vault
 
+> **AI Engineering OS productisation note (16 Aug 2026):** this document defines the inherited/local ECC memory contract. For the multi-user AI Engineering OS product, `docs/superpowers/specs/2026-08-16-collaborative-memory-parallel-session-design.md` adds platform-owned PostgreSQL authority for collaborative memory, RBAC/visibility, engineering sessions, audit and Local/OpenSandbox materialisation. ECC Markdown remains the portable local representation/interoperability surface and does not silently override platform collaborative state.
+
 ## Capability
 
 An operator can save, inspect, search, and hand off durable context through one

@@ -1,15 +1,29 @@
 # AI Product & Engineering Operating System
 ## Product Requirements & Software Requirements Specification
 
-**Document version:** 1.4
+**Document version:** 1.5
 **Status:** Approved baseline for V1 planning
-**Date:** 12 August 2026
+**Date:** 16 August 2026
 **Working name:** AI Engineering OS
 **Parent initiative:** Private AI-native product and software engineering platform
 **Execution design:** `docs/superpowers/specs/2026-08-11-extensible-ai-execution-routing-and-shared-entitlements-design.md`
 **ECC-native capability design:** `docs/superpowers/specs/2026-08-12-ecc-native-capability-productisation-design.md`
+**Collaborative memory design:** `docs/superpowers/specs/2026-08-16-collaborative-memory-parallel-session-design.md`
 
 ## 0. Change record
+
+### Version 1.5
+
+This revision makes Collaborative Memory and parallel engineering-session continuity a first-class AI Engineering OS capability.
+
+1. ECC Unified Memory / Memory Vault, cross-harness handoffs and team-agent orchestration are reused as the foundation rather than rebuilt.
+2. The platform adds authoritative multi-user/project/workstream/agent/session memory identity, RBAC, visibility policy, audit and governed promotion.
+3. Parallel sessions may share authorised project/workstream context while retaining private session context; provider/harness transcripts are never the sole continuation state.
+4. Review Council reviewer-private memory is isolated from peer reviewers during blind runs and becomes visible only through the authorised adjudication flow.
+5. Platform Collaborative Memory is interoperable with ECC memory documents/CLI/MCP, but local vaults cannot silently override platform authority.
+6. Context assembly is policy-aware, bounded and explainable across Product Knowledge, Collaborative Memory, workstream state, agent/session state, skills and tools.
+7. Memory survives runner/provider/harness/environment changes, including Local and OpenSandbox execution.
+8. Automatic session capture/resume is an AI Engineering OS product responsibility where ECC currently provides only partial/explicit recall semantics.
 
 ### Version 1.4
 
@@ -201,6 +215,9 @@ A personal AI connection remains owned by the individual who authenticated it. P
 
 ## 3.12 Collaboration survives individual availability
 User sign-out, connection loss, model switching, runner failure or collaborator departure shall not delete canonical project state or prevent other authorised collaborators from continuing through another eligible execution route.
+
+## 3.13 Collaborative memory is platform-owned and policy-scoped
+Durable project/workstream/agent/session/review context shall survive harness changes and parallel execution. ECC memory/handoff capability is reused, while the platform owns tenancy, visibility, access, audit and governed promotion. Private session or reviewer context must never leak merely because other agents share the same project.
 
 ---
 
@@ -671,6 +688,24 @@ Every material execution shall persist current status, changed files, tests, out
 ## ENG-008 Handoff
 A different model/provider/harness shall be able to resume work from the durable project/task checkpoint without requiring the previous worker's private provider conversation.
 
+## ENG-009 Platform engineering session identity
+Every durable engineering session shall have a platform-owned identity independent of provider/harness session IDs and shall bind to organisation, project, workstream/task, agent and current execution route.
+
+## ENG-010 Parallel session isolation
+Multiple sessions may execute concurrently on one project. Session-private memory/workspace state remains isolated while authorised workstream/project memory and handoffs may be shared according to policy.
+
+## ENG-011 Collaborative memory scopes
+The platform shall support project, workstream/task, agent, session, review, user-private and organisation-governed memory scopes with explicit visibility and trust state.
+
+## ENG-012 Cross-harness continuation
+A task/session may move between Codex, Claude Code, Antigravity, OpenCode, Gemini or other approved harnesses without losing its platform-owned checkpoint, handoff or shared memory.
+
+## ENG-013 Governed memory promotion
+Unreviewed agent/session memory shall not become canonical Product Knowledge, organisation knowledge, security policy, release approval or deployment authority without an authorised promotion/review operation.
+
+## ENG-014 ECC memory interoperability
+The platform shall reuse ECC memory document/handoff semantics and provide bounded import/export/materialisation through the ECC adapter. Local vault state must not silently override platform authority.
+
 ---
 
 # 16. Independent Review Requirements
@@ -809,6 +844,8 @@ Context exhaustion is an expected runtime condition. The system shall checkpoint
 
 A provider/harness session is not the canonical memory layer. Switching or losing an execution route shall rebuild context from platform-owned project/task state and repository evidence.
 
+Collaborative Memory shall contribute only authorised, task-relevant items from project/workstream/agent/session/review scopes. Context assembly must enforce visibility, trust, reviewer-blindness and context-budget policy before any memory is supplied to a worker. The platform shall be able to explain which memory references were included or excluded.
+
 ---
 
 # 24. GitHub Requirements
@@ -865,7 +902,10 @@ The platform shall implement:
 - explicit project-scoped delegation rather than credential sharing;
 - separate scoped/revocable runner credentials for Agent Bridge processes;
 - immediate connection/share revocation for new executions;
-- organisation policy able to restrict personal AI use without silently enabling sharing.
+- organisation policy able to restrict personal AI use without silently enabling sharing;
+- memory visibility enforcement across user-private, session-private, workstream/project-shared and reviewer-private scopes;
+- secret/path/symlink protections when importing or materialising ECC memory;
+- no wholesale personal memory vault or provider auth-store mounting into managed/OpenSandbox execution.
 
 External text, repository content, web pages, tool output and uploaded documents are data by default, not trusted platform instructions.
 
@@ -989,7 +1029,11 @@ The platform shall maintain, as required by the active delivery slice:
 - later personal/organisation AI connection records;
 - later project connection-sharing records;
 - later authorised runner/Agent Bridge records;
-- later common execution evidence linking requester, route, agent/harness and outcome without exposing secrets.
+- later common execution evidence linking requester, route, agent/harness and outcome without exposing secrets;
+- collaborative memory records, links/supersession, trust/promotion state and visibility policy;
+- platform engineering sessions, session participants/assignments and durable continuation checkpoints;
+- agent/workstream handoffs and memory materialisation/import-export audit records;
+- Review Council reviewer-private/adjudication-scoped memory references without peer leakage.
 
 Large artefacts shall use object storage rather than being embedded directly in relational rows.
 
@@ -1066,6 +1110,9 @@ Engineering Studio:
 - secure execution sandbox;
 - TDD/build/test;
 - durable checkpoints;
+- Collaborative Memory with project/workstream/agent/session/user/review scopes;
+- parallel engineering sessions with private context plus authorised shared handoffs;
+- ECC Memory Vault/CLI/MCP interoperability through the platform adapter;
 - preview deployment.
 
 ---

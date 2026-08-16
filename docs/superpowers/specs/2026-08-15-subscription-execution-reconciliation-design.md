@@ -119,6 +119,12 @@ ECC already knows multiple harnesses and execution/on-ramp surfaces beyond the i
 
 Production connection families remain `delegatable=false` until the corresponding real terminal vertical slice passes independently. `persistentSupported=true` is likewise enabled only when independently proven safe for that harness/runner behavior.
 
+### Collaborative Memory dependency
+
+Review Council and harness execution consume the shared Collaborative Memory/parallel-session architecture defined in `docs/superpowers/specs/2026-08-16-collaborative-memory-parallel-session-design.md`. Review findings, adjudications and rechallenges remain durable Review Council records, while memory/context visibility controls determine what each reviewer/session may recall. The Review Council must not create a separate long-term memory silo.
+
+Harness execution may materialise only task-authorised memory into Local or managed/OpenSandbox workspaces. Provider auth stores and whole personal vaults are never copied as context.
+
 ## 11. Native Review Council
 
 The current manual review process becomes a first-class platform subsystem rather than an external convention.
@@ -166,7 +172,7 @@ The system fails closed at every authority boundary:
 - confirmed material review defect -> gate remains blocked until evidence-backed remediation/re-adjudication;
 - audit/persistence failure on material authority mutation -> transaction rollback.
 
-Canonical project state remains readable and durable across execution/reviewer failures.
+Canonical project state remains readable and durable across execution/reviewer failures. Collaborative memory/session state also survives route/harness/runner loss; reviewer-private memory remains isolated according to the review phase.
 
 ## 15. Testing and review strategy
 
@@ -225,7 +231,7 @@ This reconciliation slice is complete only when all of the following are true:
 7. Execution environment is an explicit orthogonal dimension: harness adapters use a common provider boundary, local execution remains supported, and OpenSandbox can be added without changing harness/domain contracts.
 8. Codex, Antigravity, and Claude Code each have a real thin adapter that consumes runner-local authentication when available and uses isolated task worktrees without exposing provider credentials to the platform; an unavailable or un-live-proven CLI remains fail-closed and cannot be released for delegated execution.
 9. Each subscription family becomes delegatable only after its own controlled terminal execution path is independently green.
-10. Review Council runs are durable and blind; findings are normalized, evidence-backed, adjudicated, and re-challenged according to the locked loop.
+10. Review Council runs are durable and blind; findings are normalized, evidence-backed, adjudicated, and re-challenged according to the locked loop, using Collaborative Memory/session visibility rules rather than a separate review-memory silo.
 11. A confirmed Critical or Important finding blocks acceptance independent of vote count; timeout/empty/malformed reviewer output is not a pass.
 12. Any material source change invalidates acceptance review and requires a fresh blind run against the new source packet.
 13. Calibration records route/model/version performance and can influence future `Auto`/role selection without permanently binding a model to a role.

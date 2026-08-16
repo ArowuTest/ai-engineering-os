@@ -1,5 +1,7 @@
 # Cross-Harness Architecture
 
+> **AI Engineering OS productisation note (16 Aug 2026):** the shared ECC workflow/memory contracts below remain the reusable harness layer. The product control plane adds tenant-aware Collaborative Memory, parallel `EngineeringSession` identity, visibility/RBAC, audit and managed-environment materialisation as defined in `docs/superpowers/specs/2026-08-16-collaborative-memory-parallel-session-design.md`.
+
 ECC is the reusable workflow layer. Harnesses are execution surfaces.
 
 The goal is to keep the durable parts of agentic work in one repo:

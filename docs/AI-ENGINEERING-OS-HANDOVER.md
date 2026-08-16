@@ -1,7 +1,7 @@
 # AI Engineering OS — Living Handover
 
 **Purpose:** Operational continuation document for a new ChatGPT/Claude/Codex agent if the current thread ends.
-**Last updated:** 16 August 2026, subscription-execution reconciliation Tasks 4-7 accepted; Task 8 native Review Council is active next. ECC-native capability inheritance, Admin-owned capability catalogue/release governance, larger coherent engineering-batch review cadence, and OpenSandbox trial-provider architecture are locked.
+**Last updated:** 16 August 2026, subscription-execution reconciliation Tasks 4-7 accepted. Task 8 Review Council domain semantics are GREEN 12/12, but persistence/orchestration is paused while the newly approved Collaborative Memory & Parallel Session architecture is inserted as a foundational Engineering Studio subsystem. ECC-native capability inheritance, Admin-owned capability release governance, review cadence and OpenSandbox architecture remain locked.
 **Repository:** `ArowuTest/ai-engineering-os`
 **Local repo:** `<LOCAL_REPO_ROOT>`
 **Current source-of-truth branch for active work:** `feature/subscription-execution-reconciled` in `.worktrees/subscription-execution-reconciled`; accepted prior foundation remains on `main` until this reconciliation slice passes all gates and is merged.
@@ -25,6 +25,8 @@ Provider → Model → Execution Route → Harness → Agent → Skill → Tool/
 AI Engineering OS is the master orchestrator. Hermes/Codex/Claude Code/Antigravity and other inherited ECC harnesses are execution surfaces, not canonical state owners.
 
 The platform/admin control plane owns the broad inherited/discovered capability catalogue. Admin sees the complete harness/agent/skill/MCP/workflow estate and explicitly releases approved subsets to users, organisations, roles/teams, cohorts or projects. Catalogue presence is not user visibility and is not execution authority: release, delegation, allowed operations, subscription sharing, persistence and local/OpenSandbox environment eligibility remain separately governed.
+
+Collaborative Memory is now a locked first-class OS subsystem. ECC Unified Memory / Memory Vault, `ecc.memory.v1`, cross-harness handoffs and team-agent orchestration are reused; the platform adds authoritative multi-user project/workstream/agent/session/review memory, RBAC/visibility, trust/promotion, audit, parallel-session continuity and Local/OpenSandbox materialisation. Provider/harness transcripts and local vaults are never the sole shared source of truth.
 
 ## 2. What is already merged to `main`
 
@@ -362,4 +364,6 @@ ECC breadth is part of the OS rather than a later optional integration backlog. 
 
 Admin owns the complete capability catalogue. Ordinary users see only the harnesses/agents/skills/MCPs/workflows that Admin has explicitly released to their permitted population/scope and for which they remain otherwise eligible. Release never creates execution authority, delegation, write/execute operations, sharing, persistence or managed-sandbox eligibility by itself.
 
-**Immediate next action:** Task 8 — first inventory inherited ECC council/eval/verification/team-agent primitives, then build one substantial native Review Council batch covering durable runs/findings/adjudications/rechallenges/calibration, genuinely blind reviewer isolation, reviewer availability semantics, exact source/evidence digesting, fresh-source invalidation and acceptance blocking. Keep RED/GREEN and focused tests inside the batch; do not pay the full broad verification/four-model council cost after each few files. Freeze the coherent Task 8 source, then run broad platform/ECC/integration gates and one fresh blind council. A material source change after that review invalidates its acceptance packet.
+**Current implementation checkpoint:** Task 8 Review Council domain RED/GREEN is complete at 12/12 focused tests in the active worktree. No Review Council migration/repository/API service has been accepted yet. A PostgreSQL RED test file had begun but persistence implementation is intentionally paused until the Collaborative Memory written-spec gate is approved, so session/review visibility and persistence authority are not designed twice.
+
+**Immediate next action:** review and approve `docs/superpowers/specs/2026-08-16-collaborative-memory-parallel-session-design.md`, then write the dedicated implementation plan. That plan will insert Collaborative Memory/parallel-session domain + persistence + policy + ECC interoperability before resuming Review Council persistence/orchestration on the shared visibility/provenance substrate.

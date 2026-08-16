@@ -55,6 +55,10 @@ Learning scopes are isolated by default. Project learning remains project-scoped
 
 Memory and learning remain separate concepts: memory preserves durable facts, handoffs and project context; learning derives reusable behaviour from evidence. Both remain inspectable and auditable.
 
+**Collaborative Memory productisation rule:** ECC Unified Memory / Memory Vault, `ecc.memory.v1`, CLI/MCP access, cross-harness targeting, create/supersede semantics and handoff patterns are reused as the interoperability/runtime foundation. AI Engineering OS adds platform-owned multi-user authority: project/workstream/agent/session/review/user/organisation scopes, RBAC, visibility, trust/promotion, parallel-session identity, audit and Local/OpenSandbox materialisation policy.
+
+For collaborative use, PostgreSQL is authoritative for the durable shared record required by the platform. ECC Markdown vaults remain portable local representations/caches/import-export surfaces; they do not silently override platform state. Automatic cross-session continuation and policy-aware parallel-session recall are product responsibilities where inherited ECC currently provides explicit recall and partial session integration rather than the full SaaS fabric.
+
 ## 6. Runtime productisation boundary
 
 `platform/packages/ecc-adapter` evolves from provenance-only validation into a thin stable boundary for discovery and normalisation. It may expose approved agents, skills, commands, workflows, MCP metadata, memory/learning operations and verification/eval results without copying their implementations.

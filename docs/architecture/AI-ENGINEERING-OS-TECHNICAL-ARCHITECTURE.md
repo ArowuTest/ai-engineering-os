@@ -1,14 +1,27 @@
 # AI Product & Engineering Operating System
 ## Technical Architecture & Detailed Module Specification
 
-**Document version:** 1.4
+**Document version:** 1.5
 **Status:** Approved technical baseline for V1 planning
-**Date:** 12 August 2026
+**Date:** 16 August 2026
 **Parent:** `docs/product/AI-PRODUCT-ENGINEERING-OS-SRS.md`
 **Execution design:** `docs/superpowers/specs/2026-08-11-extensible-ai-execution-routing-and-shared-entitlements-design.md`
 **ECC-native capability design:** `docs/superpowers/specs/2026-08-12-ecc-native-capability-productisation-design.md`
+**Collaborative memory design:** `docs/superpowers/specs/2026-08-16-collaborative-memory-parallel-session-design.md`
 
 ## 0. Change Record
+
+### Version 1.5
+
+Version 1.5 makes Collaborative Memory and parallel engineering-session continuity a first-class architecture.
+
+- ECC Memory Vault/Unified Memory, handoffs and team-agent orchestration are reused through the ECC adapter.
+- Platform PostgreSQL becomes authoritative for multi-user collaborative-memory identity/content, tenancy, RBAC, visibility, trust/promotion, session/workstream bindings and audit.
+- ECC Markdown/CLI/MCP memory remains a portable interoperability/materialisation surface rather than the only shared store.
+- EngineeringSession identity is independent of provider/harness sessions and survives model, runner and Local/OpenSandbox route changes.
+- Parallel agents receive isolated private context plus explicitly authorised workstream/project memory and handoffs.
+- Review Council uses the same visibility/provenance substrate while preserving reviewer-private blindness.
+- Context assembly becomes policy-aware and explainable across Product Knowledge, collaborative memory, session/workstream state, skills and tools.
 
 ### Version 1.4
 
@@ -79,6 +92,7 @@ PLATFORM API + MASTER ORCHESTRATOR
  │    ├── Agents + Skills
  │    └── MCP / Tools
  ├── Connection / Entitlement Policy
+ ├── Collaborative Memory / Session Context
  └── Cost / Risk / Review Router
         │
         ▼
@@ -138,6 +152,9 @@ Harnesses may execute bounded work and expose canonical session state, but they 
 
 ### ADR-014 — Capability-Driven Structured Execution
 Capabilities belong to concrete execution routes. Product Knowledge extraction and other schema-dependent work may require `structuredOutput` even when an ordinary chat route for the same provider remains usable.
+
+### ADR-015 — Platform-Owned Collaborative Memory over ECC Interoperability
+ECC Memory Vault/Unified Memory remains the reusable cross-harness memory engine and portable document/MCP/CLI contract, but the platform owns authoritative multi-user collaborative memory, visibility, engineering-session identity, audit and governed promotion. Local vaults are interoperability/materialisation surfaces and cannot silently override platform state.
 
 ## 4. Repository Layout
 
@@ -261,6 +278,8 @@ platform/
 │   ├── providers/            # provider/model/route catalogues and capabilities
 │   ├── connections/          # later personal/org AI connection governance
 │   ├── runners/              # later Agent Bridge/harness runner governance
+│   ├── collaborative-memory/ # project/workstream/agent/session/review memory + handoffs
+│   ├── engineering-sessions/ # platform-owned parallel session identity/lifecycle
 │   ├── skills/               # trusted skill registry
 │   ├── tools/                # MCP/tool registry and permissions
 │   └── audit/                # append-only material events
@@ -291,6 +310,8 @@ Core entities across the approved roadmap include:
 - `product_packages`, `package_approvals`;
 - provider/model/route catalogue and usage records;
 - later `ai_connections`, `ai_connection_project_shares`, `ai_runners` and common execution evidence;
+- collaborative memory records/links/visibility/trust/promotion history;
+- engineering sessions, assignments/participants, handoffs and memory materialisation records;
 - `skills`, `skill_versions`, `project_skills`;
 - `tools`, `tool_permissions`, `project_tools`;
 - `audit_events`.
@@ -578,6 +599,45 @@ The approved execution design is delivered in bounded, independently testable sl
 2. **Review-first Product Knowledge extraction:** candidate runs/queue, failure isolation, Product Owner review/promotion, UI and audit.
 3. **AI connection/delegation administration:** personal/organisation ownership, project sharing modes, usage policy, RBAC and audit.
 4. **Agent Bridge/subscription harness adapters:** Codex, Claude Code, Antigravity and other officially supported routes incrementally.
-5. **ECC-native Engineering Studio productisation:** surface the inherited agent/skill estate, Unified Memory, Continuous Learning, team orchestration, eval/verification/security, worktrees, dynamic MCP resolution, checkpoints and independent review through platform governance and harness-neutral contracts.
+5. **Collaborative Memory & parallel sessions:** productise ECC Unified Memory/Memory Vault and handoffs behind platform-owned session/workstream visibility, RBAC, audit and Local/OpenSandbox materialisation before richer Engineering Studio concurrency depends on session state.
+6. **ECC-native Engineering Studio productisation:** surface the inherited agent/skill estate, Continuous Learning, team orchestration, eval/verification/security, worktrees, dynamic MCP resolution, checkpoints and independent review through platform governance and harness-neutral contracts.
 
 Each later slice builds on the same execution-route contracts rather than introducing a parallel provider-specific architecture.
+
+
+## 27. Collaborative Memory and Parallel Session Architecture
+
+The detailed contract is defined in `docs/superpowers/specs/2026-08-16-collaborative-memory-parallel-session-design.md`.
+
+AI Engineering OS reuses ECC Unified Memory / Memory Vault, `ecc.memory.v1`, cross-harness handoffs, memory CLI/MCP and team-agent orchestration. The platform adds the enterprise/multi-user authority ECC local vaults do not provide.
+
+### 27.1 Authority split
+
+- PostgreSQL is authoritative for organisation/project/user/session memory identity, content required for collaborative continuation, access/visibility, trust/promotion, provenance, links/supersession, handoffs and audit.
+- ECC Markdown memory remains a portable representation and local materialisation/import-export format.
+- `platform/packages/ecc-adapter` mediates import/export/materialisation and validates stable IDs, digests, provenance, target harnesses, secrets and path safety.
+- Product Knowledge remains a separate canonical knowledge domain; memory may propose promotion but cannot self-promote.
+
+### 27.2 Engineering sessions
+
+A platform `EngineeringSession` is independent of Claude/Codex/Gemini/OpenCode session IDs. It binds organisation, project, workstream/task, agent, current harness/model/runner/environment, workspace/worktree reference, status/heartbeat and durable checkpoint. Harness session IDs are optional evidence only.
+
+Parallel sessions may coexist. Each session has private context plus policy-authorised shared subscriptions. Session loss, provider change, runner loss or Local/OpenSandbox migration does not destroy the platform session's durable state.
+
+### 27.3 Visibility model
+
+Minimum visibility classes are `session_private`, `workstream_shared`, `project_shared`, `organisation_shared`, `reviewer_private`, `adjudication_shared` and `user_private`. Retrieval and materialisation enforce membership, role, assignment, review phase, trust and target-agent/harness policy before returning content.
+
+Blind Review Council assignments cannot retrieve peer reviewer-private records from the same run. Adjudication may access normalized findings only after the blind collection phase. Fresh-source review creates fresh reviewer contexts.
+
+### 27.4 Context builder integration
+
+The Context Builder resolves the smallest authorised set from Product Knowledge, governed project references, relevant shared memory, task/workstream memory, allowed agent/session memory, skills/tools and review policy. Retrieval is bounded by context budget and must expose inclusion/exclusion provenance without exposing hidden model reasoning.
+
+### 27.5 OpenSandbox and local execution
+
+Local runners may materialise authorised ECC-compatible memory into a task worktree/vault. Managed/OpenSandbox execution receives only task-authorised bounded materialisation; personal local vaults and provider auth stores are never mounted wholesale.
+
+### 27.6 Transactionality
+
+Material memory/share/promotion/handoff mutations that require audit use the same PostgreSQL unit-of-work rule as other authority changes. If persistence or mandatory audit fails, the mutation rolls back. Local materialisation failure must not corrupt platform memory authority.

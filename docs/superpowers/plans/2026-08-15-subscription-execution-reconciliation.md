@@ -185,10 +185,19 @@
 
 **Execution cadence:** Task 8 is one coherent engineering batch. Keep genuine RED/GREEN and focused tests at each internal boundary, but do not stop for a full multi-model council after domain-only or repository-only increments. Freeze the combined domain + persistence + orchestration + calibration source, run broad verification once, then run the expensive blind council on that exact packet. Only a material source change after council invalidates that acceptance run.
 
-- [ ] **Step 1: Inventory inherited ECC council/eval/verification/team-agent primitives** and record `REUSE | ADAPT | PRODUCTISE | SUPERSEDE | REFERENCE | EXCLUDE` decisions before new source implementation.
-- [ ] **Step 2: Write RED domain tests** for blind packet identity, source/evidence digest, materiality/severity, adjudication states, fresh-source invalidation, reviewer availability states, and one-confirmed-Important/Critical blocking semantics.
-- [ ] **Step 3: Verify RED**, then implement minimal domain constructors/validators.
-- [ ] **Step 4: Write RED PostgreSQL tests** for durable runs/findings/adjudications/rechallenges/calibration and transaction rollback on incomplete authority mutations; implement repository to GREEN.
+**Collaborative Memory gate:** the approved design at `docs/superpowers/specs/2026-08-16-collaborative-memory-parallel-session-design.md` is now a prerequisite to Task 8 persistence/orchestration. The already-green Review Council domain semantics may be retained, but Review Council persistence/service work must consume the shared session/memory visibility/provenance contracts and must not create a separate review-memory silo. A dedicated memory implementation plan will be written after the written-spec review gate.
+
+**ECC inventory/classification — 16 Aug 2026:**
+- `skills/council`: `SUPERSEDE` as product-acceptance authority; `REUSE`/`ADAPT` its fresh-voice anti-anchoring and role-prompt patterns.
+- `skills/eval-harness`, `skills/agent-eval` and self-evaluation assets: `REUSE`/`ADAPT` as calibration/evidence producers, not acceptance authority.
+- `skills/verification-loop` and existing TDD/review primitives: `REUSE` as deterministic evidence producers for canonical review packets.
+- `skills/team-agent-orchestration`: `ADAPT` reviewer assignment, ownership, state, evidence and handoff concepts without making its board the Review Council system of record.
+- Harness-local or ad-hoc council state: `EXCLUDE` from product authority; durable Review Council state belongs to platform domain/database records.
+
+- [x] **Step 1: Inventory inherited ECC council/eval/verification/team-agent primitives** and record `REUSE | ADAPT | PRODUCTISE | SUPERSEDE | REFERENCE | EXCLUDE` decisions before new source implementation.
+- [x] **Step 2: Write RED domain tests** for blind packet identity, source/evidence digest, materiality/severity, adjudication states, fresh-source invalidation, reviewer availability states, and one-confirmed-Important/Critical blocking semantics. Genuine RED captured against missing Review Council exports.
+- [x] **Step 3: Verify RED**, then implement minimal domain constructors/validators. Focused domain suite is GREEN 12/12 in the active worktree; implementation is not yet committed/accepted.
+- [ ] **Step 4: Write RED PostgreSQL tests** for durable runs/findings/adjudications/rechallenges/calibration and transaction rollback on incomplete authority mutations; implement repository to GREEN. **Paused before RED execution/production persistence** until the Collaborative Memory written-spec gate is approved so Review Council uses the shared session/visibility/provenance substrate.
 - [ ] **Step 5: Write API/service RED tests then implement orchestration** so comparative reviewers receive the same canonical packet but never one another's findings; record exact route/model/version, preserve private rechallenge isolation, and classify timeout/empty/malformed output as availability failure rather than verdict.
 - [ ] **Step 6: Add calibration aggregation** as evidence only; it may rank eligible routes but never create permanent model-role bindings. Prove material source digest changes invalidate prior acceptance.
 - [ ] **Step 7: Run the combined focused Task 8 suite**, domain/database/API type checks and migration checks; commit coherent domain/persistence/orchestration increments without paying the whole-platform/council gate between each increment.
