@@ -1,0 +1,10 @@
+{
+  "name": "@engineering-os/execution-environment",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./test-contract": "./test/provider-contract.ts"
+  }
+}
