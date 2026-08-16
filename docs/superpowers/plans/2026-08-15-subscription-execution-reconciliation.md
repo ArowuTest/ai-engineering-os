@@ -134,11 +134,13 @@
 **Interfaces:**
 - Consumes: runner dispatch HTTP client, signed-envelope verifier, `ExecutionEnvironmentProvider`.
 - Produces: claim -> verify -> prepare -> running -> execute -> checkpoint -> terminal workflow.
-- [ ] **Step 1: Write RED tests** for outbound-only polling, invalid/tampered/expired dispatch refusal, cancellation, heartbeat/claim ordering, workspace-root enforcement, and terminal evidence after provider failure.
-- [ ] **Step 2: Verify RED** with focused runner tests.
-- [ ] **Step 3: Implement minimal loop** with injected clock/client/provider and no inbound listener or generic remote shell.
-- [ ] **Step 4: Verify GREEN** runner tests + runner-protocol tests + canonical AI runner hardening tests.
-- [ ] **Step 5: Commit** `feat: execute governed dispatches through local runner`.
+- [x] **Step 1: Write RED tests** for outbound-only polling, invalid/tampered/expired dispatch refusal, cancellation, heartbeat/claim ordering, workspace-root enforcement, and terminal evidence after provider failure.
+- [x] **Step 2: Verify RED** with focused runner tests.
+- [x] **Step 3: Implement minimal loop** with injected clock/client/provider and no inbound listener or generic remote shell.
+- [x] **Step 4: Verify GREEN** runner tests + runner-protocol tests + canonical AI runner hardening tests.
+- [x] **Step 5: Commit** `feat: execute governed dispatches through local runner`.
+
+**Accepted 16 Aug 2026:** `832c8af48da0d94e7358bdfbaf2786094275ddd6` (`feat: execute governed dispatches through local runner`). Final packet SHA-256 `39325e8f00f50d6913674d0ee8348f079cc62d6fd3d520b318e925b1a9bb4c71`; focused runner 28/28, adjacent runner authority 34/34, static 33/33, unit 240/240, isolated PostgreSQL 17 integration 268/268, root/web TypeScript and diff checks green. Final blind council: Grok 4.6, GLM 5.2 and Gemini 3.7 Flash returned `NO FINDINGS`; Qwen 3.8 Max exceeded the review availability window with no result artifact. Earlier council findings drove irreversible local-cancellation semantics, cancel-observed retry, in-flight checkpoint fencing, `markRunning` ambiguity handling and bounded checkpoints. A Qwen malformed-envelope claim was independently `REJECTED` because the canonical verifier already normalizes malformed structure to `invalid_envelope`, and a direct regression proof passes.
 
 ### Task 7: Add thin Codex, Antigravity, and Claude Code harness adapters
 
