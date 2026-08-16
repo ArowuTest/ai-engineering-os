@@ -120,7 +120,7 @@ function fakeProvider(result: ExecutionResult = executionResult()) {
         '--output-format', 'text', '--model', 'claude-sonnet-4-6',
         '--permission-mode', 'dontAsk', '--no-session-persistence', '--no-chrome',
         '--setting-sources', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
-        '--tools', 'Read,Grep,Glob,Edit,Write', '--allowedTools', 'Edit(./**)',
+        '--tools', 'Read,Grep,Glob,Edit', '--allowedTools', 'Edit(./**)',
       ],
     }]);
     expect(result.status).toBe('completed');
@@ -147,6 +147,16 @@ function fakeProvider(result: ExecutionResult = executionResult()) {
       }))).rejects.toThrow(/operation/i);
       expect(commands).toHaveLength(0);
     }
+  });
+
+  it('rejects direct adapter calls whose operations exceed the authoritative envelope grant', async () => {
+    const { provider, commands } = fakeProvider();
+    const adapter = createClaudeCodeHarnessAdapter({ provider, environment: ENVIRONMENT });
+    await expect(adapter.execute(request({
+      envelope: envelope({ allowedOperations: ['read'] }),
+      operations: ['read', 'write'],
+    }))).rejects.toThrow(/operation|envelope/i);
+    expect(commands).toHaveLength(0);
   });
 
   it('keeps hostile task text as one argv value and never exports local auth state', async () => {

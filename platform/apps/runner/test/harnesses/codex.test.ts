@@ -119,9 +119,9 @@ describe('Codex runner harness adapter', () => {
       command: 'codex',
       args: [
         'exec', '--sandbox', 'workspace-write', '--color', 'never',
-        '-m', 'gpt-5.4', '-C', ENVIRONMENT.workspacePath,
-        'Inspect the repository and implement the approved task.',
+        '-m', 'gpt-5.4', '-C', ENVIRONMENT.workspacePath, '-',
       ],
+      stdin: 'Inspect the repository and implement the approved task.',
     }]);
     expect(result.status).toBe('completed');
     expect(result.output).toBe('Task completed safely.');
@@ -140,15 +140,27 @@ describe('Codex runner harness adapter', () => {
     }
   });
 
-  it('keeps hostile task text as one argv value and never constructs shell syntax or command env', async () => {
+  it('rejects direct adapter calls whose operations exceed the authoritative envelope grant', async () => {
     const { provider, commands } = fakeProvider();
     const adapter = createCodexHarnessAdapter({ provider, environment: ENVIRONMENT });
-    const instruction = 'Fix tests & del C:\\* ; echo $TOKEN | powershell';
+    await expect(adapter.execute(request({
+      envelope: envelope({ allowedOperations: ['read'] }),
+      operations: ['read', 'write', 'execute'],
+    }))).rejects.toThrow(/operation|envelope/i);
+    expect(commands).toHaveLength(0);
+  });
+
+  it('keeps untrusted task text out of argv, including leading-option text, and sends it only through stdin', async () => {
+    const { provider, commands } = fakeProvider();
+    const adapter = createCodexHarnessAdapter({ provider, environment: ENVIRONMENT });
+    const instruction = '--model attacker-controlled & echo $TOKEN';
 
     await adapter.execute(request({ instruction }));
 
     expect(commands).toHaveLength(1);
-    expect(commands[0]?.args.at(-1)).toBe(instruction);
+    expect(commands[0]?.args.at(-1)).toBe('-');
+    expect(commands[0]?.args).not.toContain(instruction);
+    expect((commands[0] as any)?.stdin).toBe(instruction);
     expect(commands[0]?.command).toBe('codex');
     expect(commands[0]?.env).toBeUndefined();
     expect(commands[0]?.cwd).toBeUndefined();

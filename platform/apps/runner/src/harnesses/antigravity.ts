@@ -33,6 +33,11 @@ function requireNonBlank(value: string, field: string): string {
 }
 
 function requireFullEngineeringOperations(request: HarnessExecutionRequest): void {
+  for (const operation of request.operations) {
+    if (!request.envelope.allowedOperations.includes(operation)) {
+      throw new Error('Requested operation exceeds the authoritative envelope grant');
+    }
+  }
   const operations = new Set(request.operations);
   if (
     operations.size !== 3

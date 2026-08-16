@@ -11,6 +11,7 @@ export interface StructuredExecutionCommand {
   args: string[];
   cwd?: string;
   env?: Record<string, string>;
+  stdin?: string | Uint8Array;
 }
 
 export interface SpawnedExecution {
@@ -26,6 +27,7 @@ export interface ProcessSpawnInput {
   cwd: string;
   env: Record<string, string>;
   shell: false;
+  stdin?: Uint8Array;
 }
 export interface ExecutionEvent {
   sequence: number;
@@ -83,6 +85,7 @@ export interface LocalExecutionEnvironmentProviderOptions {
   allowedEnvironmentKeys?: string[];
   baseEnvironment?: Record<string, string>;
   maxOutputBytes?: number;
+  maxInputBytes?: number;
   maxEventCount?: number;
   fileSystem?: LocalFileSystem;
   runtime?: LocalProcessRuntime;

@@ -193,6 +193,16 @@ describe('Antigravity runner harness adapter', () => {
     }
   });
 
+  it('rejects direct adapter calls whose operations exceed the authoritative envelope grant', async () => {
+    const { provider, commands } = fakeProvider();
+    const adapter = createAntigravityHarnessAdapter({ provider, environment: ENVIRONMENT });
+    await expect(adapter.execute(request({
+      envelope: envelope({ allowedOperations: ['read'] }),
+      operations: ['read', 'write', 'execute'],
+    }))).rejects.toThrow(/operation|envelope/i);
+    expect(commands).toHaveLength(0);
+  });
+
   it('supports an explicit runner-local executable path without changing argv or auth policy', async () => {
     const { provider, commands } = fakeProvider();
     const adapter = createAntigravityHarnessAdapter({

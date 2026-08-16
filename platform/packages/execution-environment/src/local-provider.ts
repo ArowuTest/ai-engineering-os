@@ -87,6 +87,26 @@ function buildEnvironment(
   }
   return environment;
 }
+function normalizeStdin(
+  value: StructuredExecutionCommand['stdin'],
+  maxInputBytes: number,
+): Uint8Array | undefined {
+  if (!Number.isSafeInteger(maxInputBytes) || maxInputBytes <= 0) {
+    throw new Error('maxInputBytes must be a positive safe integer');
+  }
+  if (value === undefined) return undefined;
+  const bytes = typeof value === 'string'
+    ? Buffer.from(value, 'utf8')
+    : value instanceof Uint8Array
+      ? Buffer.from(value)
+      : null;
+  if (bytes === null) throw new Error('Execution stdin must be a string or Uint8Array');
+  if (bytes.byteLength > maxInputBytes) {
+    throw new Error(`Execution stdin exceeds maxInputBytes (${maxInputBytes})`);
+  }
+  return bytes;
+}
+
 async function collectOutput(
   chunks: AsyncIterable<string | Uint8Array>,
   stream: ExecutionEvent['stream'],
@@ -164,29 +184,34 @@ export function createNodeProcessRuntime(
 
   return {
     spawn(input) {
+      const hasStdin = input.stdin !== undefined;
       const spawnOptions: SpawnOptions = {
         cwd: input.cwd,
         env: input.env as NodeJS.ProcessEnv,
         shell: false,
         detached: platform !== 'win32',
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: [hasStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
         windowsHide: true,
       };
       const child = spawnChild(input.command, input.args, spawnOptions);
       if (!child.stdout || !child.stderr) throw new Error('Execution process streams were not created');
+      if (hasStdin && !child.stdin) throw new Error('Execution stdin stream was not created');
       const completion = new Promise<{ exitCode: number | null; signal: string | null }>((resolve, reject) => {
         let settled = false;
-        child.once('error', (error: Error) => {
+        const rejectOnce = (error: Error): void => {
           if (settled) return;
           settled = true;
           reject(error);
-        });
+        };
+        child.once('error', rejectOnce);
+        if (hasStdin) child.stdin!.once('error', rejectOnce);
         child.once('close', (exitCode: number | null, signal: NodeJS.Signals | null) => {
           if (settled) return;
           settled = true;
           resolve({ exitCode, signal });
         });
       });
+      if (hasStdin) child.stdin!.end(input.stdin);
       return child.pid === undefined
         ? { stdout: child.stdout, stderr: child.stderr, completion }
         : { pid: child.pid, stdout: child.stdout, stderr: child.stderr, completion };
@@ -312,6 +337,7 @@ export function createLocalExecutionEnvironmentProvider(
       let execution: SpawnedExecution | undefined;
       try {
         const maxOutputBytes = options.maxOutputBytes ?? 1024 * 1024;
+        const maxInputBytes = options.maxInputBytes ?? 1024 * 1024;
         const maxEventCount = options.maxEventCount ?? 1000;
         if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes <= 0) {
           throw new Error('maxOutputBytes must be a positive safe integer');
@@ -319,6 +345,7 @@ export function createLocalExecutionEnvironmentProvider(
         if (!Number.isSafeInteger(maxEventCount) || maxEventCount < 0) {
           throw new Error('maxEventCount must be a non-negative safe integer');
         }
+        const stdin = normalizeStdin(command.stdin, maxInputBytes);
         const cwd = await resolveWorkspacePath(state.workspacePath, command.cwd, fileSystem);
         if (state.destroyPromise !== undefined || states.get(environment) !== state) {
           throw new Error('Prepared environment was destroyed before execution started');
@@ -329,6 +356,7 @@ export function createLocalExecutionEnvironmentProvider(
           cwd,
           env: buildEnvironment(command.env, options),
           shell: false,
+          ...(stdin === undefined ? {} : { stdin }),
         });
         state.execution = execution;
         state.phase = 'running';
