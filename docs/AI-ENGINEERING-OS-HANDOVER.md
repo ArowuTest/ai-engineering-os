@@ -1,11 +1,12 @@
 # AI Engineering OS — Living Handover
 
 **Purpose:** Operational continuation document for a new ChatGPT/Claude/Codex agent if the current thread ends.
-**Last updated:** 15 August 2026, after Agent Bridge foundation local `main` merge and merged-main verification; remote push/CI verification still required.
+**Last updated:** 16 August 2026, subscription-execution reconciliation Task 4 accepted at `e5d0f430`; Task 5 execution-environment boundary is next; OpenSandbox trial-provider architecture and ECC-reuse/Review-Council supersession decisions locked.
 **Repository:** `ArowuTest/ai-engineering-os`
 **Local repo:** `<LOCAL_REPO_ROOT>`
-**Current source-of-truth branch:** `main`
+**Current source-of-truth branch for active work:** `feature/subscription-execution-reconciled` in `.worktrees/subscription-execution-reconciled`; accepted prior foundation remains on `main` until this reconciliation slice passes all gates and is merged.
 **Current Agent Bridge integration:** production feature tip `de947859f57cdfa5806934efc33fae1afe969e86`, handover tip `c4011f978f5358645b5b356cb17b97ee8344aca0`, merged locally into `main` as `cb7597a36f4025a831ae09dd377714d698a6ba69`; verify `origin/main` and GitHub CI before treating remote integration as complete.
+**Task 4 accepted dispatch protocol:** `e5d0f430 feat: expose trusted runner dispatch protocol`; exact acceptance packet SHA-256 `aa32a1f0955aae824ff652e55f9bac223793f386d7fb86c63a47633ea38d7bbf`. Fresh isolated PostgreSQL 17 evidence: 26/26 focused, 33/33 static, 188/188 unit, 268/268 integration, root/web TypeScript PASS, migration 007 unchanged. Fresh blind council: Grok 4.6, GLM 5.2 and Gemini 3.7 Flash returned `NO FINDINGS`; Qwen 3.8 Max timed out and is recorded only as reviewer availability failure.
 **Task 8 product merge SHA:** `69ebe73b549f2fa2c1e63a7fcf13c28771290a2d` (subsequent documentation-only closeout commits may advance `main`).
 
 ## 1. Product principle
@@ -334,4 +335,4 @@ Task 8 is complete.
 - feature branch and `.worktrees/ai-connection-delegation-administration` were removed after ancestry/containment was proven;
 - `main` is now the sole source of truth for this slice.
 
-**Immediate next action:** create/review the Agent Bridge + subscription-harness implementation plan, including an early OpenRouter route for Qwen 3.8 Max / GLM-5.2 engineering-review calibration, then implement under the existing TDD/Docker/security gates.
+**Immediate next action (16 Aug 2026):** Task 4 is accepted at `e5d0f430`. Begin Task 5 by classifying and reusing suitable inherited ECC execution/process/sandboxing capability behind the generic `ExecutionEnvironmentProvider`, then implement the minimal secure local provider under strict RED -> GREEN. Do not rebuild mature ECC execution capability in parallel. OpenSandbox remains the first managed provider behind this same boundary after the local provider contract is proven.

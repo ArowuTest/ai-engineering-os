@@ -113,11 +113,15 @@ Provider credential stores remain runner-local. The platform receives only safe 
 
 ECC already knows multiple harnesses including Codex, Claude Code, Cursor, Antigravity, Gemini CLI, and OpenCode. This slice reuses those catalogue/install/session assets where appropriate; it does not claim all inherited harnesses are already end-to-end remotely dispatchable.
 
+**ECC reuse/productisation rule:** remaining execution, harness, agent, skill, MCP, memory, learning, eval, verification, security, browser-QA, autonomous-loop, context-optimisation, and cost/evidence items must be classified first as inherited capability to reuse/adapt/productise versus genuinely new platform infrastructure. A plan checkbox marked unfinished does not imply the underlying ECC capability is absent. Do not create a parallel replacement merely because the SaaS-facing adapter, governance, durable state, or UI surface is not yet implemented.
+
 Production connection families remain `delegatable=false` until the corresponding real terminal vertical slice passes independently. `persistentSupported=true` is likewise enabled only when independently proven safe for that harness/runner behavior.
 
 ## 11. Native Review Council
 
 The current manual review process becomes a first-class platform subsystem rather than an external convention.
+
+**Supersession rule:** the AI Engineering OS Review Council protocol below supersedes the simpler inherited ECC single/fresh-review orchestration as the product acceptance council. Reuse suitable ECC review, eval, verification, TDD, security, and evidence primitives underneath it, but do not downgrade the product workflow to the legacy orchestration. The stronger blind multi-model, adjudication-before-remediation, rechallenge, fresh-source invalidation, and calibration semantics are authoritative.
 
 Canonical flow:
 

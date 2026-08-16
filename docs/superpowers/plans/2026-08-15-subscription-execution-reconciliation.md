@@ -18,6 +18,8 @@
 - Every production behavior follows RED -> verify RED -> minimal GREEN -> broader GREEN -> commit.
 - The old divergent execution branch is read-only reference, never a wholesale merge source.
 - Harness-native sandboxing remains enabled where supported; platform execution environment is a separate defence-in-depth boundary.
+- Unfinished Tasks 5-9 do **not** imply greenfield rebuilds of inherited ECC capabilities. Before new implementation, classify relevant ECC code as reuse-as-is, adapt/generalise, supersede for a documented reason, or exclude for a documented security/product reason; prefer thin productisation/control-plane adapters.
+- Task 8 implements the newer AI Engineering OS blind multi-model Review Council protocol and **supersedes** the simpler inherited ECC review orchestration for product acceptance, while reusing suitable ECC eval/review/verification primitives underneath.
 
 ---
 ### Task 1: Reconcile OpenRouter as a governed ModelGateway provider
@@ -91,11 +93,11 @@
 - Consumes: authenticated canonical runner identity, dispatch repository, signing/verification package.
 - Produces: runner-authenticated `claim`, `start`, `checkpoint`, `complete`, `fail`, `cancel-observed` operations.
 
-- [ ] **Step 1: Write RED tests** proving user bearer cannot call runner endpoints, runner A cannot claim runner B work, revoked/untrusted/stale runners fail closed, and complete/fail cannot cross organisation/project assignment.
-- [ ] **Step 2: Verify RED** with focused Vitest API integration commands.
-- [ ] **Step 3: Implement minimal service/routes** using the existing separate runner bearer authentication path; never accept provider credentials in request bodies.
-- [ ] **Step 4: Verify GREEN** focused API tests + all existing `ai-runner-service-*` and `ai-runners-http` tests.
-- [ ] **Step 5: Commit** `feat: expose trusted runner dispatch protocol`.
+- [x] **Step 1: Write RED tests** proving user bearer cannot call runner endpoints, runner A cannot claim runner B work, revoked/untrusted/stale runners fail closed, and complete/fail cannot cross organisation/project assignment.
+- [x] **Step 2: Verify RED** with focused Vitest API integration commands.
+- [x] **Step 3: Implement minimal service/routes** using the existing separate runner bearer authentication path; never accept provider credentials in request bodies.
+- [x] **Step 4: Verify GREEN** focused API tests + all existing `ai-runner-service-*` and `ai-runners-http` tests.
+- [x] **Step 5: Commit** `feat: expose trusted runner dispatch protocol`.
 
 ### Task 5: Introduce ExecutionEnvironmentProvider and local implementation
 
