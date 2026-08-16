@@ -181,6 +181,18 @@ describe('Antigravity runner harness adapter', () => {
     )).toThrow(NoEligibleHarnessAdapterError);
   });
 
+  it('fails closed when the governed operation set is narrower than the proven full engineering bundle', async () => {
+    for (const operations of [['read'], ['read', 'write'], ['read', 'execute']] as const) {
+      const { provider, commands } = fakeProvider();
+      const adapter = createAntigravityHarnessAdapter({ provider, environment: ENVIRONMENT });
+      await expect(adapter.execute(request({
+        envelope: envelope({ allowedOperations: [...operations] }),
+        operations: [...operations],
+      }))).rejects.toThrow(/operation/i);
+      expect(commands).toHaveLength(0);
+    }
+  });
+
   it('supports an explicit runner-local executable path without changing argv or auth policy', async () => {
     const { provider, commands } = fakeProvider();
     const adapter = createAntigravityHarnessAdapter({

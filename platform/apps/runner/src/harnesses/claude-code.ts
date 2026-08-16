@@ -32,10 +32,23 @@ function requireNonBlank(value: string, field: string): string {
   return value;
 }
 
+function requireEnforceableOperations(request: HarnessExecutionRequest): void {
+  const operations = new Set(request.operations);
+  const known = ['read', 'write', 'execute'];
+  if (
+    operations.size !== request.operations.length
+    || [...operations].some(operation => !known.includes(operation))
+  ) {
+    throw new Error('Claude Code operation bundle contains unsupported operations');
+  }
+  if (!operations.has('read') || operations.has('execute')) {
+    throw new Error('Claude Code operation bundle is not safely enforceable');
+  }
+}
+
 function toolsFor(request: HarnessExecutionRequest): string {
   const tools = ['Read', 'Grep', 'Glob'];
   if (request.operations.includes('write')) tools.push('Edit', 'Write');
-  if (request.operations.includes('execute')) tools.push('Bash');
   return tools.join(',');
 }
 
@@ -74,7 +87,9 @@ export function createClaudeCodeHarnessAdapter(
     capabilities: CLAUDE_CODE_CAPABILITIES,
     async execute(request: HarnessExecutionRequest): Promise<HarnessExecutionResult> {
       const model = requireNonBlank(request.route.model, 'Claude Code model');
-      const instruction = requireNonBlank(request.instruction, 'Claude Code instruction');      const result = await options.provider.execute(options.environment, {
+      const instruction = requireNonBlank(request.instruction, 'Claude Code instruction');
+      requireEnforceableOperations(request);
+      const result = await options.provider.execute(options.environment, {
         command,
         args: [
           '-p', instruction,
@@ -83,7 +98,13 @@ export function createClaudeCodeHarnessAdapter(
           '--permission-mode', 'dontAsk',
           '--no-session-persistence',
           '--no-chrome',
+          '--setting-sources', '',
+          '--strict-mcp-config',
+          '--mcp-config', '{"mcpServers":{}}',
           '--tools', toolsFor(request),
+          ...(request.operations.includes('write')
+            ? ['--allowedTools', 'Edit(./**)']
+            : []),
         ],
       });
       return normalizeResult(result);

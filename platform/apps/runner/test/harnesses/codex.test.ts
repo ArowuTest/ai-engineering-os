@@ -128,14 +128,16 @@ describe('Codex runner harness adapter', () => {
     expect(result.metadata).toEqual({ exitCode: 0, outputTruncated: false });
   });
 
-  it('uses read-only sandbox when the governed operation set has no write authority', async () => {
-    const { provider, commands } = fakeProvider();
-    const adapter = createCodexHarnessAdapter({ provider, environment: ENVIRONMENT });
-    const readonlyEnvelope = envelope({ allowedOperations: ['read'] });
-
-    await adapter.execute(request({ envelope: readonlyEnvelope, operations: ['read'] }));
-
-    expect(commands[0]?.args.slice(0, 3)).toEqual(['exec', '--sandbox', 'read-only']);
+  it('fails closed on operation bundles that the Codex sandbox cannot prove exactly', async () => {
+    for (const operations of [['read'], ['read', 'write'], ['read', 'execute']] as const) {
+      const { provider, commands } = fakeProvider();
+      const adapter = createCodexHarnessAdapter({ provider, environment: ENVIRONMENT });
+      await expect(adapter.execute(request({
+        envelope: envelope({ allowedOperations: [...operations] }),
+        operations: [...operations],
+      }))).rejects.toThrow(/operation/i);
+      expect(commands).toHaveLength(0);
+    }
   });
 
   it('keeps hostile task text as one argv value and never constructs shell syntax or command env', async () => {

@@ -32,8 +32,16 @@ function requireNonBlank(value: string, field: string): string {
   return value;
 }
 
-function sandboxFor(request: HarnessExecutionRequest): 'read-only' | 'workspace-write' {
-  return request.operations.includes('write') ? 'workspace-write' : 'read-only';
+function requireFullEngineeringOperations(request: HarnessExecutionRequest): void {
+  const operations = new Set(request.operations);
+  if (
+    operations.size !== 3
+    || !operations.has('read')
+    || !operations.has('write')
+    || !operations.has('execute')
+  ) {
+    throw new Error('Codex operation bundle is not safely enforceable');
+  }
 }
 
 function normalizeResult(result: Awaited<ReturnType<ExecutionEnvironmentProvider['execute']>>): HarnessExecutionResult {
@@ -68,11 +76,12 @@ export function createCodexHarnessAdapter(
     async execute(request: HarnessExecutionRequest): Promise<HarnessExecutionResult> {
       const model = requireNonBlank(request.route.model, 'Codex model');
       const instruction = requireNonBlank(request.instruction, 'Codex instruction');
+      requireFullEngineeringOperations(request);
       const result = await options.provider.execute(options.environment, {
         command,
         args: [
           'exec',
-          '--sandbox', sandboxFor(request),
+          '--sandbox', 'workspace-write',
           '--color', 'never',
           '-m', model,
           '-C', workspacePath,

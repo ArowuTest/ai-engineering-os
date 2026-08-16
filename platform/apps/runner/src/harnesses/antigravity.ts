@@ -32,6 +32,18 @@ function requireNonBlank(value: string, field: string): string {
   return value;
 }
 
+function requireFullEngineeringOperations(request: HarnessExecutionRequest): void {
+  const operations = new Set(request.operations);
+  if (
+    operations.size !== 3
+    || !operations.has('read')
+    || !operations.has('write')
+    || !operations.has('execute')
+  ) {
+    throw new Error('Antigravity operation bundle is not safely enforceable');
+  }
+}
+
 function normalizeResult(result: Awaited<ReturnType<ExecutionEnvironmentProvider['execute']>>): HarnessExecutionResult {
   const output = result.stdout.trim();
   const outputTruncated = result.stdoutTruncated || result.stderrTruncated || result.eventsTruncated;
@@ -64,6 +76,7 @@ export function createAntigravityHarnessAdapter(
     async execute(request: HarnessExecutionRequest): Promise<HarnessExecutionResult> {
       const model = requireNonBlank(request.route.model, 'Antigravity model');
       const instruction = requireNonBlank(request.instruction, 'Antigravity instruction');
+      requireFullEngineeringOperations(request);
       const result = await options.provider.execute(options.environment, {
         command,
         args: [

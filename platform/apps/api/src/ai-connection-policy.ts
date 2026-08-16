@@ -110,7 +110,7 @@ const PRODUCTION_POLICIES: readonly TrustedConnectionFamilyPolicy[] = [
     harnessId: 'claude-code',
     allowedOwnership: ['personal'],
     credentialStrategies: ['runner_managed'],
-    delegatable: true,
+    delegatable: false,
     requiresRunner: true,
     persistentSupported: false,
   },

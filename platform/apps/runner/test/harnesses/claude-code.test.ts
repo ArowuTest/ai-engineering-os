@@ -69,7 +69,7 @@ function request(overrides: Partial<HarnessExecutionRequest> = {}): HarnessExecu
     envelope: envelope(),
     route: route(),
     requiredCapabilities: ['chat', 'tools', 'localWorkspace', 'headless'],
-    operations: ['read', 'write', 'execute'],
+    operations: ['read', 'write'],
     workspaceScope: 'project-worktree',
     instruction: 'Inspect the repository and implement the approved task.',
     ...overrides,
@@ -119,7 +119,8 @@ function fakeProvider(result: ExecutionResult = executionResult()) {
         '-p', 'Inspect the repository and implement the approved task.',
         '--output-format', 'text', '--model', 'claude-sonnet-4-6',
         '--permission-mode', 'dontAsk', '--no-session-persistence', '--no-chrome',
-        '--tools', 'Read,Grep,Glob,Edit,Write,Bash',
+        '--setting-sources', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+        '--tools', 'Read,Grep,Glob,Edit,Write', '--allowedTools', 'Edit(./**)',
       ],
     }]);
     expect(result.status).toBe('completed');
@@ -136,6 +137,18 @@ function fakeProvider(result: ExecutionResult = executionResult()) {
     }));
     expect(commands[0]?.args.slice(-2)).toEqual(['--tools', 'Read,Grep,Glob']);
   });
+  it('fails closed when execute could bypass missing write authority or mutation lacks read authority', async () => {
+    for (const operations of [['read', 'execute'], ['read', 'write', 'execute'], ['write'], ['execute'], ['write', 'execute']] as const) {
+      const { provider, commands } = fakeProvider();
+      const adapter = createClaudeCodeHarnessAdapter({ provider, environment: ENVIRONMENT });
+      await expect(adapter.execute(request({
+        envelope: envelope({ allowedOperations: [...operations] }),
+        operations: [...operations],
+      }))).rejects.toThrow(/operation/i);
+      expect(commands).toHaveLength(0);
+    }
+  });
+
   it('keeps hostile task text as one argv value and never exports local auth state', async () => {
     const { provider, commands } = fakeProvider();
     const adapter = createClaudeCodeHarnessAdapter({ provider, environment: ENVIRONMENT });

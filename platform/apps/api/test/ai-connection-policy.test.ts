@@ -99,20 +99,15 @@ describe('productionConnectionFamilyPolicyRegistry', () => {
     }
   });
 
-  it('enables only the independently live-proven Claude Code subscription for online delegation', () => {
-    const claude = registry.get('claude-code-subscription');
-    expect(claude).not.toBeNull();
-    expect(claude!.executionMode).toBe('subscription');
-    expect(claude!.allowedOwnership).toEqual(['personal']);
-    expect(claude!.delegatable).toBe(true);
-    expect(claude!.requiresRunner).toBe(true);
-    expect(claude!.persistentSupported).toBe(false);
-
-    for (const id of ['codex-subscription', 'antigravity-subscription']) {
+  it('keeps subscription families fail-closed until a full safe engineering vertical slice is live-proven', () => {
+    for (const id of ['codex-subscription', 'claude-code-subscription', 'antigravity-subscription']) {
       const p = registry.get(id);
       expect(p, `expected ${id} to be present`).not.toBeNull();
+      expect(p!.executionMode).toBe('subscription');
+      expect(p!.allowedOwnership).toEqual(['personal']);
       expect(p!.delegatable).toBe(false);
       expect(p!.requiresRunner).toBe(true);
+      expect(p!.persistentSupported).toBe(false);
     }
   });
 
