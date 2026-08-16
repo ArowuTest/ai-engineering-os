@@ -65,11 +65,21 @@ The orchestrator resolves the smallest authorised capability set for a task: rol
 
 ## 7. Product experience
 
-The UI is project/team-centred rather than model-centred. Normal users should be able to use Auto/Recommended routing while advanced users and administrators can inspect or override eligible models/routes, agents, skills and MCPs.
+The UI is project/team-centred rather than model-centred. Normal users should be able to use Auto/Recommended routing while advanced users and administrators can inspect or override eligible models/routes, agents, skills and MCPs within policy.
 
 Administration is scoped at Platform, Organisation and Project levels. Mission Control/Engineering Team views should expose active agents, tasks, model/harness route, loaded skills, activated MCPs, cost/usage, checkpoints, blockers, reviews and handoffs without exposing private credentials or hidden provider sessions.
 
-## 8. Verification and acceptance
+## 8. Admin-owned capability catalogue and release governance
+
+The platform/admin control plane owns the complete discovered and inherited capability catalogue. ECC capability discovery is deliberately broader than the ordinary user catalogue: a harness, agent, skill, MCP/tool, model route or workflow may be known to the platform without being released to the user population.
+
+For harnesses specifically, Admin sees every discovered/supported ECC execution surface and its maturity/evidence state. Admin explicitly decides which harnesses are released to all users or to narrower organisation, role/team, cohort or project scopes. Ordinary users and projects may choose only from the released subset for which they are also eligible.
+
+Catalogue presence, product release and execution authority are separate states. A harness may be `discovered` or `ecc_compatible` while governed runner execution is still unverified; it must not gain delegation, write/execute authority, subscription sharing, persistent execution or managed-sandbox eligibility merely because it exists in ECC. Release policy composes with route/model eligibility, connection/subscription policy, runner availability, environment support and task operation authority.
+
+The same governance pattern applies to agents, agent teams, skills, MCP/tools and specialised workflows: preserve the broad applicable ECC estate in the admin catalogue, then publish only approved subsets to users/projects. Upstream discovery never auto-publishes capability.
+
+## 9. Verification and acceptance
 
 Capability productisation is complete only when the inherited implementation remains available, the platform can discover and permission it through stable contracts, cross-harness assumptions are explicit, tests cover tenant/credential boundaries, and existing ECC regression gates remain green.
 

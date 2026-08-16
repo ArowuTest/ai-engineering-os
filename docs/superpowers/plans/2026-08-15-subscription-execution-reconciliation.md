@@ -15,10 +15,12 @@
 - No provider credential, runner plaintext bearer, signing private key, secret-reference value, or local provider auth-store content enters persistence/audit/evidence/browser payloads.
 - Qwen, GLM, Grok, Gemini, GPT, Claude, and future models are swappable routes, never permanent role enums.
 - Users see only approved + eligible routes; `Auto` remains the normal default.
+- Admin owns the broad discovered/inherited capability catalogue. Harness, agent, skill, MCP/tool or workflow discovery never auto-publishes capability to ordinary users; Admin explicitly releases approved subsets by population/scope, and release never bypasses execution or operation authority.
 - Every production behavior follows RED -> verify RED -> minimal GREEN -> broader GREEN -> commit.
+- Engineering sub-slices keep RED/GREEN and focused tests continuously, but several coherent sub-slices are batched before expensive whole-platform verification and blind multi-model council. Do not run a fresh council after every few files unless a high-risk authority/security/concurrency boundary requires it.
 - The old divergent execution branch is read-only reference, never a wholesale merge source.
 - Harness-native sandboxing remains enabled where supported; platform execution environment is a separate defence-in-depth boundary.
-- Unfinished Tasks 5-9 do **not** imply greenfield rebuilds of inherited ECC capabilities. Before new implementation, classify relevant ECC code as reuse-as-is, adapt/generalise, supersede for a documented reason, or exclude for a documented security/product reason; prefer thin productisation/control-plane adapters.
+- Unfinished Tasks 5-9 do **not** imply greenfield rebuilds of inherited ECC capabilities. Before new implementation, classify relevant ECC code as `REUSE`, `ADAPT`, `PRODUCTISE`, `SUPERSEDE`, `REFERENCE`, or `EXCLUDE`; prefer thin productisation/control-plane adapters.
 - Task 8 implements the newer AI Engineering OS blind multi-model Review Council protocol and **supersedes** the simpler inherited ECC review orchestration for product acceptance, while reusing suitable ECC eval/review/verification primitives underneath.
 
 ---
@@ -158,13 +160,15 @@
 - Consumes: `HarnessExecutionRequest` and `ExecutionEnvironmentProvider`.
 - Produces: three `HarnessExecutionAdapter` implementations with normalized evidence.
 
-- [ ] **Step 1: Write RED fake-process tests** for exact argv/cwd/env behavior, no shell interpolation, cancellation, malformed harness output, local-auth non-export, and capability matching.
-- [ ] **Step 2: Verify RED** before adapter production code exists.
-- [ ] **Step 3: Implement Codex minimally**, GREEN fake-process tests, then perform controlled local-auth smoke; only after independent proof change `codex-subscription` delegation policy.
-- [ ] **Step 4: Repeat RED/GREEN/live proof independently for Antigravity `agy`**, then its policy gate.
-- [ ] **Step 5: Repeat RED/GREEN/live proof independently for Claude Code**, then its policy gate.
-- [ ] **Step 6: Run existing ECC harness adapter/audit scripts** to prove no catalogue/session regression.
-- [ ] **Step 7: Commit per harness**, never one three-harness mega-commit.
+- [x] **Step 1: Write RED fake-process tests** for exact argv/cwd/env behavior, no shell interpolation, cancellation, malformed harness output, local-auth non-export, and capability matching.
+- [x] **Step 2: Verify RED** before each adapter production path, then preserve the resulting RED/GREEN evidence.
+- [x] **Step 3: Implement Codex minimally** with structured argv, bounded stdin prompt transport, envelope-operation fencing and fail-closed production policy because the Codex CLI is not installed for live proof on this runner.
+- [x] **Step 4: Implement Antigravity `agy`** with structured argv, envelope-operation fencing and fail-closed production policy because `agy` is not installed for live proof on this runner.
+- [x] **Step 5: Implement and live-prove Claude Code** for isolated noninteractive read/edit-only operation using runner-local subscription auth; native Windows execute could not be safely isolated, so production delegation remains fail-closed and persistent support remains disabled.
+- [x] **Step 6: Run existing ECC harness adapter/audit scripts** to prove no catalogue/session regression.
+- [x] **Step 7: Commit per harness plus bounded authority hardening**, preserving separate Codex, Antigravity, Claude, registry and remediation commits.
+
+**Accepted 16 Aug 2026:** final source head `ebb6b4ff75b377b528d40aeb38293a3131aba99e` (`fix: harden local harness execution boundaries`). Final exact-source packet SHA-256 `b8d92fdbeabd86022b2ad2c27aa4b53bc545ad4b3456d0d3eb2670788528d8d2`; focused harness/environment/policy/registry tests 85/85, ECC Harness Adapter Compliance 11 adapters PASS, Harness Audit 80/80 with 0 failing checks, static 33/33, platform unit 271/271, isolated PostgreSQL 17 integration 268/268, root/web TypeScript and `git diff --check` PASS. Final blind council: Gemini 3.7 Flash, Grok 4.6 and GLM 5.2 returned `NO FINDINGS`; Qwen 3.8 Max returned no content after 670s and is recorded only as reviewer availability failure. Final hardening added bounded generic provider stdin for Codex prompt isolation, request-vs-envelope operation fencing for all adapters, and an Edit-only Claude mutation surface. Codex and Antigravity remain un-live-proven and fail-closed; Claude live proof does not authorize native-Windows execute or persistent delegation.
 
 ### Task 8: Productise the blind Review Council feedback loop
 
@@ -179,31 +183,34 @@
 - Produces: `ReviewRun`, `ReviewFinding`, `FindingAdjudication`, `ReviewerRechallenge`, `CalibrationSnapshot`, `ArchitectureInvariant`.
 - Adjudication enum: `CONFIRMED | PARTIALLY_VALID | REJECTED | INSUFFICIENT_EVIDENCE`.
 
-- [ ] **Step 1: Write RED domain tests** for blind packet identity, source/evidence digest, materiality/severity, adjudication states, fresh-source invalidation, and one-confirmed-Important/Critical blocking semantics.
-- [ ] **Step 2: Verify RED**, then implement minimal domain constructors/validators.
-- [ ] **Step 3: Write RED PostgreSQL tests** for durable runs/findings/adjudications/rechallenges/calibration and transaction rollback on incomplete authority mutations.
-- [ ] **Step 4: Implement repository + GREEN**, then write API/service RED tests for private rechallenge and reviewer-output availability failures.
-- [ ] **Step 5: Implement orchestration** so comparative reviewers receive the same canonical packet but never one another's findings; record exact route/model/version used.
-- [ ] **Step 6: Add calibration aggregation** as evidence only; it may rank eligible routes but never create permanent model-role bindings.
-- [ ] **Step 7: Commit in domain, persistence, orchestration increments**, with a fresh review after material source changes.
+**Execution cadence:** Task 8 is one coherent engineering batch. Keep genuine RED/GREEN and focused tests at each internal boundary, but do not stop for a full multi-model council after domain-only or repository-only increments. Freeze the combined domain + persistence + orchestration + calibration source, run broad verification once, then run the expensive blind council on that exact packet. Only a material source change after council invalidates that acceptance run.
 
-### Task 9: Add governed model catalogue and user eligibility surface
+- [ ] **Step 1: Inventory inherited ECC council/eval/verification/team-agent primitives** and record `REUSE | ADAPT | PRODUCTISE | SUPERSEDE | REFERENCE | EXCLUDE` decisions before new source implementation.
+- [ ] **Step 2: Write RED domain tests** for blind packet identity, source/evidence digest, materiality/severity, adjudication states, fresh-source invalidation, reviewer availability states, and one-confirmed-Important/Critical blocking semantics.
+- [ ] **Step 3: Verify RED**, then implement minimal domain constructors/validators.
+- [ ] **Step 4: Write RED PostgreSQL tests** for durable runs/findings/adjudications/rechallenges/calibration and transaction rollback on incomplete authority mutations; implement repository to GREEN.
+- [ ] **Step 5: Write API/service RED tests then implement orchestration** so comparative reviewers receive the same canonical packet but never one another's findings; record exact route/model/version, preserve private rechallenge isolation, and classify timeout/empty/malformed output as availability failure rather than verdict.
+- [ ] **Step 6: Add calibration aggregation** as evidence only; it may rank eligible routes but never create permanent model-role bindings. Prove material source digest changes invalidate prior acceptance.
+- [ ] **Step 7: Run the combined focused Task 8 suite**, domain/database/API type checks and migration checks; commit coherent domain/persistence/orchestration increments without paying the whole-platform/council gate between each increment.
+- [ ] **Step 8: Freeze the Task 8 source and run broad static/unit/integration/type/ECC gates plus one fresh blind multi-model council**. Any confirmed/partially-valid blocking defect re-enters RED/GREEN and invalidates the prior council packet.
+
+### Task 9: Add governed model + harness catalogue and user eligibility/release surfaces
 
 **Files:**
-- Create/modify domain/database/API files for model catalogue records and policy.
+- Create/modify domain/database/API files for model catalogue records, harness catalogue/release records and policy.
 - Modify: `platform/apps/api/src/model-runtime.ts`
-- Modify: existing model-route/AI-connection HTTP surfaces.
-- Modify: `platform/apps/web` model-selection/admin surfaces and tests.
+- Modify: existing model-route/AI-connection/harness HTTP surfaces.
+- Modify: `platform/apps/web` model-selection, harness-selection and admin catalogue surfaces and tests.
 **Interfaces:**
-- Produces: admin-governed `approved | trial_calibration | disabled` catalogue state and user-visible eligible route list.
-- Consumes: provider discovery/configured routes, organisation/user connection eligibility, runner availability, calibration evidence.
+- Produces: admin-governed model `approved | trial_calibration | disabled` state; harness discovery/maturity/release state; user-visible eligible model route and released-harness lists.
+- Consumes: provider discovery/configured routes, ECC harness discovery/compatibility metadata, organisation/user connection eligibility, runner/environment availability, release scope, calibration evidence.
 
-- [ ] **Step 1: Write RED API/domain tests** proving raw OpenRouter discovery is not automatically user-visible, disabled models cannot be selected, trial models require calibration/admin context, and `Auto` resolves only eligible approved candidates.
-- [ ] **Step 2: Verify RED**, then implement the minimal catalogue/policy persistence and selection service.
-- [ ] **Step 3: Write RED web tests** for admin catalogue controls and user dropdown showing `Auto` plus approved eligible routes with source labels such as organisation API/personal subscription/OpenRouter.
-- [ ] **Step 4: Implement minimal UI** without exposing API keys, local auth state, or hidden disabled routes.
-- [ ] **Step 5: Verify GREEN** API/web focused tests + typecheck + production web build.
-- [ ] **Step 6: Commit** `feat: govern model catalogue and selection`.
+- [ ] **Step 1: Write RED API/domain tests** proving raw OpenRouter discovery is not automatically user-visible; inherited/discovered ECC harnesses are admin-visible but not automatically user-visible; disabled models cannot be selected; unreleased harnesses cannot be selected; trial models require calibration/admin context; and `Auto` resolves only eligible approved candidates.
+- [ ] **Step 2: Verify RED**, then implement minimal model + harness catalogue/policy persistence. Preserve separate dimensions for discovery/maturity, admin release, execution verification, operation authority, sharing/persistence and environment eligibility.
+- [ ] **Step 3: Write RED web tests** for Admin seeing the broad harness catalogue and releasing approved subsets by supported scope, plus user dropdowns showing only released harnesses and `Auto`/approved eligible routes with source labels such as organisation API/personal subscription/OpenRouter.
+- [ ] **Step 4: Implement minimal UI** without exposing API keys, local auth state, unreleased harnesses, hidden disabled routes or runner-local credentials.
+- [ ] **Step 5: Verify GREEN** API/web focused tests + typecheck + production web build, including a regression proving catalogue discovery does not create execution authority.
+- [ ] **Step 6: Commit** `feat: govern model and harness catalogue release`.
 
 ### Task 10: Whole-slice verification, review, merge, and remote proof
 
@@ -221,8 +228,8 @@
 
 ## Plan self-review checklist
 
-- Spec coverage: Tasks 1-10 cover OpenRouter, signed dispatch/evidence, outbound runner, environment seam, three harnesses, Review Council, admin/user model governance, and full gates.
-- Separation: OpenSandbox managed-provider implementation is intentionally excluded from this plan and defined in the dependent POC plan.
+- Spec coverage: Tasks 1-10 cover OpenRouter, signed dispatch/evidence, outbound runner, environment seam, initial three execution adapters plus broad ECC harness catalogue assimilation, Review Council, admin-controlled harness release, model/user governance, and full gates.
+- Separation: OpenSandbox managed-provider implementation is intentionally excluded from this plan and defined in the dependent POC plan; Task 9 governs whether a harness/environment combination is released but does not implement OpenSandbox itself.
 - Authority: no task recreates canonical runner identity, migration 007, runner auth, or connection-pool authority.
 - Placeholder scan: clean; every implementation action is tied to a concrete task, file set, and verification command.
 - Type consistency: harness adapters consume the environment boundary; runner dispatch consumes canonical domain + signed protocol; council consumes governed eligible model routes.

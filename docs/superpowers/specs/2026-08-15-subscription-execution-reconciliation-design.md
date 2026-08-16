@@ -111,9 +111,11 @@ The initial siblings are:
 
 Provider credential stores remain runner-local. The platform receives only safe capability, status, route/model metadata where available, and normalized execution evidence.
 
-ECC already knows multiple harnesses including Codex, Claude Code, Cursor, Antigravity, Gemini CLI, and OpenCode. This slice reuses those catalogue/install/session assets where appropriate; it does not claim all inherited harnesses are already end-to-end remotely dispatchable.
+ECC already knows multiple harnesses and execution/on-ramp surfaces beyond the initial three, including OpenCode, Cursor, Gemini, Zed and terminal-native ECC workflows, with further inherited install/on-ramp assets such as Hermes, Kimi, Qwen, OpenClaw, CodeBuddy and JoyCode. This slice reuses those catalogue/install/session assets where appropriate; catalogue presence does not claim every inherited surface is already end-to-end remotely dispatchable.
 
-**ECC reuse/productisation rule:** remaining execution, harness, agent, skill, MCP, memory, learning, eval, verification, security, browser-QA, autonomous-loop, context-optimisation, and cost/evidence items must be classified first as inherited capability to reuse/adapt/productise versus genuinely new platform infrastructure. A plan checkbox marked unfinished does not imply the underlying ECC capability is absent. Do not create a parallel replacement merely because the SaaS-facing adapter, governance, durable state, or UI surface is not yet implemented.
+**ECC reuse/productisation rule:** remaining execution, harness, agent, skill, MCP, memory, learning, eval, verification, security, browser-QA, autonomous-loop, context-optimisation, and cost/evidence items must be classified first as inherited capability to `REUSE`, `ADAPT`, `PRODUCTISE`, `SUPERSEDE`, `REFERENCE`, or `EXCLUDE` versus genuinely new platform infrastructure. A plan checkbox marked unfinished does not imply the underlying ECC capability is absent. Do not create a parallel replacement merely because the SaaS-facing adapter, governance, durable state, or UI surface is not yet implemented.
+
+**Admin release rule:** the platform keeps a broad master catalogue of discovered/inherited harnesses and their maturity/evidence state. Platform Admin can see the complete catalogue and explicitly releases approved harnesses to the whole population or narrower organisation, role/team, cohort or project scopes. Ordinary users see and choose only from the released subset for which they are otherwise eligible. Discovery, release, execution approval, operation authority, subscription sharing and persistent/managed-environment eligibility remain separate policy dimensions.
 
 Production connection families remain `delegatable=false` until the corresponding real terminal vertical slice passes independently. `persistentSupported=true` is likewise enabled only when independently proven safe for that harness/runner behavior.
 
@@ -148,9 +150,9 @@ Independence policy may prevent multiple seats from resolving to the same provid
 
 ## 13. Administration and user experience
 
-Platform administrators manage the approved/trial/disabled model catalogue, role candidate pools, cost/risk constraints, and council templates.
+Platform administrators manage the full discovered capability catalogue, including harness maturity/release state, the approved/trial/disabled model catalogue, role candidate pools, cost/risk constraints, and council templates. Admin may release a harness globally or to narrower organisation, role/team, cohort or project scopes without changing whether its execution/delegation path is technically verified.
 
-Users normally see `Auto` plus approved routes they are eligible to use through organisation APIs, OpenRouter, or their own authorised subscription harness connections. The UI must distinguish route/source, for example organisation API versus personal subscription, without exposing credentials.
+Users normally see only admin-released harnesses plus `Auto` and approved model routes they are eligible to use through organisation APIs, OpenRouter, or their own authorised subscription harness connections. The UI must distinguish route/source, for example organisation API versus personal subscription, without exposing credentials, unreleased catalogue entries or runner-local auth state.
 ## 14. Failure handling
 
 The system fails closed at every authority boundary:
@@ -217,19 +219,20 @@ This reconciliation slice is complete only when all of the following are true:
 1. Canonical `main` runner identity/trust/heartbeat/pool/harness foundation remains authoritative and regression-green.
 2. OpenRouter is available as a normal multi-model API provider with no model hard-coded to a permanent product role.
 3. Admins can govern which configured/discovered models are approved, trial/calibration, or disabled; users see only approved eligible routes plus `Auto`.
-4. Durable signed dispatch/evidence is reconciled without replacing migration 007 or duplicating runner authority.
-5. Only the assigned eligible runner can claim/execute a valid unexpired task envelope, and tamper/replay/cancellation/revocation rules fail closed.
-6. Execution environment is an explicit orthogonal dimension: harness adapters use a common provider boundary, local execution remains supported, and OpenSandbox can be added without changing harness/domain contracts.
-7. Codex, Antigravity, and Claude Code each have a real thin adapter using supported local authentication and isolated task worktrees without exposing provider credentials to the platform.
-8. Each subscription family becomes delegatable only after its own controlled terminal execution path is independently green.
-9. Review Council runs are durable and blind; findings are normalized, evidence-backed, adjudicated, and re-challenged according to the locked loop.
-10. A confirmed Critical or Important finding blocks acceptance independent of vote count; timeout/empty/malformed reviewer output is not a pass.
-11. Any material source change invalidates acceptance review and requires a fresh blind run against the new source packet.
-12. Calibration records route/model/version performance and can influence future `Auto`/role selection without permanently binding a model to a role.
-13. Existing requester -> project pool -> organisation -> API fallback semantics and personal sharing rules remain unchanged.
-14. No provider credential, runner plaintext token, signing private key, secret reference value, or local auth-store content is exposed in persistence, audit, evidence, logs, repository artefacts, or browser responses.
-15. Fresh PostgreSQL integration tests, full platform tests, typecheck, production build, dependency audit, ECC compatibility/security gates, and independent review are green with zero unresolved Critical/Important findings.
-16. The exact merged `main` SHA is pushed and its configured GitHub CI jobs are verified green before the slice is declared complete.
+4. Admin can see the broad inherited/discovered harness catalogue and explicitly release approved subsets to the user population or narrower scopes; users never receive a harness merely because ECC knows about it, and release never bypasses execution/delegation authority gates.
+5. Durable signed dispatch/evidence is reconciled without replacing migration 007 or duplicating runner authority.
+6. Only the assigned eligible runner can claim/execute a valid unexpired task envelope, and tamper/replay/cancellation/revocation rules fail closed.
+7. Execution environment is an explicit orthogonal dimension: harness adapters use a common provider boundary, local execution remains supported, and OpenSandbox can be added without changing harness/domain contracts.
+8. Codex, Antigravity, and Claude Code each have a real thin adapter that consumes runner-local authentication when available and uses isolated task worktrees without exposing provider credentials to the platform; an unavailable or un-live-proven CLI remains fail-closed and cannot be released for delegated execution.
+9. Each subscription family becomes delegatable only after its own controlled terminal execution path is independently green.
+10. Review Council runs are durable and blind; findings are normalized, evidence-backed, adjudicated, and re-challenged according to the locked loop.
+11. A confirmed Critical or Important finding blocks acceptance independent of vote count; timeout/empty/malformed reviewer output is not a pass.
+12. Any material source change invalidates acceptance review and requires a fresh blind run against the new source packet.
+13. Calibration records route/model/version performance and can influence future `Auto`/role selection without permanently binding a model to a role.
+14. Existing requester -> project pool -> organisation -> API fallback semantics and personal sharing rules remain unchanged.
+15. No provider credential, runner plaintext token, signing private key, secret reference value, or local auth-store content is exposed in persistence, audit, evidence, logs, repository artefacts, or browser responses.
+16. Fresh PostgreSQL integration tests, full platform tests, typecheck, production build, dependency audit, ECC compatibility/security gates, and independent review are green with zero unresolved Critical/Important findings.
+17. The exact merged `main` SHA is pushed and its configured GitHub CI jobs are verified green before the slice is declared complete.
 ## 19. Source-branch salvage rule
 
 Commits/files from `feature/agent-bridge-subscription-execution` are evidence and implementation candidates, not accepted source by ancestry. Every transplanted behavior is re-evaluated against current contracts and receives fresh tests/review in the reconciliation branch.
