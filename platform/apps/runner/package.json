@@ -5,6 +5,7 @@
   "type": "module",
   "dependencies": {
     "@engineering-os/execution-environment": "0.1.0",
+    "@engineering-os/model-gateway": "0.1.0",
     "@engineering-os/runner-protocol": "0.1.0"
   },
   "exports": "./src/runner-loop.ts"
