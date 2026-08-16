@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import {
   validateSignedRunnerTaskEnvelope,
   type SignedRunnerTaskEnvelope,
@@ -322,7 +323,7 @@ function sameMetadata(
   left: Record<string, AIDispatchMetadataValue>,
   right: Record<string, AIDispatchMetadataValue>,
 ): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return isDeepStrictEqual(left, right);
 }
 
 export class AIDispatchRepository {
@@ -398,12 +399,100 @@ export class AIDispatchRepository {
     now: Date,
   ): Promise<AIDispatchRecord | null> {
     const result = await this.database.query<AIDispatchRow>(
-      `SELECT ${DISPATCH_COLUMNS}
-       FROM ai_dispatches
-       WHERE organisation_id = $1 AND runner_id = $2
-         AND state IN ('claimed', 'running') AND expires_at > $3
-       ORDER BY claimed_at ASC, id ASC
+      `SELECT ${DISPATCH_COLUMNS.split(',').map((column) => `d.${column.trim()}`).join(', ')}
+       FROM ai_dispatches AS d
+       JOIN ai_runners AS r
+         ON r.organisation_id = d.organisation_id AND r.id = d.runner_id
+       WHERE d.organisation_id = $1 AND d.runner_id = $2
+         AND d.state IN ('claimed', 'running') AND d.expires_at > $3
+         AND r.status = 'online' AND r.trust_state = 'trusted' AND r.revoked_at IS NULL
+         AND r.heartbeat_expires_at > $3
+         AND (
+           r.ownership = 'organisation'
+           OR EXISTS (
+             SELECT 1 FROM organisation_memberships AS om
+             WHERE om.organisation_id = r.organisation_id
+               AND om.user_id = r.owner_user_id AND om.status = 'active'
+           )
+         )
+       ORDER BY d.claimed_at ASC, d.id ASC
        LIMIT 1`,
+      [organisationId, runnerId, now],
+    );
+    const row = result.rows[0];
+    return row ? mapDispatch(row) : null;
+  }
+
+  private async hasEligibleQueued(
+    organisationId: string,
+    runnerId: string,
+    now: Date,
+  ): Promise<boolean> {
+    const result = await this.database.query<{ exists: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1
+         FROM ai_dispatches AS d
+         JOIN ai_runners AS r
+           ON r.organisation_id = d.organisation_id AND r.id = d.runner_id
+         WHERE d.organisation_id = $1 AND d.runner_id = $2
+           AND d.state = 'queued' AND d.expires_at > $3
+           AND r.status = 'online' AND r.trust_state = 'trusted' AND r.revoked_at IS NULL
+           AND r.heartbeat_expires_at > $3
+           AND (
+             r.ownership = 'organisation'
+             OR EXISTS (
+               SELECT 1 FROM organisation_memberships AS om
+               WHERE om.organisation_id = r.organisation_id
+                 AND om.user_id = r.owner_user_id AND om.status = 'active'
+             )
+           )
+       ) AS exists`,
+      [organisationId, runnerId, now],
+    );
+    return result.rows[0]?.exists === true;
+  }
+
+  private async waitForRunnerClaimBarrier(organisationId: string, runnerId: string): Promise<void> {
+    await this.database.query(
+      `SELECT id FROM ai_runners
+       WHERE organisation_id = $1 AND id = $2
+       FOR UPDATE`,
+      [organisationId, runnerId],
+    );
+  }
+
+  private async claimQueued(
+    organisationId: string,
+    runnerId: string,
+    now: Date,
+  ): Promise<AIDispatchRecord | null> {
+    const result = await this.database.query<AIDispatchRow>(
+      `WITH candidate AS (
+         SELECT d.id
+         FROM ai_dispatches AS d
+         JOIN ai_runners AS r
+           ON r.organisation_id = d.organisation_id AND r.id = d.runner_id
+         WHERE d.organisation_id = $1 AND d.runner_id = $2
+           AND d.state = 'queued' AND d.expires_at > $3
+           AND r.status = 'online' AND r.trust_state = 'trusted' AND r.revoked_at IS NULL
+           AND r.heartbeat_expires_at > $3
+           AND (
+             r.ownership = 'organisation'
+             OR EXISTS (
+               SELECT 1 FROM organisation_memberships AS om
+               WHERE om.organisation_id = r.organisation_id
+                 AND om.user_id = r.owner_user_id AND om.status = 'active'
+             )
+           )
+         ORDER BY d.created_at ASC, d.id ASC
+         FOR UPDATE OF d, r SKIP LOCKED
+         LIMIT 1
+       )
+       UPDATE ai_dispatches AS d
+       SET state = 'claimed', claimed_at = $3, updated_at = $3
+       FROM candidate
+       WHERE d.id = candidate.id
+       RETURNING ${DISPATCH_COLUMNS.split(',').map((column) => `d.${column.trim()}`).join(', ')}`,
       [organisationId, runnerId, now],
     );
     const row = result.rows[0];
@@ -417,39 +506,27 @@ export class AIDispatchRepository {
   ): Promise<ClaimedAIDispatchRecord | null> {
     const now = requireDate(nowInput, 'claim time');
     await this.expireDue(organisationId, runnerId, now);
-    const existing = await this.getActiveForRunner(organisationId, runnerId, now);
-    if (existing) return { dispatch: existing, replayed: true };
 
-    try {
-      const result = await this.database.query<AIDispatchRow>(
-        `WITH candidate AS (
-           SELECT id
-           FROM ai_dispatches
-           WHERE organisation_id = $1 AND runner_id = $2
-             AND state = 'queued' AND expires_at > $3
-           ORDER BY created_at ASC, id ASC
-           FOR UPDATE SKIP LOCKED
-           LIMIT 1
-         )
-         UPDATE ai_dispatches AS d
-         SET state = 'claimed', claimed_at = $3, updated_at = $3
-         FROM candidate
-         WHERE d.id = candidate.id
-         RETURNING ${DISPATCH_COLUMNS.split(',').map((column) => `d.${column.trim()}`).join(', ')}`,
-        [organisationId, runnerId, now],
-      );
-      const row = result.rows[0];
-      return row ? { dispatch: mapDispatch(row), replayed: false } : null;
-    } catch (error) {
-      if (!isActiveClaimConflict(error)) throw error;
-      const replay = await this.getActiveForRunner(organisationId, runnerId, now);
-      if (!replay) {
-        return this.claimNext(organisationId, runnerId, now);
+    for (;;) {
+      const existing = await this.getActiveForRunner(organisationId, runnerId, now);
+      if (existing) return { dispatch: existing, replayed: true };
+
+      try {
+        const claimed = await this.claimQueued(organisationId, runnerId, now);
+        if (claimed) return { dispatch: claimed, replayed: false };
+      } catch (error) {
+        if (!isActiveClaimConflict(error)) throw error;
       }
-      return { dispatch: replay, replayed: true };
+
+      // SKIP LOCKED may miss queued work while another transaction owns the
+      // runner row. Wait for that authority mutation/claim to finish, then
+      // distinguish a committed replay from still-eligible queued work.
+      await this.waitForRunnerClaimBarrier(organisationId, runnerId);
+      const replay = await this.getActiveForRunner(organisationId, runnerId, now);
+      if (replay) return { dispatch: replay, replayed: true };
+      if (!(await this.hasEligibleQueued(organisationId, runnerId, now))) return null;
     }
   }
-
   async markRunning(
     organisationId: string,
     id: string,
@@ -458,13 +535,34 @@ export class AIDispatchRepository {
   ): Promise<void> {
     const when = requireDate(whenInput, 'startedAt');
     const result = await this.database.query(
-      `UPDATE ai_dispatches
+      `WITH authority AS (
+         SELECT r.id
+         FROM ai_runners AS r
+         WHERE r.organisation_id = $1 AND r.id = $3
+           AND r.status = 'online' AND r.trust_state = 'trusted' AND r.revoked_at IS NULL
+           AND r.heartbeat_expires_at > $4
+           AND (
+             r.ownership = 'organisation'
+             OR EXISTS (
+               SELECT 1 FROM organisation_memberships AS om
+               WHERE om.organisation_id = r.organisation_id
+                 AND om.user_id = r.owner_user_id AND om.status = 'active'
+               FOR UPDATE
+             )
+           )
+         FOR UPDATE OF r
+       )
+       UPDATE ai_dispatches AS d
        SET state = 'running', started_at = $4, updated_at = $4
-       WHERE organisation_id = $1 AND id = $2 AND runner_id = $3
-         AND state = 'claimed' AND expires_at > $4`,
+       FROM authority
+       WHERE d.organisation_id = $1 AND d.id = $2 AND d.runner_id = $3
+         AND d.state = 'claimed' AND d.expires_at > $4`,
       [organisationId, id, runnerId, when],
     );
-    if (result.rowCount !== 1) throw new Error('claimed ai dispatch not found for running transition');
+    if (result.rowCount === 1) return;
+    const replay = await this.getActiveForRunner(organisationId, runnerId, when);
+    if (replay?.id === id && replay.state === 'running') return;
+    throw new Error('claimed ai dispatch not found for running transition');
   }
 
   async expireDue(
@@ -518,13 +616,35 @@ export class AIDispatchRepository {
     const kind = requireNonBlank(checkpoint.kind, 'checkpoint.kind', 128);
     const metadata = safeMetadata(checkpoint.metadata);
     const result = await this.database.query(
-      `INSERT INTO ai_dispatch_checkpoints
+      `WITH authority AS (
+         SELECT r.id
+         FROM ai_runners AS r
+         JOIN ai_dispatches AS target
+           ON target.organisation_id = r.organisation_id AND target.runner_id = r.id
+         WHERE r.organisation_id = $1 AND target.id = $2 AND target.attempt = $4
+           AND r.status = 'online' AND r.trust_state = 'trusted' AND r.revoked_at IS NULL
+           AND r.heartbeat_expires_at > $8
+           AND (
+             r.ownership = 'organisation'
+             OR EXISTS (
+               SELECT 1 FROM organisation_memberships AS om
+               WHERE om.organisation_id = r.organisation_id
+                 AND om.user_id = r.owner_user_id AND om.status = 'active'
+               FOR UPDATE
+             )
+           )
+         FOR UPDATE OF r
+       )
+       INSERT INTO ai_dispatch_checkpoints
         (id, organisation_id, dispatch_id, attempt, ordinal, kind, metadata, created_at)
        SELECT $3, d.organisation_id, d.id, $4, $5, $6, $7::jsonb, $8
-       FROM ai_dispatches d
+       FROM ai_dispatches AS d
+       JOIN authority AS a ON a.id = d.runner_id
        WHERE d.organisation_id = $1 AND d.id = $2 AND d.attempt = $4
          AND d.state IN ('claimed', 'running')
-         AND d.claimed_at IS NOT NULL AND $8 >= d.claimed_at`,
+         AND d.claimed_at IS NOT NULL AND $8 >= d.claimed_at
+       ON CONFLICT (organisation_id, dispatch_id, attempt, ordinal) DO NOTHING
+       RETURNING id`,
       [
         organisationId,
         dispatchId,
@@ -536,7 +656,18 @@ export class AIDispatchRepository {
         createdAt,
       ],
     );
-    if (result.rowCount !== 1) throw new Error('active ai dispatch not found for checkpoint');
+    if (result.rowCount === 1) return;
+
+    const existing = (await this.listCheckpoints(organisationId, dispatchId)).find(
+      (value) => value.attempt === checkpoint.attempt && value.ordinal === checkpoint.ordinal,
+    );
+    if (existing
+        && existing.kind === kind
+        && sameMetadata(existing.metadata as Record<string, AIDispatchMetadataValue>, metadata)) {
+      return;
+    }
+    if (existing) throw new Error('ai dispatch checkpoint replay conflicts with stored evidence');
+    throw new Error('active ai dispatch not found for checkpoint');
   }
 
   async listCheckpoints(
@@ -578,14 +709,31 @@ export class AIDispatchRepository {
     const when = requireDate(whenInput, `${outcome}At`);
     const evidence = this.normalizeEvidence(input);
     const result = await this.database.query<{ transitioned_count: number; inserted_count: number }>(
-      `WITH transitioned AS (
-         UPDATE ai_dispatches
+      `WITH authority AS (
+         SELECT r.id
+         FROM ai_runners AS r
+         WHERE r.organisation_id = $1 AND r.id = $3
+           AND r.status = 'online' AND r.trust_state = 'trusted' AND r.revoked_at IS NULL
+           AND r.heartbeat_expires_at > $5
+           AND (
+             r.ownership = 'organisation'
+             OR EXISTS (
+               SELECT 1 FROM organisation_memberships AS om
+               WHERE om.organisation_id = r.organisation_id
+                 AND om.user_id = r.owner_user_id AND om.status = 'active'
+               FOR UPDATE
+             )
+           )
+         FOR UPDATE OF r
+       ), transitioned AS (
+         UPDATE ai_dispatches AS d
          SET state = $4, updated_at = $5,
-             succeeded_at = CASE WHEN $4 = 'succeeded' THEN $5 ELSE succeeded_at END,
-             failed_at = CASE WHEN $4 = 'failed' THEN $5 ELSE failed_at END
-         WHERE organisation_id = $1 AND id = $2 AND runner_id = $3
-           AND state = 'running' AND expires_at > $5
-         RETURNING organisation_id, id, attempt
+             succeeded_at = CASE WHEN $4 = 'succeeded' THEN $5 ELSE d.succeeded_at END,
+             failed_at = CASE WHEN $4 = 'failed' THEN $5 ELSE d.failed_at END
+         FROM authority
+         WHERE d.organisation_id = $1 AND d.id = $2 AND d.runner_id = $3
+           AND d.state = 'running' AND d.expires_at > $5
+         RETURNING d.organisation_id, d.id, d.attempt
        ), inserted AS (
          INSERT INTO ai_dispatch_execution_evidence
            (id, organisation_id, dispatch_id, attempt, outcome, metadata,
@@ -617,11 +765,10 @@ export class AIDispatchRepository {
       throw new Error('ai dispatch terminal transition is invalid or conflicts with existing terminal state');
     }
     const stored = (await this.listExecutionEvidence(organisationId, id))[0];
-    if (!stored || stored.id !== evidence.id || stored.outcome !== outcome ||
+    if (!stored || stored.outcome !== outcome ||
         !sameMetadata(stored.metadata as Record<string, AIDispatchMetadataValue>, evidence.metadata) ||
         JSON.stringify(stored.artifactReferences) !== JSON.stringify(evidence.artifactReferences) ||
-        (stored.sessionReference ?? undefined) !== evidence.sessionReference ||
-        stored.createdAt.getTime() !== when.getTime()) {
+        (stored.sessionReference ?? undefined) !== evidence.sessionReference) {
       throw new Error('ai dispatch terminal replay conflicts with stored evidence');
     }
   }

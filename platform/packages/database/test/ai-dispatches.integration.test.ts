@@ -95,6 +95,7 @@ async function seedExecutionContext(
   });
   const runnerRepo = new AIRunnerRepository(pool);
   await runnerRepo.createRunner(runner);
+  await runnerRepo.recordHeartbeat(organisationId, runner.id, CREATED_AT, EXPIRES_AT);
   await runnerRepo.createConnectionBinding({
     id: randomUUID(),
     organisationId,
@@ -254,6 +255,161 @@ describe('AIDispatchRepository', () => {
     expect(await repo.get('org-002', signed.dispatchId)).toBeNull();
   });
 
+  it('refuses to claim when runner liveness or personal membership is no longer valid', async () => {
+    const context = await seedExecutionContext();
+    const repo = new AIDispatchRepository(pool);
+    const first = signedDispatch(context, { taskId: 'task-stale' });
+    await repo.create(first, CREATED_AT);
+
+    await pool.query(
+      `UPDATE ai_runners SET heartbeat_expires_at = $3 WHERE organisation_id = $1 AND id = $2`,
+      ['org-001', context.runnerId, new Date('2026-08-15T12:15:00.000Z')],
+    );
+    const staleAt = new Date('2026-08-15T12:20:00.000Z');
+    expect(await repo.claimNext('org-001', context.runnerId, staleAt)).toBeNull();
+    expect((await repo.get('org-001', first.dispatchId))?.state).toBe('queued');
+
+    await new AIRunnerRepository(pool).recordHeartbeat(
+      'org-001', context.runnerId, new Date('2026-08-15T12:30:00.000Z'), new Date('2026-08-15T13:30:00.000Z'),
+    );
+    await pool.query(
+      `UPDATE organisation_memberships SET status = 'revoked', updated_at = $3
+       WHERE organisation_id = $1 AND user_id = $2`,
+      ['org-001', context.userId, new Date('2026-08-15T12:31:00.000Z')],
+    );
+    expect(await repo.claimNext('org-001', context.runnerId, new Date('2026-08-15T12:32:00.000Z'))).toBeNull();
+    expect((await repo.get('org-001', first.dispatchId))?.state).toBe('queued');
+  });
+  it('refuses replay and execution-progress mutations after runner authority is disabled', async () => {
+    const replayContext = await seedExecutionContext('org-001', 'authority-replay');
+    const repo = new AIDispatchRepository(pool);
+    const replayDispatch = signedDispatch(replayContext, { taskId: 'task-authority-replay' });
+    await repo.create(replayDispatch, CREATED_AT);
+    await repo.claimNext('org-001', replayContext.runnerId, new Date('2026-08-15T12:10:00Z'));
+    await new AIRunnerRepository(pool).setRunnerStatus(
+      'org-001', replayContext.runnerId, 'disabled', new Date('2026-08-15T12:11:00Z'),
+    );
+    expect(await repo.claimNext(
+      'org-001', replayContext.runnerId, new Date('2026-08-15T12:12:00Z'),
+    )).toBeNull();
+    expect((await repo.get('org-001', replayDispatch.dispatchId))?.state).toBe('claimed');
+
+    const startContext = await seedExecutionContext('org-001', 'authority-start');
+    const startDispatch = signedDispatch(startContext, { taskId: 'task-authority-start' });
+    await repo.create(startDispatch, CREATED_AT);
+    await repo.claimNext('org-001', startContext.runnerId, new Date('2026-08-15T12:10:00Z'));
+    await new AIRunnerRepository(pool).setRunnerStatus(
+      'org-001', startContext.runnerId, 'disabled', new Date('2026-08-15T12:11:00Z'),
+    );
+    await expect(repo.markRunning(
+      'org-001', startDispatch.dispatchId, startContext.runnerId, new Date('2026-08-15T12:12:00Z'),
+    )).rejects.toThrow(/claimed ai dispatch/i);
+    expect((await repo.get('org-001', startDispatch.dispatchId))?.state).toBe('claimed');
+    const progressContext = await seedExecutionContext('org-001', 'authority-progress');
+    const progressDispatch = signedDispatch(progressContext, { taskId: 'task-authority-progress' });
+    await repo.create(progressDispatch, CREATED_AT);
+    await repo.claimNext('org-001', progressContext.runnerId, new Date('2026-08-15T12:10:00Z'));
+    await repo.markRunning(
+      'org-001', progressDispatch.dispatchId, progressContext.runnerId, new Date('2026-08-15T12:11:00Z'),
+    );
+    await new AIRunnerRepository(pool).setRunnerStatus(
+      'org-001', progressContext.runnerId, 'disabled', new Date('2026-08-15T12:12:00Z'),
+    );
+    await expect(repo.addCheckpoint('org-001', progressDispatch.dispatchId, {
+      id: randomUUID(), attempt: 1, ordinal: 1, kind: 'status', metadata: { status: 'late' },
+      createdAt: new Date('2026-08-15T12:13:00Z'),
+    })).rejects.toThrow(/active ai dispatch/i);
+    await expect(repo.complete(
+      'org-001', progressDispatch.dispatchId, progressContext.runnerId,
+      new Date('2026-08-15T12:13:00Z'),
+      { id: randomUUID(), metadata: { exitCode: 0 }, artifactReferences: [] },
+    )).rejects.toThrow(/terminal transition/i);
+    expect(await repo.listCheckpoints('org-001', progressDispatch.dispatchId)).toHaveLength(0);
+    expect(await repo.listExecutionEvidence('org-001', progressDispatch.dispatchId)).toHaveLength(0);
+    expect((await repo.get('org-001', progressDispatch.dispatchId))?.state).toBe('running');
+  });
+  it('checkpoint transaction locks only its assigned runner and cannot hide another runner queued claim', async () => {
+    const runnerA = await seedExecutionContext('org-001', 'lock-a');
+    const runnerB = await seedExecutionContext('org-001', 'lock-b');
+    const repo = new AIDispatchRepository(pool);
+    const dispatchA = signedDispatch(runnerA, { taskId: 'task-lock-a' });
+    const dispatchB = signedDispatch(runnerB, { taskId: 'task-lock-b' });
+    await repo.create(dispatchA, CREATED_AT);
+    await repo.create(dispatchB, new Date(CREATED_AT.getTime() + 1));
+    await repo.claimNext('org-001', runnerB.runnerId, new Date('2026-08-15T12:10:00Z'));
+    await repo.markRunning('org-001', dispatchB.dispatchId, runnerB.runnerId, new Date('2026-08-15T12:11:00Z'));
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const txRepo = new AIDispatchRepository(client);
+      await txRepo.addCheckpoint('org-001', dispatchB.dispatchId, {
+        id: randomUUID(), attempt: 1, ordinal: 1, kind: 'status', metadata: { phase: 'held-open' },
+        createdAt: new Date('2026-08-15T12:12:00Z'),
+      });
+      const claimedA = await repo.claimNext('org-001', runnerA.runnerId, new Date('2026-08-15T12:12:01Z'));
+      expect(claimedA?.dispatch.id).toBe(dispatchA.dispatchId);
+      await client.query('ROLLBACK');
+    } finally {
+      client.release();
+    }
+  });
+  it('does not report false no-work when an unrelated runner-row lock releases', async () => {
+    const context = await seedExecutionContext('org-001', 'runner-lock-no-work');
+    const repo = new AIDispatchRepository(pool);
+    const dispatch = signedDispatch(context, { taskId: 'task-runner-lock' });
+    await repo.create(dispatch, CREATED_AT);
+
+    const locker = await pool.connect();
+    try {
+      await locker.query('BEGIN');
+      await locker.query(
+        'SELECT id FROM ai_runners WHERE organisation_id = $1 AND id = $2 FOR UPDATE',
+        ['org-001', context.runnerId],
+      );
+      const release = setTimeout(() => void locker.query('COMMIT'), 500);
+      const claimed = await new AIDispatchRepository(pool).claimNext(
+        'org-001', context.runnerId, new Date('2026-08-15T12:10:01Z'),
+      );
+      clearTimeout(release);
+      expect(claimed?.dispatch.id).toBe(dispatch.dispatchId);
+      expect(claimed?.replayed).toBe(false);
+    } finally {
+      try { await locker.query('ROLLBACK'); } catch { /* transaction may already be committed */ }
+      locker.release();
+    }
+  });
+  it('waits for an in-flight single queued claim and replays it after commit', async () => {
+    const context = await seedExecutionContext('org-001', 'single-claim-replay');
+    const repo = new AIDispatchRepository(pool);
+    const dispatch = signedDispatch(context, { taskId: 'task-single-claim' });
+    await repo.create(dispatch, CREATED_AT);
+
+    const claiming = await pool.connect();
+    try {
+      await claiming.query('BEGIN');
+      await claiming.query(
+        'SELECT id FROM ai_runners WHERE organisation_id = $1 AND id = $2 FOR UPDATE',
+        ['org-001', context.runnerId],
+      );
+      await claiming.query(
+        `UPDATE ai_dispatches SET state = 'claimed', claimed_at = $3, updated_at = $3
+         WHERE organisation_id = $1 AND id = $2`,
+        ['org-001', dispatch.dispatchId, new Date('2026-08-15T12:10:00Z')],
+      );
+
+      const release = setTimeout(() => void claiming.query('COMMIT'), 500);
+      const replay = await new AIDispatchRepository(pool).claimNext(
+        'org-001', context.runnerId, new Date('2026-08-15T12:10:01Z'),
+      );
+      clearTimeout(release);
+      expect(replay?.dispatch.id).toBe(dispatch.dispatchId);
+      expect(replay?.replayed).toBe(true);
+    } finally {
+      try { await claiming.query('ROLLBACK'); } catch { /* transaction may already be committed */ }
+      claiming.release();
+    }
+  });
   it('allows at most one active dispatch per runner under concurrent claims', async () => {
     const context = await seedExecutionContext();
     const repo = new AIDispatchRepository(pool);
@@ -287,6 +443,31 @@ describe('AIDispatchRepository', () => {
     expect(queued.rows).toHaveLength(1);
   });
 
+  it('makes concurrent identical start and terminal retries idempotent despite server-owned evidence ids', async () => {
+    const startContext = await seedExecutionContext('org-001', 'concurrent-start');
+    const repo = new AIDispatchRepository(pool);
+    const startDispatch = signedDispatch(startContext, { taskId: 'task-concurrent-start' });
+    await repo.create(startDispatch, CREATED_AT);
+    await repo.claimNext('org-001', startContext.runnerId, new Date('2026-08-15T12:10:00Z'));
+    const startAt = new Date('2026-08-15T12:11:00Z');
+    await expect(Promise.all([
+      new AIDispatchRepository(pool).markRunning('org-001', startDispatch.dispatchId, startContext.runnerId, startAt),
+      new AIDispatchRepository(pool).markRunning('org-001', startDispatch.dispatchId, startContext.runnerId, startAt),
+    ])).resolves.toEqual([undefined, undefined]);
+
+    const finishContext = await seedExecutionContext('org-001', 'concurrent-finish');
+    const finishDispatch = signedDispatch(finishContext, { taskId: 'task-concurrent-finish' });
+    await repo.create(finishDispatch, CREATED_AT);
+    await repo.claimNext('org-001', finishContext.runnerId, new Date('2026-08-15T12:10:00Z'));
+    await repo.markRunning('org-001', finishDispatch.dispatchId, finishContext.runnerId, startAt);
+    const completedAt = new Date('2026-08-15T12:12:00Z');
+    const common = { metadata: { exitCode: 0 }, artifactReferences: ['artifact:test-report'] };
+    await expect(Promise.all([
+      new AIDispatchRepository(pool).complete('org-001', finishDispatch.dispatchId, finishContext.runnerId, completedAt, { id: randomUUID(), ...common }),
+      new AIDispatchRepository(pool).complete('org-001', finishDispatch.dispatchId, finishContext.runnerId, completedAt, { id: randomUUID(), ...common }),
+    ])).resolves.toEqual([undefined, undefined]);
+    expect(await repo.listExecutionEvidence('org-001', finishDispatch.dispatchId)).toHaveLength(1);
+  });
   it('enforces legal transitions and makes an exact terminal replay idempotent', async () => {
     const context = await seedExecutionContext();
     const repo = new AIDispatchRepository(pool);
@@ -303,7 +484,7 @@ describe('AIDispatchRepository', () => {
     );
     const evidence = {
       id: randomUUID(),
-      metadata: { exitCode: 0, inputTokens: 42 },
+      metadata: { zeta: 'last', alpha: 'first', exitCode: 0, inputTokens: 42 },
       artifactReferences: ['artifact:test-report'],
     };
     const completedAt = new Date('2026-08-15T12:09:00Z');
@@ -313,8 +494,8 @@ describe('AIDispatchRepository', () => {
     ).resolves.toBeUndefined();
     await expect(repo.complete(
       'org-001', signed.dispatchId, context.runnerId,
-      new Date(completedAt.getTime() + 1), evidence,
-    )).rejects.toThrow(/replay conflicts/);
+      new Date(completedAt.getTime() + 1), { ...evidence, id: randomUUID() },
+    )).resolves.toBeUndefined();
 
     const stored = await repo.get('org-001', signed.dispatchId);
     expect(stored?.state).toBe('succeeded');
@@ -323,7 +504,7 @@ describe('AIDispatchRepository', () => {
     expect(storedEvidence[0]).toMatchObject({
       id: evidence.id,
       outcome: 'succeeded',
-      metadata: { exitCode: 0, inputTokens: 42 },
+      metadata: { zeta: 'last', alpha: 'first', exitCode: 0, inputTokens: 42 },
       artifactReferences: ['artifact:test-report'],
     });
 

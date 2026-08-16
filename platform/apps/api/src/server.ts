@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   AIConnectionRepository,
+  AIDispatchRepository,
   AIRunnerRepository,
   AuditRepository,
   ConversationRepository,
@@ -19,6 +20,7 @@ import { buildApp } from './app.js';
 import { AuthService } from './auth-service.js';
 import { AIConnectionService, createRepositoryRunnerAvailabilityResolver } from './ai-connection-service.js';
 import { AIRunnerService } from './ai-runner-service.js';
+import { AIDispatchService } from './ai-dispatch-service.js';
 import { productionConnectionFamilyPolicyRegistry } from './ai-connection-policy.js';
 import { createConfiguredModelGateway, type ModelRuntimeEnvironment } from './model-runtime.js';
 
@@ -84,6 +86,12 @@ export function createRuntimeApp(environment: RuntimeEnvironment) {
     memberships: new MembershipRepository(pool),
     audit: new AuditRepository(pool),
   });
+  const aiDispatchService = new AIDispatchService({
+    runnerService: aiRunnerService,
+    aiRunners,
+    memberships: new MembershipRepository(pool),
+    dispatches: new AIDispatchRepository(pool),
+  });
   const app = buildApp({
     projects: new ProjectRepository(pool),
     knowledge: new KnowledgeRepository(pool),
@@ -93,6 +101,7 @@ export function createRuntimeApp(environment: RuntimeEnvironment) {
     authService: createAuthService(pool),
     aiConnectionService,
     aiRunnerService,
+    aiDispatchService,
     aiConnectionPolicy: productionConnectionFamilyPolicyRegistry,
     allowDevIdentityHeaders: environment.ALLOW_DEV_IDENTITY_HEADERS === 'true',
   });

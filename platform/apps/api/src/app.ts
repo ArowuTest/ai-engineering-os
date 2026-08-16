@@ -39,6 +39,7 @@ import {
 } from './knowledge-candidate-service.js';
 import { AIConnectionService, AIConnectionServiceError } from './ai-connection-service.js';
 import { AIRunnerService } from './ai-runner-service.js';
+import { AIDispatchService, AIDispatchServiceError } from './ai-dispatch-service.js';
 import type { ConnectionFamilyPolicyRegistry } from './ai-connection-policy.js';
 
 export interface AppDependencies {
@@ -51,6 +52,7 @@ export interface AppDependencies {
   authService?: AuthService;
   aiConnectionService?: AIConnectionService;
   aiRunnerService?: AIRunnerService;
+  aiDispatchService?: AIDispatchService;
   aiConnectionPolicy?: ConnectionFamilyPolicyRegistry;
   allowDevIdentityHeaders?: boolean;
 }
@@ -241,6 +243,14 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     }
     if (error instanceof AIRunnerRequestError) {
       return reply.code(error.statusCode).send({ error: error.code });
+    }
+    if (error instanceof AIDispatchServiceError) {
+      const status = error.code === 'invalid_request' ? 400
+        : error.code === 'unauthorized' ? 401
+        : error.code === 'forbidden' || error.code === 'policy_blocked' ? 403
+        : error.code === 'not_found' ? 404
+        : 409;
+      return reply.code(status).send({ error: error.code });
     }
     if (error instanceof AuthServiceError) {
       const status = error.code === 'invalid_credentials' ? 401
@@ -1038,6 +1048,95 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     }
   });
 
+  function requireAIDispatchService(): AIDispatchService {
+    if (!dependencies.aiDispatchService) {
+      throw new AIRunnerRequestError(401, 'runner_dispatch_not_configured');
+    }
+    return dependencies.aiDispatchService;
+  }
+
+  function dispatchParam(request: FastifyRequest): string {
+    const params = request.params as { dispatchId?: unknown };
+    return typeof params.dispatchId === 'string' ? params.dispatchId : '';
+  }
+
+  function dispatchMetadata(body: JsonObject): Record<string, unknown> {
+    const value = body.metadata;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new DomainValidationError('metadata');
+    }
+    return value as Record<string, unknown>;
+  }
+
+  function dispatchArtifactReferences(body: JsonObject): string[] {
+    const value = body.artifactReferences;
+    if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+      throw new DomainValidationError('artifactReferences');
+    }
+    return value.map((item) => (item as string));
+  }
+
+  app.post('/runner/v1/claim', async (request, reply) => {
+    assertAllowedFields(bodyObject(request.body), []);
+    const result = await requireAIDispatchService().claimNext({ credential: runnerBearerCredential(request) });
+    if (!result) return reply.code(204).send();
+    return reply.send(result);
+  });
+
+  app.post('/runner/v1/dispatches/:dispatchId/running', async (request, reply) => {
+    assertAllowedFields(bodyObject(request.body), []);
+    await requireAIDispatchService().markRunning({
+      credential: runnerBearerCredential(request), dispatchId: dispatchParam(request),
+    });
+    return reply.code(204).send();
+  });
+
+  app.post('/runner/v1/dispatches/:dispatchId/checkpoints', async (request, reply) => {
+    const body = bodyObject(request.body);
+    assertAllowedFields(body, ['ordinal', 'kind', 'metadata']);
+    if (!Number.isInteger(body.ordinal) || (body.ordinal as number) < 1) throw new DomainValidationError('ordinal');
+    const kind = stringField(body, 'kind');
+    if (!kind) throw new DomainValidationError('kind');
+    await requireAIDispatchService().addCheckpoint({
+      credential: runnerBearerCredential(request), dispatchId: dispatchParam(request),
+      ordinal: body.ordinal as number, kind, metadata: dispatchMetadata(body),
+    });
+    return reply.code(204).send();
+  });
+
+  async function terminalDispatch(request: FastifyRequest, outcome: 'complete' | 'fail'): Promise<void> {
+    const body = bodyObject(request.body);
+    assertAllowedFields(body, ['metadata', 'artifactReferences', 'sessionReference']);
+    const sessionReference = body.sessionReference;
+    if (sessionReference !== undefined && typeof sessionReference !== 'string') {
+      throw new DomainValidationError('sessionReference');
+    }
+    const input = {
+      credential: runnerBearerCredential(request), dispatchId: dispatchParam(request),
+      metadata: dispatchMetadata(body), artifactReferences: dispatchArtifactReferences(body),
+      ...(sessionReference === undefined ? {} : { sessionReference }),
+    };
+    if (outcome === 'complete') await requireAIDispatchService().complete(input);
+    else await requireAIDispatchService().fail(input);
+  }
+
+  app.post('/runner/v1/dispatches/:dispatchId/complete', async (request, reply) => {
+    await terminalDispatch(request, 'complete');
+    return reply.code(204).send();
+  });
+
+  app.post('/runner/v1/dispatches/:dispatchId/fail', async (request, reply) => {
+    await terminalDispatch(request, 'fail');
+    return reply.code(204).send();
+  });
+
+  app.post('/runner/v1/dispatches/:dispatchId/cancel', async (request, reply) => {
+    assertAllowedFields(bodyObject(request.body), []);
+    await requireAIDispatchService().cancelObserved({
+      credential: runnerBearerCredential(request), dispatchId: dispatchParam(request),
+    });
+    return reply.code(204).send();
+  });
   // ---------------- AI connection administration ----------------
 
   function requireAIConnectionService(): AIConnectionService {
