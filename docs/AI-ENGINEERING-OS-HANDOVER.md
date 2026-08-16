@@ -1,12 +1,13 @@
 # AI Engineering OS — Living Handover
 
 **Purpose:** Operational continuation document for a new ChatGPT/Claude/Codex agent if the current thread ends.
-**Last updated:** 16 August 2026, subscription-execution reconciliation Task 4 accepted at `e5d0f430`; Task 5 execution-environment boundary is next; OpenSandbox trial-provider architecture and ECC-reuse/Review-Council supersession decisions locked.
+**Last updated:** 16 August 2026, subscription-execution reconciliation Tasks 4 and 5 accepted; Task 6 outbound runner loop is active next; OpenSandbox trial-provider architecture and ECC-reuse/Review-Council supersession decisions remain locked.
 **Repository:** `ArowuTest/ai-engineering-os`
 **Local repo:** `<LOCAL_REPO_ROOT>`
 **Current source-of-truth branch for active work:** `feature/subscription-execution-reconciled` in `.worktrees/subscription-execution-reconciled`; accepted prior foundation remains on `main` until this reconciliation slice passes all gates and is merged.
 **Current Agent Bridge integration:** production feature tip `de947859f57cdfa5806934efc33fae1afe969e86`, handover tip `c4011f978f5358645b5b356cb17b97ee8344aca0`, merged locally into `main` as `cb7597a36f4025a831ae09dd377714d698a6ba69`; verify `origin/main` and GitHub CI before treating remote integration as complete.
 **Task 4 accepted dispatch protocol:** `e5d0f430 feat: expose trusted runner dispatch protocol`; exact acceptance packet SHA-256 `aa32a1f0955aae824ff652e55f9bac223793f386d7fb86c63a47633ea38d7bbf`. Fresh isolated PostgreSQL 17 evidence: 26/26 focused, 33/33 static, 188/188 unit, 268/268 integration, root/web TypeScript PASS, migration 007 unchanged. Fresh blind council: Grok 4.6, GLM 5.2 and Gemini 3.7 Flash returned `NO FINDINGS`; Qwen 3.8 Max timed out and is recorded only as reviewer availability failure.
+**Task 5 accepted execution-environment boundary:** `52f037446cb67258e73b36c9f14437419655b49f feat: define execution environment boundary`; exact final acceptance packet SHA-256 `e15fa8a1fa995e44892e7eabae5b8788db1617c65d947a4f7e1e2981bac723e7`. Fresh evidence: 24/24 focused execution-environment tests, 33/33 static, 212/212 unit, 268/268 isolated PostgreSQL 17 integration, root/web TypeScript PASS and diff checks PASS. Final blind council: Grok 4.6, GLM 5.2 and Gemini 3.7 Flash returned `NO FINDINGS`; Qwen 3.8 Max produced no verdict and is recorded only as reviewer availability failure. The local provider preserves the trusted-runner/worktree model while enforcing structured argv with `shell:false`, cwd/symlink containment, environment allowlisting, bounded UTF-8-safe evidence, provider-owned cancellation/lifecycle authority, and reusable provider-neutral contract tests.
 **Task 8 product merge SHA:** `69ebe73b549f2fa2c1e63a7fcf13c28771290a2d` (subsequent documentation-only closeout commits may advance `main`).
 
 ## 1. Product principle
@@ -336,3 +337,10 @@ Task 8 is complete.
 - `main` is now the sole source of truth for this slice.
 
 **Immediate next action (16 Aug 2026):** Task 4 is accepted at `e5d0f430`. Begin Task 5 by classifying and reusing suitable inherited ECC execution/process/sandboxing capability behind the generic `ExecutionEnvironmentProvider`, then implement the minimal secure local provider under strict RED -> GREEN. Do not rebuild mature ECC execution capability in parallel. OpenSandbox remains the first managed provider behind this same boundary after the local provider contract is proven.
+### Subscription-execution reconciliation — Task 5 accepted / Task 6 next
+
+Task 5 is accepted at `52f037446cb67258e73b36c9f14437419655b49f` (`feat: define execution environment boundary`). The final exact-source blind-review packet is SHA-256 `e15fa8a1fa995e44892e7eabae5b8788db1617c65d947a4f7e1e2981bac723e7`.
+
+The generic `ExecutionEnvironmentProvider` boundary is now proven for the trusted local route. It deliberately reuses ECC hardening invariants rather than creating a competing execution engine, and remains provider-neutral so OpenSandbox can implement the same contract as the first managed `trial` provider. OpenSandbox is still a separately gated dependent POC, not part of Task 5 acceptance.
+
+**Immediate next action:** Task 6 — build the outbound-only runner loop over the accepted dispatch API + signed-envelope verifier + `ExecutionEnvironmentProvider`: claim -> verify -> prepare -> running -> execute -> checkpoint -> terminal. Start with RED tests for tampered/expired dispatch refusal, heartbeat/claim ordering, workspace-root enforcement, cancellation and provider-failure terminal evidence. No inbound listener or generic remote shell.

@@ -113,12 +113,14 @@
 - Produces: `ExecutionEnvironmentProvider`, `PreparedExecutionEnvironment`, `StructuredExecutionCommand`, `ExecutionEvent`, `ExecutionResult`.
 - Required methods: `prepare`, `execute`, `cancel`, scoped file/artifact access, `destroy`.
 
-- [ ] **Step 1: Write RED tests** proving `shell:false` argv execution, cwd containment, traversal rejection, symlink escape rejection, environment allowlisting, bounded stdout/stderr/event capture, cancellation scoped to the spawned process tree, and deterministic cleanup.
-- [ ] **Step 2: Verify RED** with `npm --prefix platform exec vitest run packages/execution-environment/test/local-provider.test.ts`.
-- [ ] **Step 3: Implement minimal local provider** using injected process/filesystem primitives so tests do not execute arbitrary shell syntax.
-- [ ] **Step 4: Verify GREEN** focused tests and typecheck.
-- [ ] **Step 5: Add a contract test helper** reusable by future managed providers; do not mention OpenSandbox types in the generic package.
-- [ ] **Step 6: Commit** `feat: define execution environment boundary`.
+- [x] **Step 1: Write RED tests** proving `shell:false` argv execution, cwd containment, traversal rejection, symlink escape rejection, environment allowlisting, bounded stdout/stderr/event capture, cancellation scoped to the spawned process tree, and deterministic cleanup.
+- [x] **Step 2: Verify RED** with `npm --prefix platform exec vitest run packages/execution-environment/test/local-provider.test.ts`.
+- [x] **Step 3: Implement minimal local provider** using injected process/filesystem primitives so tests do not execute arbitrary shell syntax.
+- [x] **Step 4: Verify GREEN** focused tests and typecheck.
+- [x] **Step 5: Add a contract test helper** reusable by future managed providers; do not mention OpenSandbox types in the generic package.
+- [x] **Step 6: Commit** `feat: define execution environment boundary`.
+
+**Accepted 16 Aug 2026:** `52f037446cb67258e73b36c9f14437419655b49f` (`feat: define execution environment boundary`). Final packet SHA-256 `e15fa8a1fa995e44892e7eabae5b8788db1617c65d947a4f7e1e2981bac723e7`; focused 24/24, static 33/33, unit 212/212, isolated PostgreSQL 17 integration 268/268, root/web TypeScript and diff checks green. Final blind council: Grok 4.6, GLM 5.2 and Gemini 3.7 Flash returned `NO FINDINGS`; Qwen 3.8 Max was an availability failure only.
 
 ### Task 6: Build outbound runner loop on the environment boundary
 
