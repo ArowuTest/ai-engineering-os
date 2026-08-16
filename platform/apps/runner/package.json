@@ -1,0 +1,11 @@
+{
+  "name": "@engineering-os/runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@engineering-os/execution-environment": "0.1.0",
+    "@engineering-os/runner-protocol": "0.1.0"
+  },
+  "exports": "./src/runner-loop.ts"
+}
