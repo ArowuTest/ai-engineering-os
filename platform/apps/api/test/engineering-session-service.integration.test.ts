@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { createProject } from '@engineering-os/domain';
+import { createCollaborativeMemoryRecord, createProject } from '@engineering-os/domain';
 import {
   AuditRepository,
   CollaborativeMemoryRepository,
@@ -135,6 +135,65 @@ describe('EngineeringSessionService', () => {
     });
     expect(otherContext.items.map((item) => item.memoryId)).not.toContain(handoff.memory.id);
   });
+  it('enforces harness-targeted memory against the current OS session harness', async () => {
+    const { alice, project } = await setupProject();
+    const sessions = service();
+    const codex = await sessions.startSession({
+      organisationId: 'org-001', projectId: project.id, actorUserId: alice.id,
+      taskId: 'task-codex-target', agentId: 'agent-codex-target', harnessId: 'codex', now,
+    });
+    const claude = await sessions.startSession({
+      organisationId: 'org-001', projectId: project.id, actorUserId: alice.id,
+      taskId: 'task-claude-target', agentId: 'agent-claude-target', harnessId: 'claude-code', now,
+    });
+    const memory = createCollaborativeMemoryRecord({
+      id: 'mem_harness_target', organisationId: 'org-001', projectId: project.id,
+      scope: 'project', visibility: 'project_shared', kind: 'context', trust: 'unreviewed',
+      title: 'Claude-only continuation', content: 'Use only in the Claude Code execution context.',
+      targetHarnessIds: ['claude-code'], createdBy: alice.id, sourceType: 'human', createdAt: now,
+    });
+    await new CollaborativeMemoryRepository(pool).createMemory(memory);
+
+    const codexContext = await sessions.getContext({
+      organisationId: 'org-001', projectId: project.id, actorUserId: alice.id, sessionId: codex.id,
+      maxItems: 20, maxBytes: 20_000,
+    });
+    const claudeContext = await sessions.getContext({
+      organisationId: 'org-001', projectId: project.id, actorUserId: alice.id, sessionId: claude.id,
+      maxItems: 20, maxBytes: 20_000,
+    });
+    expect(codexContext.items.map((item) => item.memoryId)).not.toContain(memory.id);
+    expect(claudeContext.items.map((item) => item.memoryId)).toContain(memory.id);
+  });
+
+  it('does not let a session caller self-assert reviewer identity or adjudication authority', async () => {
+    const { alice, project } = await setupProject();
+    const sessions = service();
+    const session = await sessions.startSession({
+      organisationId: 'org-001', projectId: project.id, actorUserId: alice.id,
+      taskId: 'task-review-forge', agentId: 'agent-review-forge', harnessId: 'codex', now,
+    });
+    const memories = new CollaborativeMemoryRepository(pool);
+    await memories.createMemory(createCollaborativeMemoryRecord({
+      id: 'mem_forged_reviewer', organisationId: 'org-001', projectId: project.id,
+      scope: 'review', visibility: 'reviewer_private', reviewerAssignmentId: 'assignment-secret',
+      kind: 'evidence', trust: 'unreviewed', title: 'Reviewer private', content: 'Peer finding context.',
+      createdBy: alice.id, sourceType: 'review_council', createdAt: now,
+    }));
+    await memories.createMemory(createCollaborativeMemoryRecord({
+      id: 'mem_forged_adjudication', organisationId: 'org-001', projectId: project.id,
+      scope: 'review', visibility: 'adjudication_shared', kind: 'evidence', trust: 'unreviewed',
+      title: 'Adjudication private', content: 'Adjudication context.', createdBy: alice.id,
+      sourceType: 'review_council', createdAt: now,
+    }));
+
+    await expect(sessions.getContext({
+      organisationId: 'org-001', projectId: project.id, actorUserId: alice.id, sessionId: session.id,
+      maxItems: 20, maxBytes: 20_000, reviewerAssignmentId: 'assignment-secret',
+      reviewPhase: 'adjudicating', canAdjudicate: true,
+    })).rejects.toThrow('review_context_requires_review_council_authority');
+  });
+
   it('continues the same OS session after runner/harness/environment replacement without losing private memory', async () => {
     const { alice, project } = await setupProject();
     const sessions = service();

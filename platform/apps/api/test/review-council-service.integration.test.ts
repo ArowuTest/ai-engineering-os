@@ -3,6 +3,8 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   createCollaborativeMemoryRecord,
   createProject,
+  createReviewFinding,
+  digestReviewMaterial,
   type ReviewerOutcomeInput,
 } from '@engineering-os/domain';
 import {
@@ -119,9 +121,103 @@ describe('ReviewCouncilService blind collection', () => {
     ]);
     expect(callA.memory.items.map((item) => item.memoryId)).not.toContain('mem_20260817_assignment-b');
     expect(callB.memory.items.map((item) => item.memoryId)).not.toContain('mem_20260817_assignment-a');
+    expect(callA.memory.excluded.some((item) => 'memoryId' in item && item.memoryId === 'mem_20260817_assignment-b')).toBe(false);
+    expect(callB.memory.excluded.some((item) => 'memoryId' in item && item.memoryId === 'mem_20260817_assignment-a')).toBe(false);
     expect(callA.assignment).toMatchObject({ routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1' });
     expect(callB.assignment).toMatchObject({ routeId: 'route-b', modelId: 'model-b', modelVersion: 'v2' });
     expect((await new ReviewCouncilRepository(pool).getRun('org-001', created.run.id))?.status).toBe('adjudicating');
+  });
+
+  it('binds invariant IDs into the durable packet identity and rejects collection with changed invariants', async () => {
+    const { userId, project } = await seedProject();
+    const executor = new FakeExecutor(new Map());
+    const council = service(executor);
+    const created = await council.createBlindRun({
+      id: 'run-invariant-binding', organisationId: 'org-001', projectId: project.id,
+      actorUserId: userId, source, evidence, invariantIds: ['runner-local-auth'],
+      reviewers: [
+        { id: 'assignment-invariant', role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1' },
+      ], now,
+    });
+
+    await expect(council.collectBlindReviews({
+      organisationId: 'org-001', projectId: project.id, actorUserId: userId,
+      reviewRunId: created.run.id, source, evidence, invariantIds: ['different-invariant'],
+      maxMemoryItems: 10, maxMemoryBytes: 10_000,
+    })).rejects.toThrow(/packet|invariant|digest/i);
+    expect(executor.calls).toHaveLength(0);
+    expect((await new ReviewCouncilRepository(pool).getRun('org-001', created.run.id))?.status).toBe('collecting');
+  });
+
+  it('classifies runtime-invalid reviewer outcomes and finding drafts as malformed availability failures', async () => {
+    const { userId, project } = await seedProject();
+    const results = new Map<string, ReviewExecutionResult>([
+      ['assignment-invalid-outcome', {
+        outcome: { kind: 'completed', content: 123 }, findings: [],
+      } as unknown as ReviewExecutionResult],
+      ['assignment-invalid-finding', {
+        outcome: { kind: 'completed', content: 'A malformed structured finding follows.' },
+        findings: [{ severity: 'invalid', category: '', summary: '', evidenceReferences: [] }],
+      } as unknown as ReviewExecutionResult],
+    ]);
+    const council = service(new FakeExecutor(results));
+    const created = await council.createBlindRun({
+      id: 'run-runtime-malformed', organisationId: 'org-001', projectId: project.id,
+      actorUserId: userId, source, evidence, invariantIds: ['runner-local-auth'],
+      reviewers: [
+        { id: 'assignment-invalid-outcome', role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1' },
+        { id: 'assignment-invalid-finding', role: 'security', routeId: 'route-b', modelId: 'model-b', modelVersion: 'v1' },
+      ], now,
+    });
+    const collected = await council.collectBlindReviews({
+      organisationId: 'org-001', projectId: project.id, actorUserId: userId, reviewRunId: created.run.id,
+      source, evidence, invariantIds: ['runner-local-auth'], maxMemoryItems: 10, maxMemoryBytes: 10_000,
+    });
+    expect(collected.map((entry) => [entry.assignment.id, entry.outcome])).toEqual([
+      ['assignment-invalid-finding', { status: 'availability_failure', reason: 'malformed_output' }],
+      ['assignment-invalid-outcome', { status: 'availability_failure', reason: 'malformed_output' }],
+    ]);
+    expect(await new ReviewCouncilRepository(pool).listFindings('org-001', created.run.id)).toEqual([]);
+    expect((await new ReviewCouncilRepository(pool).getRun('org-001', created.run.id))?.status).toBe('adjudicating');
+  });
+
+  it('does not persist reviewer completion or findings after the run is invalidated in flight', async () => {
+    const { userId, project } = await seedProject();
+    let reviewRunId = '';
+    const repository = new ReviewCouncilRepository(pool);
+    const executor: ReviewCouncilExecutor = {
+      async review() {
+        await repository.invalidateRunForSource(
+          'org-001', reviewRunId, digestReviewMaterial(source + '\nchanged-in-flight:true'),
+          new Date(now.getTime() + 1),
+        );
+        return {
+          outcome: { kind: 'completed', content: 'Finding from stale execution.' },
+          findings: [{
+            severity: 'important', category: 'correctness', summary: 'Must not persist after invalidation',
+            evidenceReferences: ['src/a.ts:1-2'],
+          }],
+        };
+      },
+    };
+    const council = service(executor);
+    const created = await council.createBlindRun({
+      id: 'run-in-flight-invalidated', organisationId: 'org-001', projectId: project.id,
+      actorUserId: userId, source, evidence, invariantIds: ['runner-local-auth'],
+      reviewers: [
+        { id: 'assignment-in-flight', role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1' },
+      ], now,
+    });
+    reviewRunId = created.run.id;
+
+    await expect(council.collectBlindReviews({
+      organisationId: 'org-001', projectId: project.id, actorUserId: userId, reviewRunId,
+      source, evidence, invariantIds: ['runner-local-auth'], maxMemoryItems: 10, maxMemoryBytes: 10_000,
+    })).rejects.toThrow(/invalidated|collecting/i);
+    const assignments = await repository.listReviewerAssignments('org-001', reviewRunId);
+    expect(assignments[0]?.status).toBe('assigned');
+    expect(await repository.listFindings('org-001', reviewRunId)).toEqual([]);
+    expect((await repository.getRun('org-001', reviewRunId))?.status).toBe('invalidated');
   });
 
   it('records timeout, empty, and malformed reviewer results only as availability failures', async () => {
@@ -159,6 +255,76 @@ describe('ReviewCouncilService blind collection', () => {
 });
 
 describe('ReviewCouncilService adjudication and acceptance', () => {
+  it('rejects adjudication while a run is still collecting even if a finding row already exists', async () => {
+    const { userId, project } = await seedProject();
+    const council = service(new FakeExecutor(new Map()));
+    const created = await council.createBlindRun({
+      id: 'run-premature-adjudication', organisationId: 'org-001', projectId: project.id,
+      actorUserId: userId, source, evidence, invariantIds: ['runner-local-auth'],
+      reviewers: [
+        { id: 'assignment-premature', role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1' },
+      ], now,
+    });
+    const finding = createReviewFinding({
+      id: 'finding-premature', reviewRunId: created.run.id, reviewerAssignmentId: 'assignment-premature',
+      severity: 'important', category: 'correctness', summary: 'Premature finding',
+      evidenceReferences: ['src/a.ts:1-2'], createdAt: now,
+    });
+    await new ReviewCouncilRepository(pool).createFinding('org-001', finding);
+
+    await expect(council.adjudicateFinding({
+      organisationId: 'org-001', projectId: project.id, actorUserId: userId,
+      reviewRunId: created.run.id, findingId: finding.id, status: 'REJECTED',
+      rationale: 'Should not be reachable while collecting.', evidenceReferences: ['src/a.ts:1-2'], now,
+    })).rejects.toThrow(/collecting|adjudicating/i);
+    expect(await new ReviewCouncilRepository(pool).listAdjudications('org-001', created.run.id)).toEqual([]);
+  });
+
+  it('rejects adjudication, rechallenge, and gate evaluation after source invalidation', async () => {
+    const { userId, project } = await seedProject();
+    const results = new Map<string, ReviewExecutionResult>([[
+      'assignment-stale', {
+        outcome: { kind: 'completed', content: 'One disputed finding.' },
+        findings: [{ severity: 'important', category: 'correctness', summary: 'Stale finding', evidenceReferences: ['src/a.ts:3-4'] }],
+      },
+    ]]);
+    const council = service(new FakeExecutor(results));
+    const created = await council.createBlindRun({
+      id: 'run-stale-lifecycle', organisationId: 'org-001', projectId: project.id,
+      actorUserId: userId, source, evidence, invariantIds: ['runner-local-auth'],
+      reviewers: [
+        { id: 'assignment-stale', role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1' },
+      ], now,
+    });
+    const collected = await council.collectBlindReviews({
+      organisationId: 'org-001', projectId: project.id, actorUserId: userId, reviewRunId: created.run.id,
+      source, evidence, invariantIds: ['runner-local-auth'], maxMemoryItems: 10, maxMemoryBytes: 10_000,
+    });
+    const finding = collected[0]!.findings[0]!;
+    await council.adjudicateFinding({
+      organisationId: 'org-001', projectId: project.id, actorUserId: userId,
+      reviewRunId: created.run.id, findingId: finding.id, status: 'REJECTED',
+      rationale: 'Initial adjudication before source change.', evidenceReferences: ['src/a.ts:3-4'], now,
+    });
+    await council.invalidateRunForSource({
+      organisationId: 'org-001', projectId: project.id, actorUserId: userId, reviewRunId: created.run.id,
+      replacementSource: source + '\nchanged:true', now: new Date(now.getTime() + 1),
+    });
+
+    await expect(council.adjudicateFinding({
+      organisationId: 'org-001', projectId: project.id, actorUserId: userId,
+      reviewRunId: created.run.id, findingId: finding.id, status: 'CONFIRMED',
+      rationale: 'Stale adjudication must fail.', evidenceReferences: ['src/a.ts:3-4'], now: new Date(now.getTime() + 2),
+    })).rejects.toThrow(/invalidated|adjudicating/i);
+    await expect(council.createPrivateRechallenge({
+      organisationId: 'org-001', projectId: project.id, actorUserId: userId, reviewRunId: created.run.id,
+      findingId: finding.id, prompt: 'Stale rechallenge must fail.', now: new Date(now.getTime() + 3),
+    })).rejects.toThrow(/invalidated|adjudicating/i);
+    await expect(council.evaluateGate({
+      organisationId: 'org-001', projectId: project.id, actorUserId: userId, reviewRunId: created.run.id,
+    })).rejects.toThrow(/invalidated|adjudicating/i);
+  });
+
   it('blocks acceptance on one independently confirmed Important finding even when another reviewer has no findings', async () => {
     const { userId, project } = await seedProject();
     const results = new Map<string, ReviewExecutionResult>([

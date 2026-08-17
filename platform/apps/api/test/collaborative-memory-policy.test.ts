@@ -92,8 +92,11 @@ describe('Collaborative Memory context policy', () => {
     const selected = selectCollaborativeContext(records, context(), { maxItems: 10, maxBytes: 4096 });
     expect(selected.items.map((item) => item.memoryId)).toEqual(['mem-project']);
     expect(selected.items[0]?.reason).toBe('project_shared');
-    expect(selected.excluded.map((item) => item.memoryId).sort()).toEqual(['mem-rejected', 'mem-superseded']);
-    expect(selected.excluded.every((item) => item.reason === 'policy_denied')).toBe(true);
+    expect(selected.excluded).toEqual([
+      { reason: 'policy_denied' },
+      { reason: 'policy_denied' },
+    ]);
+    expect(selected.excluded.every((item) => !('memoryId' in item))).toBe(true);
   });
 
   it('enforces item and byte budgets deterministically without returning partial memory bodies', () => {
@@ -104,11 +107,11 @@ describe('Collaborative Memory context policy', () => {
     ];
     const byCount = selectCollaborativeContext(records, context(), { maxItems: 2, maxBytes: 4096 });
     expect(byCount.items.map((item) => item.memoryId)).toEqual(['mem-a', 'mem-b']);
-    expect(byCount.excluded.find((item) => item.memoryId === 'mem-c')?.reason).toBe('budget_exceeded');
+    expect(byCount.excluded.find((item) => item.reason === 'budget_exceeded' && item.memoryId === 'mem-c')?.reason).toBe('budget_exceeded');
 
     const byBytes = selectCollaborativeContext(records, context(), { maxItems: 10, maxBytes: 25 });
     expect(byBytes.items.map((item) => item.memoryId)).toEqual(['mem-a']);
     expect(byBytes.items[0]?.record.content).toBe('A'.repeat(20));
-    expect(byBytes.excluded.find((item) => item.memoryId === 'mem-b')?.reason).toBe('budget_exceeded');
+    expect(byBytes.excluded.find((item) => item.reason === 'budget_exceeded' && item.memoryId === 'mem-b')?.reason).toBe('budget_exceeded');
   });
 });

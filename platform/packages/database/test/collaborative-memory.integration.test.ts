@@ -131,6 +131,8 @@ describe('CollaborativeMemoryRepository', () => {
     expect(await memoryRepo.listLinks('org-001', project.id, second.id)).toEqual([
       { sourceMemoryId: 'mem-002', targetMemoryId: 'mem-001', relation: 'supersedes' },
     ]);
+    expect(await memoryRepo.listProjectMemoriesForUser('org-001', project.id, userId)).toEqual([second]);
+    expect(await memoryRepo.getProjectMemory('org-001', project.id, first.id)).toEqual(first);
 
     const session = createEngineeringSession({
       id: 'session-001', organisationId: 'org-001', projectId: project.id,

@@ -37,7 +37,7 @@ describe('Review Council domain', () => {
   it('creates a run with exact source/evidence digests and a stable packet digest', () => {
     const run = createReviewRun({
       id: 'review-run-1', organisationId: 'org-1', projectId: 'project-1',
-      sourceDigest, evidenceDigest, createdBy: 'user-1', createdAt: now
+      sourceDigest, evidenceDigest, invariantIds: ['inv-1'], createdBy: 'user-1', createdAt: now
     });
     expect(run.status).toBe('collecting');
     expect(run.sourceDigest).toBe(sourceDigest);
@@ -45,10 +45,25 @@ describe('Review Council domain', () => {
     expect(run.packetDigest).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it('binds invariant IDs into packet identity and rejects invariant drift', () => {
+    const first = createReviewRun({
+      id: 'review-run-1', organisationId: 'org-1', projectId: 'project-1',
+      sourceDigest, evidenceDigest, invariantIds: ['inv-1'], createdBy: 'user-1', createdAt: now
+    });
+    const second = createReviewRun({
+      id: 'review-run-2', organisationId: 'org-1', projectId: 'project-1',
+      sourceDigest, evidenceDigest, invariantIds: ['inv-2'], createdBy: 'user-1', createdAt: now
+    });
+    expect(first.packetDigest).not.toBe(second.packetDigest);
+    expect(() => buildBlindReviewPacket(first, {
+      source, evidence, invariantIds: ['inv-2'],
+    })).toThrowError(DomainValidationError);
+  });
+
   it('builds the same blind packet for every comparative reviewer', () => {
     const run = createReviewRun({
       id: 'review-run-1', organisationId: 'org-1', projectId: 'project-1',
-      sourceDigest, evidenceDigest, createdBy: 'user-1', createdAt: now
+      sourceDigest, evidenceDigest, invariantIds: ['inv-1'], createdBy: 'user-1', createdAt: now
     });
     const first = buildBlindReviewPacket(run, { source, evidence, invariantIds: ['inv-1'] });
     const second = buildBlindReviewPacket(run, { source, evidence, invariantIds: ['inv-1'] });
@@ -119,7 +134,7 @@ describe('Review Council domain', () => {
   it('invalidates prior acceptance when material source changes', () => {
     const run = createReviewRun({
       id: 'review-run-1', organisationId: 'org-1', projectId: 'project-1',
-      sourceDigest, evidenceDigest, createdBy: 'user-1', createdAt: now
+      sourceDigest, evidenceDigest, invariantIds: ['inv-1'], createdBy: 'user-1', createdAt: now
     });
     const changed = invalidateReviewRunForSource(run, digestReviewMaterial(`${source}\nchanged`), now);
     expect(changed.status).toBe('invalidated');
@@ -151,7 +166,7 @@ describe('Review Council domain', () => {
   it('rejects malformed digests and invalid calibration ratios', () => {
     expect(() => createReviewRun({
       id: 'review-run-1', organisationId: 'org-1', projectId: 'project-1',
-      sourceDigest: 'not-a-digest', evidenceDigest, createdBy: 'user-1', createdAt: now
+      sourceDigest: 'not-a-digest', evidenceDigest, invariantIds: ['inv-1'], createdBy: 'user-1', createdAt: now
     })).toThrowError(DomainValidationError);
 
     expect(() => createCalibrationSnapshot({

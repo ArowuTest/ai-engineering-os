@@ -217,17 +217,23 @@ export class EngineeringSessionService {
     const session = await this.requireOwnedSession(
       input.organisationId, input.projectId, input.actorUserId, input.sessionId,
     );
+    if (
+      input.reviewerAssignmentId !== undefined ||
+      input.reviewPhase !== undefined ||
+      input.canAdjudicate !== undefined
+    ) {
+      throw new Error('review_context_requires_review_council_authority');
+    }
     const candidates = await this.dependencies.collaborativeMemory.listProjectMemoriesForUser(
       input.organisationId, input.projectId, input.actorUserId,
     );
     const access: MemoryAccessContext = {
       organisationId: input.organisationId, projectId: input.projectId, userId: input.actorUserId,
       sessionId: session.id, agentId: session.agentId,
+      ...(session.harnessId === undefined ? {} : { harnessId: session.harnessId }),
       ...(session.workstreamId === undefined ? {} : { workstreamId: session.workstreamId }),
       projectAuthorized: true, organisationAuthorized: true,
-      reviewPhase: input.reviewPhase ?? 'normal',
-      ...(input.reviewerAssignmentId === undefined ? {} : { reviewerAssignmentId: input.reviewerAssignmentId }),
-      ...(input.canAdjudicate === undefined ? {} : { canAdjudicate: input.canAdjudicate }),
+      reviewPhase: 'normal',
     };
     return selectCollaborativeContext(candidates, access, {
       maxItems: input.maxItems, maxBytes: input.maxBytes,

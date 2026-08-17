@@ -150,6 +150,13 @@ export class CollaborativeMemoryRepository {
        JOIN users u ON u.id = pm.user_id
        WHERE m.organisation_id = $1 AND m.project_id = $2 AND pm.user_id = $3
          AND pm.status = 'active' AND om.status = 'active' AND u.status = 'active'
+         AND NOT EXISTS (
+           SELECT 1 FROM collaborative_memory_links supersession
+           WHERE supersession.organisation_id = m.organisation_id
+             AND supersession.project_id = m.project_id
+             AND supersession.target_memory_id = m.id
+             AND supersession.relation = 'supersedes'
+         )
        ORDER BY m.created_at ASC, m.id ASC`,
       [organisationId, projectId, userId],
     );

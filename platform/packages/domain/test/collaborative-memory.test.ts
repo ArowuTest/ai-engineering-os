@@ -178,6 +178,41 @@ describe('Collaborative Memory domain', () => {
     expect(canRecallCollaborativeMemory(record, { ...context, agentId: 'agent-other' })).toBe(false);
     expect(canRecallCollaborativeMemory(record, { ...context, workstreamId: 'frontend', agentId: 'agent-test' })).toBe(false);
   });
+  it('normalizes empty target dimensions so targetability is stable before and after persistence', () => {
+    const byAgent = createCollaborativeMemoryRecord({
+      ...baseMemory(), scope: 'workstream', visibility: 'workstream_shared', workstreamId: 'payments',
+      targetAgentIds: ['agent-test'], targetSessionIds: [],
+    });
+    expect(byAgent.targetSessionIds).toBeUndefined();
+    expect(canRecallCollaborativeMemory(byAgent, {
+      organisationId: 'org-001', projectId: 'project-001', workstreamId: 'payments',
+      agentId: 'agent-test', projectAuthorized: true, organisationAuthorized: true,
+    })).toBe(true);
+
+    const bySession = createCollaborativeMemoryRecord({
+      ...baseMemory(), scope: 'workstream', visibility: 'workstream_shared', workstreamId: 'payments',
+      targetAgentIds: [], targetSessionIds: ['session-test'],
+    });
+    expect(bySession.targetAgentIds).toBeUndefined();
+    expect(canRecallCollaborativeMemory(bySession, {
+      organisationId: 'org-001', projectId: 'project-001', workstreamId: 'payments',
+      sessionId: 'session-test', projectAuthorized: true, organisationAuthorized: true,
+    })).toBe(true);
+  });
+
+  it('enforces explicit harness targeting in recall contexts', () => {
+    const record = createCollaborativeMemoryRecord({
+      ...baseMemory(), targetHarnessIds: ['claude-code'],
+    });
+    const context = {
+      organisationId: 'org-001', projectId: 'project-001',
+      projectAuthorized: true, organisationAuthorized: true,
+    };
+    expect(canRecallCollaborativeMemory(record, { ...context, harnessId: 'claude-code' })).toBe(true);
+    expect(canRecallCollaborativeMemory(record, { ...context, harnessId: 'codex' })).toBe(false);
+    expect(canRecallCollaborativeMemory(record, context)).toBe(false);
+  });
+
   it('validates explicit memory links instead of inferring last-writer-wins', () => {
     expect(createMemoryLink({
       sourceMemoryId: 'mem-002', targetMemoryId: 'mem-001', relation: 'supersedes',

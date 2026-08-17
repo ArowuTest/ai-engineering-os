@@ -85,6 +85,38 @@ function nonBlankPrompt(value: unknown): string {
   }
   return value.trim();
 }
+function normalizeReviewerExecutionResult(
+  value: unknown,
+  reviewRunId: string,
+  reviewerAssignmentId: string,
+  resolvedAt: Date,
+): { outcome: ReviewerOutcome; findings: ReviewFinding[] } {
+  try {
+    if (value === null || typeof value !== 'object') throw new TypeError('review result must be an object');
+    const result = value as { outcome?: unknown; findings?: unknown };
+    const outcome = classifyReviewerOutcome(result.outcome as ReviewerOutcomeInput);
+    if (outcome.status === 'availability_failure') return { outcome, findings: [] };
+    if (!Array.isArray(result.findings)) throw new TypeError('review findings must be an array');
+    const findings = result.findings.map((draft) => {
+      if (draft === null || typeof draft !== 'object') throw new TypeError('review finding must be an object');
+      const candidate = draft as Record<string, unknown>;
+      return createReviewFinding({
+        id: stableGeneratedId('finding'),
+        reviewRunId,
+        reviewerAssignmentId,
+        severity: candidate.severity as ReviewSeverity,
+        category: candidate.category as string,
+        summary: candidate.summary as string,
+        evidenceReferences: candidate.evidenceReferences as string[],
+        createdAt: resolvedAt,
+      });
+    });
+    return { outcome, findings };
+  } catch {
+    return { outcome: { status: 'availability_failure', reason: 'malformed_output' }, findings: [] };
+  }
+}
+
 async function requireActiveProjectUser(
   users: UserRepository,
   memberships: MembershipRepository,
@@ -105,6 +137,40 @@ async function requireActiveProjectUser(
   ) {
     throw new Error('forbidden');
   }
+}
+
+async function requireCollectingRun(
+  reviewCouncil: ReviewCouncilRepository,
+  organisationId: string,
+  projectId: string,
+  reviewRunId: string,
+  lock = false,
+): Promise<ReviewRun> {
+  const run = lock
+    ? await reviewCouncil.getRunForUpdate(organisationId, reviewRunId)
+    : await reviewCouncil.getRun(organisationId, reviewRunId);
+  if (!run || run.projectId !== projectId) throw new Error('review run not found');
+  if (run.status !== 'collecting') {
+    throw new Error(`review run is ${run.status}, not collecting`);
+  }
+  return run;
+}
+
+async function requireAdjudicatingRun(
+  reviewCouncil: ReviewCouncilRepository,
+  organisationId: string,
+  projectId: string,
+  reviewRunId: string,
+  lock = false,
+): Promise<ReviewRun> {
+  const run = lock
+    ? await reviewCouncil.getRunForUpdate(organisationId, reviewRunId)
+    : await reviewCouncil.getRun(organisationId, reviewRunId);
+  if (!run || run.projectId !== projectId) throw new Error('review run not found');
+  if (run.status !== 'adjudicating') {
+    throw new Error(`review run is ${run.status}, not adjudicating`);
+  }
+  return run;
 }
 
 export class ReviewCouncilService {
@@ -151,6 +217,7 @@ export class ReviewCouncilService {
       projectId: input.projectId,
       sourceDigest: digestReviewMaterial(input.source),
       evidenceDigest: digestReviewMaterial(input.evidence),
+      invariantIds: input.invariantIds,
       createdBy: input.actorUserId,
       createdAt,
     });
@@ -255,13 +322,19 @@ export class ReviewCouncilService {
     }> = [];
 
     for (const execution of executions) {
-      const outcome = classifyReviewerOutcome(execution.result.outcome);
       const resolvedAt = new Date();
+      const normalized = normalizeReviewerExecutionResult(
+        execution.result, input.reviewRunId, execution.assignment.id, resolvedAt,
+      );
+      const outcome = normalized.outcome;
       const persisted = await this.dependencies.unitOfWork.run(async ({
         users, memberships, reviewCouncil, audit,
       }) => {
         await requireActiveProjectUser(
           users, memberships, input.organisationId, input.projectId, input.actorUserId, true,
+        );
+        await requireCollectingRun(
+          reviewCouncil, input.organisationId, input.projectId, input.reviewRunId, true,
         );
         if (outcome.status === 'availability_failure') {
           const assignment = await reviewCouncil.recordReviewerAvailabilityFailure(
@@ -289,20 +362,9 @@ export class ReviewCouncilService {
           digestReviewMaterial(outcome.content),
           resolvedAt,
         );
-        const findings: ReviewFinding[] = [];
-        for (const draft of execution.result.findings) {
-          const finding = createReviewFinding({
-            id: stableGeneratedId('finding'),
-            reviewRunId: input.reviewRunId,
-            reviewerAssignmentId: assignment.id,
-            severity: draft.severity,
-            category: draft.category,
-            summary: draft.summary,
-            evidenceReferences: draft.evidenceReferences,
-            createdAt: resolvedAt,
-          });
+        const findings = normalized.findings;
+        for (const finding of findings) {
           await reviewCouncil.createFinding(input.organisationId, finding);
-          findings.push(finding);
         }
         await audit.append(createAuditEvent({
           organisationId: input.organisationId,
@@ -345,27 +407,28 @@ export class ReviewCouncilService {
     evidenceReferences: string[];
     now?: Date;
   }): Promise<FindingAdjudication> {
-    await this.requireActiveProjectUser(input.organisationId, input.projectId, input.actorUserId);
-    await this.requireRunForProject(input.organisationId, input.projectId, input.reviewRunId);
-    const finding = await this.dependencies.reviewCouncil.getFinding(
-      input.organisationId, input.reviewRunId, input.findingId,
-    );
-    if (!finding) throw new Error('review finding not found');
-    const adjudication = createFindingAdjudication({
-      id: stableGeneratedId('adjudication'),
-      findingId: finding.id,
-      reviewRunId: input.reviewRunId,
-      status: input.status,
-      rationale: input.rationale,
-      evidenceReferences: input.evidenceReferences,
-      adjudicatedBy: input.actorUserId,
-      createdAt: validDate(input.now),
-    });
-
-    await this.dependencies.unitOfWork.run(async ({ users, memberships, reviewCouncil, audit }) => {
+    const createdAt = validDate(input.now);
+    return this.dependencies.unitOfWork.run(async ({ users, memberships, reviewCouncil, audit }) => {
       await requireActiveProjectUser(
         users, memberships, input.organisationId, input.projectId, input.actorUserId, true,
       );
+      await requireAdjudicatingRun(
+        reviewCouncil, input.organisationId, input.projectId, input.reviewRunId, true,
+      );
+      const finding = await reviewCouncil.getFinding(
+        input.organisationId, input.reviewRunId, input.findingId,
+      );
+      if (!finding) throw new Error('review finding not found');
+      const adjudication = createFindingAdjudication({
+        id: stableGeneratedId('adjudication'),
+        findingId: finding.id,
+        reviewRunId: input.reviewRunId,
+        status: input.status,
+        rationale: input.rationale,
+        evidenceReferences: input.evidenceReferences,
+        adjudicatedBy: input.actorUserId,
+        createdAt,
+      });
       await reviewCouncil.createAdjudication(input.organisationId, adjudication);
       await audit.append(createAuditEvent({
         organisationId: input.organisationId,
@@ -377,8 +440,8 @@ export class ReviewCouncilService {
         subjectId: finding.id,
         metadata: { status: adjudication.status, adjudicationId: adjudication.id },
       }));
+      return adjudication;
     });
-    return adjudication;
   }
 
   async evaluateGate(input: {
@@ -387,18 +450,19 @@ export class ReviewCouncilService {
     actorUserId: string;
     reviewRunId: string;
   }) {
-    await this.requireActiveProjectUser(input.organisationId, input.projectId, input.actorUserId);
-    const run = await this.requireRunForProject(input.organisationId, input.projectId, input.reviewRunId);
-    const findings = await this.dependencies.reviewCouncil.listFindings(input.organisationId, input.reviewRunId);
-    const adjudications = await this.dependencies.reviewCouncil.listAdjudications(
-      input.organisationId, input.reviewRunId,
-    );
-    const gate = evaluateReviewGate(findings, adjudications);
-    if (gate.status === 'blocked' && run.status === 'adjudicating') {
-      await this.dependencies.unitOfWork.run(async ({ users, memberships, reviewCouncil, audit }) => {
-        await requireActiveProjectUser(
-          users, memberships, input.organisationId, input.projectId, input.actorUserId, true,
-        );
+    return this.dependencies.unitOfWork.run(async ({ users, memberships, reviewCouncil, audit }) => {
+      await requireActiveProjectUser(
+        users, memberships, input.organisationId, input.projectId, input.actorUserId, true,
+      );
+      await requireAdjudicatingRun(
+        reviewCouncil, input.organisationId, input.projectId, input.reviewRunId, true,
+      );
+      const findings = await reviewCouncil.listFindings(input.organisationId, input.reviewRunId);
+      const adjudications = await reviewCouncil.listAdjudications(
+        input.organisationId, input.reviewRunId,
+      );
+      const gate = evaluateReviewGate(findings, adjudications);
+      if (gate.status === 'blocked') {
         await reviewCouncil.markBlocked(input.organisationId, input.reviewRunId);
         await audit.append(createAuditEvent({
           organisationId: input.organisationId, projectId: input.projectId,
@@ -406,9 +470,9 @@ export class ReviewCouncilService {
           subjectType: 'review_run', subjectId: input.reviewRunId,
           metadata: { blockingFindingIds: gate.blockingFindingIds },
         }));
-      });
-    }
-    return gate;
+      }
+      return gate;
+    });
   }
   async createPrivateRechallenge(input: {
     organisationId: string;
@@ -419,38 +483,39 @@ export class ReviewCouncilService {
     prompt: string;
     now?: Date;
   }): Promise<{ rechallenge: ReviewerRechallenge; assignment: ReviewerAssignmentRecord }> {
-    await this.requireActiveProjectUser(input.organisationId, input.projectId, input.actorUserId);
-    await this.requireRunForProject(input.organisationId, input.projectId, input.reviewRunId);
-    const finding = await this.dependencies.reviewCouncil.getFinding(
-      input.organisationId, input.reviewRunId, input.findingId,
-    );
-    if (!finding) throw new Error('review finding not found');
-    const adjudications = (await this.dependencies.reviewCouncil.listAdjudications(
-      input.organisationId, input.reviewRunId,
-    )).filter((entry) => entry.findingId === finding.id);
-    const latest = adjudications.at(-1);
-    if (!latest || !['REJECTED', 'PARTIALLY_VALID'].includes(latest.status)) {
-      throw new Error('private rechallenge requires a rejected or partially-valid adjudication');
-    }
-    const assignment = await this.dependencies.reviewCouncil.getReviewerAssignment(
-      input.organisationId, input.reviewRunId, finding.reviewerAssignmentId,
-    );
-    if (!assignment) throw new Error('original reviewer assignment not found');
     const prompt = nonBlankPrompt(input.prompt);
-    const rechallenge = createReviewerRechallenge({
-      id: stableGeneratedId('rechallenge'),
-      reviewRunId: input.reviewRunId,
-      findingId: finding.id,
-      reviewerAssignmentId: assignment.id,
-      adjudicationStatus: latest.status as 'REJECTED' | 'PARTIALLY_VALID',
-      promptDigest: digestReviewMaterial(prompt),
-      createdAt: validDate(input.now),
-    });
-
-    await this.dependencies.unitOfWork.run(async ({ users, memberships, reviewCouncil, audit }) => {
+    const createdAt = validDate(input.now);
+    return this.dependencies.unitOfWork.run(async ({ users, memberships, reviewCouncil, audit }) => {
       await requireActiveProjectUser(
         users, memberships, input.organisationId, input.projectId, input.actorUserId, true,
       );
+      await requireAdjudicatingRun(
+        reviewCouncil, input.organisationId, input.projectId, input.reviewRunId, true,
+      );
+      const finding = await reviewCouncil.getFinding(
+        input.organisationId, input.reviewRunId, input.findingId,
+      );
+      if (!finding) throw new Error('review finding not found');
+      const adjudications = (await reviewCouncil.listAdjudications(
+        input.organisationId, input.reviewRunId,
+      )).filter((entry) => entry.findingId === finding.id);
+      const latest = adjudications.at(-1);
+      if (!latest || !['REJECTED', 'PARTIALLY_VALID'].includes(latest.status)) {
+        throw new Error('private rechallenge requires a rejected or partially-valid adjudication');
+      }
+      const assignment = await reviewCouncil.getReviewerAssignment(
+        input.organisationId, input.reviewRunId, finding.reviewerAssignmentId,
+      );
+      if (!assignment) throw new Error('original reviewer assignment not found');
+      const rechallenge = createReviewerRechallenge({
+        id: stableGeneratedId('rechallenge'),
+        reviewRunId: input.reviewRunId,
+        findingId: finding.id,
+        reviewerAssignmentId: assignment.id,
+        adjudicationStatus: latest.status as 'REJECTED' | 'PARTIALLY_VALID',
+        promptDigest: digestReviewMaterial(prompt),
+        createdAt,
+      });
       await reviewCouncil.createRechallenge(input.organisationId, rechallenge);
       await audit.append(createAuditEvent({
         organisationId: input.organisationId,
@@ -462,8 +527,8 @@ export class ReviewCouncilService {
         subjectId: rechallenge.id,
         metadata: { findingId: finding.id, reviewerAssignmentId: assignment.id },
       }));
+      return { rechallenge, assignment };
     });
-    return { rechallenge, assignment };
   }
   async invalidateRunForSource(input: {
     organisationId: string;

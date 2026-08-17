@@ -60,6 +60,7 @@ function makeRun(project: Awaited<ReturnType<typeof seedProject>>) {
     projectId: project.projectId,
     sourceDigest,
     evidenceDigest,
+    invariantIds: ['runner-local-auth'],
     createdBy: project.userId,
     createdAt: now
   });

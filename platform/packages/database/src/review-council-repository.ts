@@ -124,6 +124,7 @@ function mapRun(row: ReviewRunRow): ReviewRun {
     projectId: row.project_id,
     sourceDigest: row.source_digest,
     evidenceDigest: row.evidence_digest,
+    packetDigest: row.packet_digest,
     createdBy: row.created_by,
     createdAt: new Date(row.created_at),
   });
@@ -241,6 +242,16 @@ export class ReviewCouncilRepository {
   async getRun(organisationId: string, reviewRunId: string): Promise<ReviewRun | null> {
     const result = await this.database.query<ReviewRunRow>(
       `SELECT ${RUN_COLUMNS} FROM review_runs WHERE organisation_id = $1 AND id = $2`,
+      [organisationId, reviewRunId],
+    );
+    return result.rows[0] ? mapRun(result.rows[0]) : null;
+  }
+
+  async getRunForUpdate(organisationId: string, reviewRunId: string): Promise<ReviewRun | null> {
+    const result = await this.database.query<ReviewRunRow>(
+      `SELECT ${RUN_COLUMNS} FROM review_runs
+       WHERE organisation_id = $1 AND id = $2
+       FOR UPDATE`,
       [organisationId, reviewRunId],
     );
     return result.rows[0] ? mapRun(result.rows[0]) : null;

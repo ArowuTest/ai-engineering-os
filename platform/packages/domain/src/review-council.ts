@@ -25,7 +25,7 @@ export interface ReviewRun {
   invalidatedAt?: Date;
   invalidatedBySourceDigest?: string;
 }
-export interface CreateReviewRunInput {
+interface ReviewRunIdentityInput {
   id: string;
   organisationId: string;
   projectId: string;
@@ -34,6 +34,11 @@ export interface CreateReviewRunInput {
   createdBy: string;
   createdAt: Date;
 }
+
+export type CreateReviewRunInput = ReviewRunIdentityInput & (
+  | { invariantIds: string[]; packetDigest?: never }
+  | { packetDigest: string; invariantIds?: never }
+);
 
 export interface BlindReviewPacket {
   reviewRunId: string;
@@ -142,6 +147,20 @@ function requireStringList(value: unknown, field: string): string[] {
   }
   return normalized;
 }
+function normalizeInvariantIds(value: unknown): string[] {
+  return requireStringList(value, 'invariantIds').map((id, index) =>
+    requireStableIdentifier(id, `invariantIds[${index}]`)
+  );
+}
+
+function digestReviewPacketIdentity(
+  sourceDigest: string,
+  evidenceDigest: string,
+  invariantIds: string[],
+): string {
+  return digestReviewMaterial(JSON.stringify({ sourceDigest, evidenceDigest, invariantIds }));
+}
+
 function requireRatio(value: unknown, field: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
     throw new DomainValidationError(field, `${field} must be between 0 and 1`);
@@ -164,13 +183,16 @@ export function digestReviewMaterial(value: string | Uint8Array): string {
 export function createReviewRun(input: CreateReviewRunInput): ReviewRun {
   const sourceDigest = requireDigest(input.sourceDigest, 'sourceDigest');
   const evidenceDigest = requireDigest(input.evidenceDigest, 'evidenceDigest');
+  const packetDigest = input.packetDigest !== undefined
+    ? requireDigest(input.packetDigest, 'packetDigest')
+    : digestReviewPacketIdentity(sourceDigest, evidenceDigest, normalizeInvariantIds(input.invariantIds));
   return {
     id: requireStableIdentifier(input.id, 'id'),
     organisationId: requireStableIdentifier(input.organisationId, 'organisationId'),
     projectId: requireStableIdentifier(input.projectId, 'projectId'),
     sourceDigest,
     evidenceDigest,
-    packetDigest: digestReviewMaterial(`${sourceDigest}:${evidenceDigest}`),
+    packetDigest,
     status: 'collecting',
     createdBy: requireNonBlank(input.createdBy, 'createdBy'),
     createdAt: requireDate(input.createdAt, 'createdAt')
@@ -187,14 +209,17 @@ export function buildBlindReviewPacket(
   if (digestReviewMaterial(material.evidence) !== run.evidenceDigest) {
     throw new DomainValidationError('evidence', 'evidence material does not match run evidenceDigest');
   }
+  const invariantIds = normalizeInvariantIds(material.invariantIds);
+  const packetDigest = digestReviewPacketIdentity(run.sourceDigest, run.evidenceDigest, invariantIds);
+  if (packetDigest !== run.packetDigest) {
+    throw new DomainValidationError('invariantIds', 'review packet invariants do not match run packetDigest');
+  }
   return {
     reviewRunId: requireStableIdentifier(run.id, 'reviewRunId'),
     packetDigest: requireDigest(run.packetDigest, 'packetDigest'),
     source: material.source,
     evidence: material.evidence,
-    invariantIds: requireStringList(material.invariantIds, 'invariantIds').map((id, index) =>
-      requireStableIdentifier(id, `invariantIds[${index}]`)
-    )
+    invariantIds
   };
 }
 export function createReviewFinding(input: CreateReviewFindingInput): ReviewFinding {

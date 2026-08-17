@@ -125,6 +125,7 @@ export interface MemoryAccessContext {
   sessionId?: string;
   userId?: string;
   agentId?: string;
+  harnessId?: string;
   reviewerAssignmentId?: string;
   reviewPhase?: 'normal' | 'blind_collecting' | 'adjudicating';
   canAdjudicate?: boolean;
@@ -298,7 +299,7 @@ export function createCollaborativeMemoryRecord(input: CreateCollaborativeMemory
     ['targetSessionIds', identifierList(input.targetSessionIds, 'targetSessionIds')],
     ['targetHarnessIds', identifierList(input.targetHarnessIds, 'targetHarnessIds')],
   ] as const) {
-    if (value !== undefined) (record as unknown as Record<string, unknown>)[key] = value;
+    if (value !== undefined && value.length > 0) (record as unknown as Record<string, unknown>)[key] = value;
   }
   return record;
 }
@@ -390,8 +391,9 @@ function sameTenantProject(record: CollaborativeMemoryRecord, context: MemoryAcc
 }
 
 function targetsAllow(record: CollaborativeMemoryRecord, context: MemoryAccessContext): boolean {
-  if (record.targetAgentIds && !record.targetAgentIds.includes(context.agentId ?? '')) return false;
-  if (record.targetSessionIds && !record.targetSessionIds.includes(context.sessionId ?? '')) return false;
+  if (record.targetAgentIds && record.targetAgentIds.length > 0 && !record.targetAgentIds.includes(context.agentId ?? '')) return false;
+  if (record.targetSessionIds && record.targetSessionIds.length > 0 && !record.targetSessionIds.includes(context.sessionId ?? '')) return false;
+  if (record.targetHarnessIds && record.targetHarnessIds.length > 0 && !record.targetHarnessIds.includes(context.harnessId ?? '')) return false;
   return true;
 }
 export function canRecallCollaborativeMemory(

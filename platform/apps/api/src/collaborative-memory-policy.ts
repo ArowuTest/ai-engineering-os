@@ -29,10 +29,9 @@ export interface SelectedMemoryContextItem {
   record: CollaborativeMemoryRecord;
 }
 
-export interface ExcludedMemoryContextItem {
-  memoryId: string;
-  reason: 'policy_denied' | 'budget_exceeded';
-}
+export type ExcludedMemoryContextItem =
+  | { reason: 'policy_denied' }
+  | { memoryId: string; reason: 'budget_exceeded' };
 const INCLUSION_REASON_BY_VISIBILITY: Record<MemoryVisibility, MemoryInclusionReason> = {
   session_private: 'session_private_owner',
   workstream_shared: 'workstream_shared',
@@ -73,7 +72,7 @@ export function selectCollaborativeContext(
   for (const record of records) {
     const visibility = resolveMemoryVisibility(record, context);
     if (!visibility.allowed) {
-      excluded.push({ memoryId: record.id, reason: 'policy_denied' });
+      excluded.push({ reason: 'policy_denied' });
       continue;
     }
 
