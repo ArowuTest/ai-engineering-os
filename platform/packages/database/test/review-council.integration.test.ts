@@ -66,6 +66,25 @@ function makeRun(project: Awaited<ReturnType<typeof seedProject>>) {
   });
 }
 
+describe('ReviewCouncilRepository preflight bounds', () => {
+  it('rejects overlong reviewer modelVersion before any database query', async () => {
+    let queryCount = 0;
+    const database = {
+      async query() {
+        queryCount += 1;
+        throw new Error('database should not be reached');
+      },
+    } as unknown as ConstructorParameters<typeof ReviewCouncilRepository>[0];
+    const repo = new ReviewCouncilRepository(database);
+    await expect(repo.createReviewerAssignment({
+      id: 'assignment-bounds', organisationId: 'org-001', reviewRunId: 'run-bounds',
+      role: 'general', routeId: 'route-1', modelId: 'model-1', modelVersion: 'x'.repeat(257),
+      packetDigest: digestReviewMaterial('packet-bounds'), createdAt: now,
+    })).rejects.toThrow(/modelVersion/i);
+    expect(queryCount).toBe(0);
+  });
+});
+
 describe('review council migration schema', () => {
   it('applies migration 010 and creates only bounded review-governance surfaces', async () => {
     const migrations = await pool.query<{ name: string }>('SELECT name FROM schema_migrations ORDER BY name ASC');

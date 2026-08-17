@@ -2,6 +2,9 @@ import { createHash } from 'node:crypto';
 import { DomainValidationError, requireNonBlank, requireStableIdentifier } from './validation.js';
 
 export const REVIEW_SEVERITIES = ['critical', 'important', 'minor', 'observation'] as const;
+export const REVIEW_MAX_TEXT_LENGTH = 16_384;
+export const REVIEW_MAX_EVIDENCE_REFERENCES = 64;
+export const REVIEW_MAX_MODEL_VERSION_LENGTH = 256;
 export type ReviewSeverity = (typeof REVIEW_SEVERITIES)[number];
 
 export const REVIEW_RUN_STATUSES = ['collecting', 'adjudicating', 'blocked', 'accepted', 'invalidated'] as const;
@@ -157,6 +160,30 @@ function requireStringList(value: unknown, field: string): string[] {
   }
   return normalized;
 }
+function requireBoundedNonBlank(value: unknown, field: string, maxLength: number): string {
+  const normalized = requireNonBlank(value, field);
+  if (normalized.length > maxLength) {
+    throw new DomainValidationError(field, `${field} must be at most ${maxLength} characters`);
+  }
+  return normalized;
+}
+
+function requireBoundedStringList(
+  value: unknown,
+  field: string,
+  options: { minLength?: number; maxLength: number },
+): string[] {
+  const normalized = requireStringList(value, field);
+  const minLength = options.minLength ?? 0;
+  if (normalized.length < minLength || normalized.length > options.maxLength) {
+    const lower = minLength > 0 ? ` between ${minLength} and` : ' at most';
+    throw new DomainValidationError(
+      field,
+      `${field} must contain${lower} ${options.maxLength} items`,
+    );
+  }
+  return normalized;
+}
 function normalizeInvariantIds(value: unknown): string[] {
   return requireStringList(value, 'invariantIds').map((id, index) =>
     requireStableIdentifier(id, `invariantIds[${index}]`)
@@ -239,23 +266,25 @@ export function createReviewFinding(input: CreateReviewFindingInput): ReviewFind
     reviewerAssignmentId: requireStableIdentifier(input.reviewerAssignmentId, 'reviewerAssignmentId'),
     severity: requireSeverity(input.severity),
     category: requireStableIdentifier(input.category, 'category'),
-    summary: requireNonBlank(input.summary, 'summary'),
-    evidenceReferences: requireStringList(input.evidenceReferences, 'evidenceReferences'),
+    summary: requireBoundedNonBlank(input.summary, 'summary', REVIEW_MAX_TEXT_LENGTH),
+    evidenceReferences: requireBoundedStringList(input.evidenceReferences, 'evidenceReferences', {
+      maxLength: REVIEW_MAX_EVIDENCE_REFERENCES,
+    }),
     createdAt: requireDate(input.createdAt, 'createdAt')
   };
 }
 
 export function createFindingAdjudication(input: FindingAdjudication): FindingAdjudication {
-  const evidenceReferences = requireStringList(input.evidenceReferences, 'evidenceReferences');
-  if (evidenceReferences.length === 0) {
-    throw new DomainValidationError('evidenceReferences', 'adjudication requires evidence');
-  }
+  const evidenceReferences = requireBoundedStringList(input.evidenceReferences, 'evidenceReferences', {
+    minLength: 1,
+    maxLength: REVIEW_MAX_EVIDENCE_REFERENCES,
+  });
   return {
     id: requireStableIdentifier(input.id, 'id'),
     findingId: requireStableIdentifier(input.findingId, 'findingId'),
     reviewRunId: requireStableIdentifier(input.reviewRunId, 'reviewRunId'),
     status: requireAdjudicationStatus(input.status),
-    rationale: requireNonBlank(input.rationale, 'rationale'),
+    rationale: requireBoundedNonBlank(input.rationale, 'rationale', REVIEW_MAX_TEXT_LENGTH),
     evidenceReferences,
     adjudicatedBy: requireNonBlank(input.adjudicatedBy, 'adjudicatedBy'),
     createdAt: requireDate(input.createdAt, 'createdAt')
@@ -296,7 +325,9 @@ export function createCalibrationSnapshot(input: CalibrationSnapshot): Calibrati
     organisationId: requireStableIdentifier(input.organisationId, 'organisationId'),
     routeId: requireStableIdentifier(input.routeId, 'routeId'),
     modelId: requireStableIdentifier(input.modelId, 'modelId'),
-    modelVersion: requireNonBlank(input.modelVersion, 'modelVersion'),
+    modelVersion: requireBoundedNonBlank(
+      input.modelVersion, 'modelVersion', REVIEW_MAX_MODEL_VERSION_LENGTH,
+    ),
     sampleSize: input.sampleSize,
     usefulFindingRate: requireRatio(input.usefulFindingRate, 'usefulFindingRate'),
     falsePositiveRate: requireRatio(input.falsePositiveRate, 'falsePositiveRate'),
@@ -315,7 +346,7 @@ export function createArchitectureInvariant(input: ArchitectureInvariant): Archi
   return {
     id: requireStableIdentifier(input.id, 'id'),
     key: requireStableIdentifier(input.key, 'key'),
-    description: requireNonBlank(input.description, 'description'),
+    description: requireBoundedNonBlank(input.description, 'description', REVIEW_MAX_TEXT_LENGTH),
     severity,
     createdAt: requireDate(input.createdAt, 'createdAt')
   };

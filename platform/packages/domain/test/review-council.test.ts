@@ -102,6 +102,31 @@ describe('Review Council domain', () => {
     });
   });
 
+  it('mirrors durable Review Council text and evidence bounds before persistence', () => {
+    const findingBase = {
+      id: 'finding-bounds', reviewRunId: 'review-run-1', reviewerAssignmentId: 'assignment-1',
+      severity: 'important' as const, category: 'correctness', createdAt: now,
+    };
+    expect(createReviewFinding({ ...findingBase, summary: 'x'.repeat(16_384), evidenceReferences: Array.from({ length: 64 }, (_, i) => `ref-${i}`) }).summary).toHaveLength(16_384);
+    expect(() => createReviewFinding({ ...findingBase, summary: 'x'.repeat(16_385), evidenceReferences: [] })).toThrowError(DomainValidationError);
+    expect(() => createReviewFinding({ ...findingBase, summary: 'bounded', evidenceReferences: Array.from({ length: 65 }, (_, i) => `ref-${i}`) })).toThrowError(DomainValidationError);
+
+    const adjudicationBase = {
+      id: 'adj-bounds', findingId: 'finding-bounds', reviewRunId: 'review-run-1',
+      status: 'CONFIRMED' as const, adjudicatedBy: 'user-1', createdAt: now,
+    };
+    expect(() => createFindingAdjudication({ ...adjudicationBase, rationale: 'x'.repeat(16_385), evidenceReferences: ['ref-1'] })).toThrowError(DomainValidationError);
+    expect(() => createFindingAdjudication({ ...adjudicationBase, rationale: 'bounded', evidenceReferences: Array.from({ length: 65 }, (_, i) => `ref-${i}`) })).toThrowError(DomainValidationError);
+
+    expect(() => createCalibrationSnapshot({
+      id: 'cal-bounds', organisationId: 'org-1', routeId: 'route-1', modelId: 'model-1', modelVersion: 'x'.repeat(257),
+      sampleSize: 1, usefulFindingRate: 1, falsePositiveRate: 0, availabilityRate: 1, medianLatencyMs: 1, averageCostUsd: 0, createdAt: now,
+    })).toThrowError(DomainValidationError);
+    expect(() => createArchitectureInvariant({
+      id: 'inv-bounds', key: 'bounded-invariant', description: 'x'.repeat(16_385), severity: 'important', createdAt: now,
+    })).toThrowError(DomainValidationError);
+  });
+
   it('supports the locked adjudication states and private rechallenge eligibility', () => {
     const finding = materialFinding();
     const rejected = createFindingAdjudication({

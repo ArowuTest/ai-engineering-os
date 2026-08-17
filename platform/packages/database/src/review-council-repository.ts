@@ -6,6 +6,7 @@ import {
   createReviewRun,
   createReviewerRechallenge,
   invalidateReviewRunForSource,
+  REVIEW_MAX_MODEL_VERSION_LENGTH,
   requireNonBlank,
   requireStableIdentifier,
   type ArchitectureInvariant,
@@ -111,7 +112,13 @@ function normalizeAssignment(input: CreateReviewerAssignmentInput): ReviewerAssi
     role: requireStableIdentifier(input.role, 'role'),
     routeId: requireStableIdentifier(input.routeId, 'routeId'),
     modelId: requireStableIdentifier(input.modelId, 'modelId'),
-    modelVersion: requireNonBlank(input.modelVersion, 'modelVersion'),
+    modelVersion: (() => {
+      const value = requireNonBlank(input.modelVersion, 'modelVersion');
+      if (value.length > REVIEW_MAX_MODEL_VERSION_LENGTH) {
+        throw new TypeError(`modelVersion must be at most ${REVIEW_MAX_MODEL_VERSION_LENGTH} characters`);
+      }
+      return value;
+    })(),
     packetDigest: requireDigest(input.packetDigest, 'packetDigest'),
     status: 'assigned',
     createdAt: requireDate(input.createdAt, 'createdAt'),

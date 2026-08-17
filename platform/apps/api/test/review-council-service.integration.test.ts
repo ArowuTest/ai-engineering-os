@@ -162,6 +162,14 @@ describe('ReviewCouncilService blind collection', () => {
       ['assignment-unknown-kind', {
         outcome: { kind: 'unexpected_runtime_state', content: 'Looks like content but kind is unknown.' }, findings: [],
       } as unknown as ReviewExecutionResult],
+      ['assignment-oversized-summary', {
+        outcome: { kind: 'completed', content: 'Oversized summary follows.' },
+        findings: [{ severity: 'important', category: 'correctness', summary: 'x'.repeat(16_385), evidenceReferences: [] }],
+      } as unknown as ReviewExecutionResult],
+      ['assignment-too-many-refs', {
+        outcome: { kind: 'completed', content: 'Too many evidence references follow.' },
+        findings: [{ severity: 'important', category: 'correctness', summary: 'bounded', evidenceReferences: Array.from({ length: 65 }, (_, i) => `ref-${i}`) }],
+      } as unknown as ReviewExecutionResult],
     ]);
     const council = service(new FakeExecutor(results));
     const created = await council.createBlindRun({
@@ -171,6 +179,8 @@ describe('ReviewCouncilService blind collection', () => {
         { id: 'assignment-invalid-outcome', role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1' },
         { id: 'assignment-invalid-finding', role: 'security', routeId: 'route-b', modelId: 'model-b', modelVersion: 'v1' },
         { id: 'assignment-unknown-kind', role: 'database', routeId: 'route-c', modelId: 'model-c', modelVersion: 'v1' },
+        { id: 'assignment-oversized-summary', role: 'architecture', routeId: 'route-d', modelId: 'model-d', modelVersion: 'v1' },
+        { id: 'assignment-too-many-refs', role: 'correctness', routeId: 'route-e', modelId: 'model-e', modelVersion: 'v1' },
       ], now,
     });
     const collected = await council.collectBlindReviews({
@@ -180,6 +190,8 @@ describe('ReviewCouncilService blind collection', () => {
     expect(collected.map((entry) => [entry.assignment.id, entry.outcome])).toEqual([
       ['assignment-invalid-finding', { status: 'availability_failure', reason: 'malformed_output' }],
       ['assignment-invalid-outcome', { status: 'availability_failure', reason: 'malformed_output' }],
+      ['assignment-oversized-summary', { status: 'availability_failure', reason: 'malformed_output' }],
+      ['assignment-too-many-refs', { status: 'availability_failure', reason: 'malformed_output' }],
       ['assignment-unknown-kind', { status: 'availability_failure', reason: 'malformed_output' }],
     ]);
     expect(await new ReviewCouncilRepository(pool).listFindings('org-001', created.run.id)).toEqual([]);
