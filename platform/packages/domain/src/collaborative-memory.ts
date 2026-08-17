@@ -193,9 +193,10 @@ function stringList(value: unknown, field: string): string[] {
   if (new Set(result).size !== result.length) throw new DomainValidationError(field, `${field} must not contain duplicates`);
   return result;
 }
-function requireSafeText(value: unknown, field: string, maxLength: number): string {
+function requireSafeText(value: unknown, field: string, maxLength: number, utf8Bytes = false): string {
   const normalized = requireNonBlank(value, field);
-  if (normalized.length > maxLength) {
+  const measuredLength = utf8Bytes ? Buffer.byteLength(normalized, 'utf8') : normalized.length;
+  if (measuredLength > maxLength) {
     throw new DomainValidationError(field, `${field} is too long`);
   }
   assertMemoryTextSafe(normalized, field);
@@ -262,7 +263,7 @@ export function createCollaborativeMemoryRecord(input: CreateCollaborativeMemory
   }
   validateMemoryScope({ ...input, scope, visibility, kind, trust, sourceType });
   validateMemoryVisibility({ ...input, scope, visibility, kind, trust, sourceType });
-  const content = requireSafeText(input.content, 'content', MAX_MEMORY_CONTENT_BYTES);
+  const content = requireSafeText(input.content, 'content', MAX_MEMORY_CONTENT_BYTES, true);
   const title = requireSafeText(input.title, 'title', MAX_MEMORY_TITLE_LENGTH);
   const record: CollaborativeMemoryRecord = {
     id: requireMemoryIdentifier(input.id, 'id'),

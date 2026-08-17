@@ -24,6 +24,7 @@ beforeEach(async () => resetDatabase());
 const now = new Date('2026-08-16T20:00:00.000Z');
 const sourceDigest = digestReviewMaterial('source-v1');
 const evidenceDigest = digestReviewMaterial('evidence-v1');
+const reviewMaterial = { source: 'source-v1', evidence: 'evidence-v1', invariantIds: ['runner-local-auth'] };
 async function seedProject(organisationId = 'org-001') {
   const userId = randomUUID();
   await new UserRepository(pool).create({
@@ -105,7 +106,7 @@ describe('ReviewCouncilRepository', () => {
     const project = await seedProject();
     const repo = new ReviewCouncilRepository(pool);
     const run = makeRun(project);
-    await repo.createRun(run);
+    await repo.createRun(run, reviewMaterial);
     expect(await repo.getRun(project.organisationId, run.id)).toMatchObject({
       id: run.id,
       projectId: project.projectId,
@@ -121,7 +122,7 @@ describe('ReviewCouncilRepository', () => {
     const project = await seedProject();
     const repo = new ReviewCouncilRepository(pool);
     const run = makeRun(project);
-    await repo.createRun(run);
+    await repo.createRun(run, reviewMaterial);
     const assignment = await repo.createReviewerAssignment({
       id: 'assignment-1', organisationId: project.organisationId, reviewRunId: run.id,
       role: 'security', routeId: 'openrouter-grok', modelId: 'grok-4.6',
@@ -134,7 +135,7 @@ describe('ReviewCouncilRepository', () => {
     const project = await seedProject();
     const repo = new ReviewCouncilRepository(pool);
     const run = makeRun(project);
-    await repo.createRun(run);
+    await repo.createRun(run, reviewMaterial);
     await expect(repo.createReviewerAssignment({
       id: 'assignment-1', organisationId: project.organisationId, reviewRunId: run.id,
       role: 'general', routeId: 'route-1', modelId: 'model-1', modelVersion: 'v1',
@@ -146,7 +147,7 @@ describe('ReviewCouncilRepository', () => {
     const project = await seedProject();
     const repo = new ReviewCouncilRepository(pool);
     const run = makeRun(project);
-    await repo.createRun(run);
+    await repo.createRun(run, reviewMaterial);
     await repo.createReviewerAssignment({
       id: 'assignment-1', organisationId: project.organisationId, reviewRunId: run.id,
       role: 'general', routeId: 'route-1', modelId: 'model-1', modelVersion: 'v1',
@@ -162,7 +163,7 @@ describe('ReviewCouncilRepository', () => {
     const project = await seedProject();
     const repo = new ReviewCouncilRepository(pool);
     const run = makeRun(project);
-    await repo.createRun(run);
+    await repo.createRun(run, reviewMaterial);
     await repo.createReviewerAssignment({
       id: 'assignment-1', organisationId: project.organisationId, reviewRunId: run.id,
       role: 'security', routeId: 'route-1', modelId: 'model-1', modelVersion: 'v1',
@@ -186,7 +187,7 @@ describe('ReviewCouncilRepository', () => {
     const project = await seedProject();
     const repo = new ReviewCouncilRepository(pool);
     const run = makeRun(project);
-    await repo.createRun(run);
+    await repo.createRun(run, reviewMaterial);
     await repo.createReviewerAssignment({
       id: 'assignment-1', organisationId: project.organisationId, reviewRunId: run.id,
       role: 'general', routeId: 'route-1', modelId: 'model-1', modelVersion: 'v1',
@@ -222,7 +223,7 @@ describe('ReviewCouncilRepository', () => {
     const project = await seedProject();
     const repo = new ReviewCouncilRepository(pool);
     const run = makeRun(project);
-    await repo.createRun(run);
+    await repo.createRun(run, reviewMaterial);
     await repo.createReviewerAssignment({
       id: 'assignment-1', organisationId: project.organisationId, reviewRunId: run.id,
       role: 'general', routeId: 'route-1', modelId: 'model-1', modelVersion: 'v1',
@@ -280,7 +281,7 @@ describe('ReviewCouncilRepository', () => {
     const project = await seedProject();
     const repo = new ReviewCouncilRepository(pool);
     const run = makeRun(project);
-    await repo.createRun(run);
+    await repo.createRun(run, reviewMaterial);
     const replacementSourceDigest = digestReviewMaterial('source-v2');
     const invalidated = await repo.invalidateRunForSource(
       project.organisationId, run.id, replacementSourceDigest, new Date(now.getTime() + 1000)
@@ -299,7 +300,7 @@ describe('ReviewCouncilRepository', () => {
     const project = await seedProject();
     const repo = new ReviewCouncilRepository(pool);
     const run = makeRun(project);
-    await repo.createRun(run);
+    await repo.createRun(run, reviewMaterial);
     await repo.createReviewerAssignment({
       id: 'assignment-append', organisationId: project.organisationId, reviewRunId: run.id,
       role: 'general', routeId: 'route-1', modelId: 'model-1', modelVersion: 'v1',
@@ -327,7 +328,7 @@ describe('ReviewCouncilRepository', () => {
     });
     const unitOfWork = new DatabaseUnitOfWork(pool);
     await expect(unitOfWork.run(async ({ reviewCouncil, audit: auditRepo }) => {
-      await reviewCouncil.createRun(run);
+      await reviewCouncil.createRun(run, reviewMaterial);
       await auditRepo.append(audit);
       await auditRepo.append(audit);
     })).rejects.toThrow();

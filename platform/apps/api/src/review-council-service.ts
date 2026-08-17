@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   buildBlindReviewPacket,
   classifyReviewerOutcome,
+  DomainValidationError,
   createAuditEvent,
   createFindingAdjudication,
   createReviewFinding,
@@ -59,6 +60,9 @@ export interface ReviewCouncilServiceDependencies {
   executor: ReviewCouncilExecutor;
 }
 
+const MAX_REVIEW_COUNCIL_SEATS = 16;
+const MAX_REVIEW_EXECUTION_CONCURRENCY = 4;
+
 interface ReviewerConfig {
   id: string;
   role: string;
@@ -85,6 +89,8 @@ function nonBlankPrompt(value: unknown): string {
   }
   return value.trim();
 }
+class MalformedReviewOutputError extends Error {}
+
 function normalizeReviewerExecutionResult(
   value: unknown,
   reviewRunId: string,
@@ -92,13 +98,13 @@ function normalizeReviewerExecutionResult(
   resolvedAt: Date,
 ): { outcome: ReviewerOutcome; findings: ReviewFinding[] } {
   try {
-    if (value === null || typeof value !== 'object') throw new TypeError('review result must be an object');
+    if (value === null || typeof value !== 'object') throw new MalformedReviewOutputError('review result must be an object');
     const result = value as { outcome?: unknown; findings?: unknown };
     const outcome = classifyReviewerOutcome(result.outcome as ReviewerOutcomeInput);
     if (outcome.status === 'availability_failure') return { outcome, findings: [] };
-    if (!Array.isArray(result.findings)) throw new TypeError('review findings must be an array');
+    if (!Array.isArray(result.findings)) throw new MalformedReviewOutputError('review findings must be an array');
     const findings = result.findings.map((draft) => {
-      if (draft === null || typeof draft !== 'object') throw new TypeError('review finding must be an object');
+      if (draft === null || typeof draft !== 'object') throw new MalformedReviewOutputError('review finding must be an object');
       const candidate = draft as Record<string, unknown>;
       return createReviewFinding({
         id: stableGeneratedId('finding'),
@@ -112,8 +118,11 @@ function normalizeReviewerExecutionResult(
       });
     });
     return { outcome, findings };
-  } catch {
-    return { outcome: { status: 'availability_failure', reason: 'malformed_output' }, findings: [] };
+  } catch (error) {
+    if (error instanceof MalformedReviewOutputError || error instanceof DomainValidationError) {
+      return { outcome: { status: 'availability_failure', reason: 'malformed_output' }, findings: [] };
+    }
+    throw error;
   }
 }
 
@@ -124,16 +133,22 @@ async function requireActiveProjectUser(
   projectId: string,
   actorUserId: string,
   lockOrganisation = false,
+  allowedProjectRoles?: readonly ('reviewer' | 'product_owner')[],
 ): Promise<void> {
-  const user = await users.getById(actorUserId);
+  const user = lockOrganisation
+    ? await users.getByIdForUpdate(actorUserId)
+    : await users.getById(actorUserId);
   const organisationMembership = lockOrganisation
     ? await memberships.getOrganisationForUpdate(organisationId, actorUserId)
     : await memberships.getOrganisation(organisationId, actorUserId);
-  const projectMembership = await memberships.getProject(organisationId, projectId, actorUserId);
+  const projectMembership = lockOrganisation
+    ? await memberships.getProjectForUpdate(organisationId, projectId, actorUserId)
+    : await memberships.getProject(organisationId, projectId, actorUserId);
   if (
     !user || user.status !== 'active' ||
     !organisationMembership || organisationMembership.status !== 'active' ||
-    !projectMembership || projectMembership.status !== 'active'
+    !projectMembership || projectMembership.status !== 'active' ||
+    (allowedProjectRoles !== undefined && !allowedProjectRoles.includes(projectMembership.role as 'reviewer' | 'product_owner'))
   ) {
     throw new Error('forbidden');
   }
@@ -210,6 +225,12 @@ export class ReviewCouncilService {
     reviewers: ReviewerConfig[];
     now?: Date;
   }): Promise<{ run: ReviewRun; packet: BlindReviewPacket; assignments: ReviewerAssignmentRecord[] }> {
+    if (!Array.isArray(input.reviewers) || input.reviewers.length < 1 || input.reviewers.length > MAX_REVIEW_COUNCIL_SEATS) {
+      throw new TypeError(`review council must contain between 1 and ${MAX_REVIEW_COUNCIL_SEATS} seats`);
+    }
+    if (new Set(input.reviewers.map((reviewer) => reviewer.id)).size !== input.reviewers.length) {
+      throw new TypeError('review council assignment IDs must be unique');
+    }
     const createdAt = validDate(input.now);
     const run = createReviewRun({
       id: input.id,
@@ -233,7 +254,9 @@ export class ReviewCouncilService {
       await requireActiveProjectUser(
         users, memberships, input.organisationId, input.projectId, input.actorUserId, true,
       );
-      await reviewCouncil.createRun(run);
+      await reviewCouncil.createRun(run, {
+        source: input.source, evidence: input.evidence, invariantIds: input.invariantIds,
+      });
       const createdAssignments: ReviewerAssignmentRecord[] = [];
       for (const reviewer of input.reviewers) {
         createdAssignments.push(await reviewCouncil.createReviewerAssignment({
@@ -264,9 +287,9 @@ export class ReviewCouncilService {
     projectId: string;
     actorUserId: string;
     reviewRunId: string;
-    source: string;
-    evidence: string;
-    invariantIds: string[];
+    source?: string;
+    evidence?: string;
+    invariantIds?: string[];
     maxMemoryItems: number;
     maxMemoryBytes: number;
   }): Promise<Array<{
@@ -277,22 +300,38 @@ export class ReviewCouncilService {
     await this.requireActiveProjectUser(input.organisationId, input.projectId, input.actorUserId);
     const run = await this.requireRunForProject(input.organisationId, input.projectId, input.reviewRunId);
     if (run.status !== 'collecting') throw new Error(`review run is ${run.status}, not collecting`);
+    const durableMaterial = await this.dependencies.reviewCouncil.getRunMaterial(
+      input.organisationId, input.reviewRunId,
+    );
+    if (!durableMaterial) throw new Error('review run material not found');
     const packet = buildBlindReviewPacket(run, {
-      source: input.source,
-      evidence: input.evidence,
-      invariantIds: input.invariantIds,
+      source: input.source ?? durableMaterial.source,
+      evidence: input.evidence ?? durableMaterial.evidence,
+      invariantIds: input.invariantIds ?? durableMaterial.invariantIds,
     });
+    const collectionClaimToken = stableGeneratedId('reviewclaim');
+    const claimedAt = new Date();
+    const claimExpiresAt = new Date(claimedAt.getTime() + 30 * 60 * 1000);
+    await this.dependencies.unitOfWork.run(async ({ users, memberships, reviewCouncil }) => {
+      await requireActiveProjectUser(
+        users, memberships, input.organisationId, input.projectId, input.actorUserId, true,
+      );
+      await reviewCouncil.claimCollection(
+        input.organisationId, input.reviewRunId, collectionClaimToken, claimedAt, claimExpiresAt,
+      );
+    });
+    try {
     const assignments = (await this.dependencies.reviewCouncil.listReviewerAssignments(
       input.organisationId,
       input.reviewRunId,
     )).filter((assignment) => assignment.status === 'assigned');
-    const candidates = await this.dependencies.collaborativeMemory.listProjectMemoriesForUser(
-      input.organisationId,
-      input.projectId,
-      input.actorUserId,
-    );
-
-    const executions = await Promise.all(assignments.map(async (assignment) => {
+    const executeAssignment = async (assignment: ReviewerAssignmentRecord) => {
+      const candidates = await this.dependencies.collaborativeMemory.listProjectMemoriesForUser(
+        input.organisationId, input.projectId, input.actorUserId, {
+          reviewerAssignmentId: assignment.id, reviewPhase: 'blind_collecting',
+          maxCandidates: input.maxMemoryItems,
+        },
+      );
       const memory = selectCollaborativeContext(candidates, {
         organisationId: input.organisationId,
         projectId: input.projectId,
@@ -301,18 +340,22 @@ export class ReviewCouncilService {
         reviewPhase: 'blind_collecting',
         projectAuthorized: true,
         organisationAuthorized: true,
-      }, {
-        maxItems: input.maxMemoryItems,
-        maxBytes: input.maxMemoryBytes,
-      });
+      }, { maxItems: input.maxMemoryItems, maxBytes: input.maxMemoryBytes });
       try {
         return { assignment, memory, result: await this.dependencies.executor.review({ assignment, packet, memory }) };
       } catch {
-        return {
-          assignment,
-          memory,
-          result: { outcome: { kind: 'malformed', detail: 'executor_failure' }, findings: [] } satisfies ReviewExecutionResult,
-        };
+        return { assignment, memory,
+          result: { outcome: { kind: 'malformed', detail: 'executor_failure' }, findings: [] } satisfies ReviewExecutionResult };
+      }
+    };
+    const executions: Array<Awaited<ReturnType<typeof executeAssignment>>> = new Array(assignments.length);
+    let nextAssignmentIndex = 0;
+    const workerCount = Math.min(MAX_REVIEW_EXECUTION_CONCURRENCY, assignments.length);
+    await Promise.all(Array.from({ length: workerCount }, async () => {
+      while (nextAssignmentIndex < assignments.length) {
+        const index = nextAssignmentIndex;
+        nextAssignmentIndex += 1;
+        executions[index] = await executeAssignment(assignments[index]!);
       }
     }));
     const collected: Array<{
@@ -335,6 +378,9 @@ export class ReviewCouncilService {
         );
         await requireCollectingRun(
           reviewCouncil, input.organisationId, input.projectId, input.reviewRunId, true,
+        );
+        await reviewCouncil.requireCollectionClaim(
+          input.organisationId, input.reviewRunId, collectionClaimToken,
         );
         if (outcome.status === 'availability_failure') {
           const assignment = await reviewCouncil.recordReviewerAvailabilityFailure(
@@ -385,7 +431,9 @@ export class ReviewCouncilService {
       await requireActiveProjectUser(
         users, memberships, input.organisationId, input.projectId, input.actorUserId, true,
       );
-      await reviewCouncil.markAdjudicating(input.organisationId, input.reviewRunId);
+      await reviewCouncil.markAdjudicating(
+        input.organisationId, input.reviewRunId, collectionClaimToken,
+      );
       await audit.append(createAuditEvent({
         organisationId: input.organisationId, projectId: input.projectId,
         eventType: 'review.run.adjudicating', actorType: 'user', actorId: input.actorUserId,
@@ -394,6 +442,12 @@ export class ReviewCouncilService {
       }));
     });
     return collected;
+    } catch (error) {
+      await this.dependencies.reviewCouncil.releaseCollectionClaim(
+        input.organisationId, input.reviewRunId, collectionClaimToken,
+      );
+      throw error;
+    }
   }
 
   async adjudicateFinding(input: {
@@ -410,7 +464,7 @@ export class ReviewCouncilService {
     const createdAt = validDate(input.now);
     return this.dependencies.unitOfWork.run(async ({ users, memberships, reviewCouncil, audit }) => {
       await requireActiveProjectUser(
-        users, memberships, input.organisationId, input.projectId, input.actorUserId, true,
+        users, memberships, input.organisationId, input.projectId, input.actorUserId, true, ['reviewer'],
       );
       await requireAdjudicatingRun(
         reviewCouncil, input.organisationId, input.projectId, input.reviewRunId, true,
@@ -452,7 +506,7 @@ export class ReviewCouncilService {
   }) {
     return this.dependencies.unitOfWork.run(async ({ users, memberships, reviewCouncil, audit }) => {
       await requireActiveProjectUser(
-        users, memberships, input.organisationId, input.projectId, input.actorUserId, true,
+        users, memberships, input.organisationId, input.projectId, input.actorUserId, true, ['reviewer', 'product_owner'],
       );
       await requireAdjudicatingRun(
         reviewCouncil, input.organisationId, input.projectId, input.reviewRunId, true,
@@ -501,7 +555,7 @@ export class ReviewCouncilService {
     const createdAt = validDate(input.now);
     return this.dependencies.unitOfWork.run(async ({ users, memberships, reviewCouncil, audit }) => {
       await requireActiveProjectUser(
-        users, memberships, input.organisationId, input.projectId, input.actorUserId, true,
+        users, memberships, input.organisationId, input.projectId, input.actorUserId, true, ['reviewer'],
       );
       await requireAdjudicatingRun(
         reviewCouncil, input.organisationId, input.projectId, input.reviewRunId, true,

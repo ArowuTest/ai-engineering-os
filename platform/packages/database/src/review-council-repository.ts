@@ -1,4 +1,5 @@
 import {
+  buildBlindReviewPacket,
   createArchitectureInvariant,
   createCalibrationSnapshot,
   createFindingAdjudication,
@@ -237,14 +238,30 @@ const ASSIGNMENT_COLUMNS = `id, organisation_id, review_run_id, role, route_id, 
 export class ReviewCouncilRepository {
   constructor(private readonly database: DatabaseQueryable) {}
 
-  async createRun(input: ReviewRun): Promise<void> {
+  async createRun(input: ReviewRun, material: {
+    source: string; evidence: string; invariantIds: string[];
+  }): Promise<void> {
     const run = createReviewRun(input);
+    buildBlindReviewPacket(run, material);
     await this.database.query(
-      `INSERT INTO review_runs (${RUN_COLUMNS})
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,NULL)`,
+      `INSERT INTO review_runs (${RUN_COLUMNS}, source_material, evidence_material, invariant_ids)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,NULL,$10,$11,$12)`,
       [run.id, run.organisationId, run.projectId, run.sourceDigest, run.evidenceDigest,
-       run.packetDigest, run.status, run.createdBy, run.createdAt],
+       run.packetDigest, run.status, run.createdBy, run.createdAt,
+       material.source, material.evidence, material.invariantIds],
     );
+  }
+
+  async getRunMaterial(organisationId: string, reviewRunId: string): Promise<{
+    source: string; evidence: string; invariantIds: string[];
+  } | null> {
+    const result = await this.database.query<{ source_material: string; evidence_material: string; invariant_ids: string[] }>(
+      `SELECT source_material, evidence_material, invariant_ids FROM review_runs
+       WHERE organisation_id=$1 AND id=$2`,
+      [organisationId, reviewRunId],
+    );
+    const row = result.rows[0];
+    return row ? { source: row.source_material, evidence: row.evidence_material, invariantIds: [...row.invariant_ids] } : null;
   }
   async getRun(organisationId: string, reviewRunId: string): Promise<ReviewRun | null> {
     const result = await this.database.query<ReviewRunRow>(
@@ -264,14 +281,46 @@ export class ReviewCouncilRepository {
     return result.rows[0] ? mapRun(result.rows[0]) : null;
   }
 
-  async markAdjudicating(organisationId: string, reviewRunId: string): Promise<ReviewRun> {
-    const result = await this.database.query<ReviewRunRow>(
-      `UPDATE review_runs SET status = 'adjudicating'
+  async claimCollection(organisationId: string, reviewRunId: string, claimToken: string,
+    claimedAt: Date, expiresAt: Date): Promise<void> {
+    const token = requireStableIdentifier(claimToken, 'claimToken');
+    const claimed = requireDate(claimedAt, 'claimedAt');
+    const expires = requireDate(expiresAt, 'expiresAt');
+    if (expires.getTime() <= claimed.getTime()) throw new TypeError('expiresAt must be after claimedAt');
+    const result = await this.database.query(
+      `UPDATE review_runs SET collection_claim_token = $3, collection_claim_expires_at = $5
        WHERE organisation_id = $1 AND id = $2 AND status = 'collecting'
-       RETURNING ${RUN_COLUMNS}`,
-      [organisationId, reviewRunId],
+         AND (collection_claim_token IS NULL OR collection_claim_expires_at <= $4)`,
+      [organisationId, reviewRunId, token, claimed, expires],
     );
-    if (!result.rows[0]) throw new Error('review run is not collecting');
+    if (result.rowCount !== 1) throw new Error('review collection already in progress or run is not collecting');
+  }
+
+  async requireCollectionClaim(organisationId: string, reviewRunId: string, claimToken: string): Promise<void> {
+    const result = await this.database.query(
+      `SELECT 1 FROM review_runs WHERE organisation_id = $1 AND id = $2
+         AND status = 'collecting' AND collection_claim_token = $3`,
+      [organisationId, reviewRunId, requireStableIdentifier(claimToken, 'claimToken')],
+    );
+    if (result.rowCount !== 1) throw new Error('review collection claim is stale');
+  }
+
+  async releaseCollectionClaim(organisationId: string, reviewRunId: string, claimToken: string): Promise<void> {
+    await this.database.query(
+      `UPDATE review_runs SET collection_claim_token = NULL, collection_claim_expires_at = NULL
+       WHERE organisation_id = $1 AND id = $2 AND status = 'collecting' AND collection_claim_token = $3`,
+      [organisationId, reviewRunId, requireStableIdentifier(claimToken, 'claimToken')],
+    );
+  }
+
+  async markAdjudicating(organisationId: string, reviewRunId: string, claimToken: string): Promise<ReviewRun> {
+    const result = await this.database.query<ReviewRunRow>(
+      `UPDATE review_runs SET status = 'adjudicating', collection_claim_token = NULL,
+         collection_claim_expires_at = NULL WHERE organisation_id = $1 AND id = $2
+         AND status = 'collecting' AND collection_claim_token = $3 RETURNING ${RUN_COLUMNS}`,
+      [organisationId, reviewRunId, requireStableIdentifier(claimToken, 'claimToken')],
+    );
+    if (!result.rows[0]) throw new Error('review run is not collecting or collection claim is stale');
     return mapRun(result.rows[0]);
   }
 
@@ -562,7 +611,8 @@ export class ReviewCouncilRepository {
     );
     const result = await this.database.query<ReviewRunRow>(
       `UPDATE review_runs
-       SET status = 'invalidated', invalidated_at = $3, invalidated_by_source_digest = $4
+       SET status = 'invalidated', invalidated_at = $3, invalidated_by_source_digest = $4,
+           collection_claim_token = NULL, collection_claim_expires_at = NULL
        WHERE organisation_id = $1 AND id = $2 AND status <> 'invalidated'
        RETURNING ${RUN_COLUMNS}`,
       [organisationId, reviewRunId, invalidated.invalidatedAt!, invalidated.invalidatedBySourceDigest!],

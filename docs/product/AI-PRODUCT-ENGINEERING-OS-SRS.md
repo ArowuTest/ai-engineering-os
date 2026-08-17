@@ -1,9 +1,9 @@
 # AI Product & Engineering Operating System
 ## Product Requirements & Software Requirements Specification
 
-**Document version:** 1.5
+**Document version:** 1.6
 **Status:** Approved baseline for V1 planning
-**Date:** 16 August 2026
+**Date:** 17 August 2026
 **Working name:** AI Engineering OS
 **Parent initiative:** Private AI-native product and software engineering platform
 **Execution design:** `docs/superpowers/specs/2026-08-11-extensible-ai-execution-routing-and-shared-entitlements-design.md`
@@ -11,6 +11,18 @@
 **Collaborative memory design:** `docs/superpowers/specs/2026-08-16-collaborative-memory-parallel-session-design.md`
 
 ## 0. Change record
+
+### Version 1.6
+
+This revision makes the Studio human interaction surface and governed capability selection explicit.
+
+1. Studio is the primary human interface and supports text conversation, voice/microphone instruction, file/document upload, images/screenshots, and an extensible video/screen-recording ingestion boundary.
+2. `Agent: Auto` is the normal/default interaction mode and resolves an Admin-released, project-eligible lead/specialist agent under platform policy.
+3. Users may explicitly choose another released/project-eligible specialist agent such as Principal/Lead, Architecture, Backend, Frontend, Database, Security, QA or DevOps.
+4. Agent selection remains independent of model, execution route and harness selection; choosing an agent never silently changes those dimensions or creates execution authority.
+5. Uploaded/recorded inputs become governed project/context artefacts with provenance, tenancy, permissions, retention and audit metadata before they are eligible for model or agent context.
+6. Voice input is the immediate V1 interaction requirement; richer persistent real-time voice conversation may be layered later without changing canonical platform state or agent authority.
+7. Platform/Organisation/Project Admin controls which discovered/inherited models, harnesses, agents, skills and MCP/tools are released to each population; catalogue presence is not user eligibility or execution authority.
 
 ### Version 1.5
 
@@ -474,6 +486,18 @@ The initial Product Studio shall present OpenAI, Claude, Gemini or Auto Select a
 
 ## PS-003 Natural-language discovery
 The Product Partner shall discuss the business/product before finalising an SRS.
+
+## PS-003A Studio multimodal composer
+Studio shall provide one governed composer for text, microphone/voice instruction, file/document upload, images/screenshots and an extensible video/screen-recording ingestion path. Unsupported media shall fail closed rather than being silently discarded or sent to an arbitrary provider.
+
+## PS-003B Agent Auto and specialist selection
+`Agent: Auto` shall be the normal/default mode. The platform may resolve the Lead/Auto AI or another suitable released agent under policy. A user may explicitly choose another Admin-released and project-eligible specialist agent, including Principal/Lead, Architecture, Backend, Frontend, Database, Security, QA or DevOps roles where available.
+
+## PS-003C Independent selection dimensions
+Agent, model/route and harness are separate selection dimensions. A user selecting an agent shall not implicitly select or broaden a model, harness, connection, runner, environment, tool or operation grant; the orchestrator resolves only combinations that are independently eligible.
+
+## PS-003D Governed interaction artefacts
+Attachments and captured media shall become governed project/context artefacts before context assembly. The platform shall record source/provenance, creator, project/tenant scope, media type, digest/object reference, permissions/visibility and audit metadata, and shall apply the same secret, path and context-budget protections used by other project evidence.
 
 Discovery may cover:
 

@@ -22,6 +22,24 @@ CREATE TABLE engineering_sessions (
 
 CREATE INDEX engineering_sessions_project_idx
   ON engineering_sessions (organisation_id, project_id, status, updated_at DESC);
+
+CREATE TABLE engineering_session_assignments (
+  organisation_id text NOT NULL,
+  project_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  workstream_id text CHECK (workstream_id IS NULL OR workstream_id ~ '^[a-z0-9][a-z0-9._-]{0,63}$'),
+  task_id text NOT NULL CHECK (task_id ~ '^[a-z0-9][a-z0-9._-]{0,63}$'),
+  agent_id text NOT NULL CHECK (agent_id ~ '^[a-z0-9][a-z0-9._-]{0,63}$'),
+  status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')),
+  created_by text NOT NULL CHECK (length(trim(created_by)) > 0),
+  created_at timestamptz NOT NULL,
+  updated_at timestamptz NOT NULL,
+  FOREIGN KEY (organisation_id, project_id, user_id)
+    REFERENCES project_memberships(organisation_id, project_id, user_id) ON DELETE RESTRICT
+);
+CREATE UNIQUE INDEX engineering_session_assignment_identity_idx
+  ON engineering_session_assignments
+  (organisation_id, project_id, user_id, COALESCE(workstream_id, ''), task_id, agent_id);
 CREATE TABLE collaborative_memories (
   id text PRIMARY KEY CHECK (
     id ~ '^[a-z0-9][a-z0-9._-]{0,63}$'
@@ -88,7 +106,9 @@ CREATE TABLE collaborative_memories (
     visibility <> 'adjudication_shared' OR scope = 'review'
   ),
   FOREIGN KEY (organisation_id, project_id)
-    REFERENCES projects(organisation_id, id) ON DELETE RESTRICT
+    REFERENCES projects(organisation_id, id) ON DELETE RESTRICT,
+  FOREIGN KEY (organisation_id, project_id, source_session_id)
+    REFERENCES engineering_sessions(organisation_id, project_id, id) ON DELETE RESTRICT
 );
 
 CREATE INDEX collaborative_memories_project_idx

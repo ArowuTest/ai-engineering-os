@@ -1,15 +1,26 @@
 # AI Product & Engineering Operating System
 ## Technical Architecture & Detailed Module Specification
 
-**Document version:** 1.5
+**Document version:** 1.6
 **Status:** Approved technical baseline for V1 planning
-**Date:** 16 August 2026
+**Date:** 17 August 2026
 **Parent:** `docs/product/AI-PRODUCT-ENGINEERING-OS-SRS.md`
 **Execution design:** `docs/superpowers/specs/2026-08-11-extensible-ai-execution-routing-and-shared-entitlements-design.md`
 **ECC-native capability design:** `docs/superpowers/specs/2026-08-12-ecc-native-capability-productisation-design.md`
 **Collaborative memory design:** `docs/superpowers/specs/2026-08-16-collaborative-memory-parallel-session-design.md`
 
 ## 0. Change Record
+
+### Version 1.6
+
+Version 1.6 makes Studio multimodal interaction and governed capability release first-class control-plane boundaries.
+
+- Studio remains the primary human interface; text, microphone/voice, documents, images/screenshots and future video/screen-recording inputs enter through one governed interaction/artefact boundary.
+- `Agent: Auto` is the default. Explicit specialist-agent selection is allowed only from the Admin-released, project-eligible agent estate.
+- Agent, model/route and harness identities remain independent; the orchestrator resolves an eligible tuple without allowing one selector to smuggle authority into another dimension.
+- Attachments/captured media become platform-owned artefact references with digest, provenance, tenancy, visibility/permission and audit metadata; large bodies live in object storage rather than relational rows.
+- Capability discovery, Admin release, user/project eligibility, execution verification and operation authority are separate states for models, harnesses, agents, skills and MCP/tools.
+- Immediate voice scope is speech/input capture to the normal Studio turn flow; persistent real-time voice can be added later behind the same canonical state and policy boundaries.
 
 ### Version 1.5
 
@@ -638,6 +649,12 @@ The Context Builder resolves the smallest authorised set from Product Knowledge,
 
 Local runners may materialise authorised ECC-compatible memory into a task worktree/vault. Managed/OpenSandbox execution receives only task-authorised bounded materialisation; personal local vaults and provider auth stores are never mounted wholesale.
 
-### 27.6 Transactionality
+### 27.6 Studio multimodal interaction boundary
+
+The web Studio composer accepts text plus governed media references. Voice/microphone capture is transcribed or otherwise normalised into an input artefact/turn without making a browser or provider voice session canonical. File/document, image/screenshot and future video/screen-recording inputs are stored as governed artefacts with immutable digest/provenance and project visibility before context assembly. Large payload bytes belong in approved object storage; PostgreSQL stores authority/provenance references.
+
+`Agent: Auto` normally resolves the Lead/Auto agent. Explicit specialist-agent choice is validated against Admin release plus project/user eligibility. Agent choice is independent of provider/model/route/harness; the orchestrator still separately resolves allowed model, harness, connection, runner, environment, skills/tools and operation grants.
+
+### 27.7 Transactionality
 
 Material memory/share/promotion/handoff mutations that require audit use the same PostgreSQL unit-of-work rule as other authority changes. If persistence or mandatory audit fails, the mutation rolls back. Local materialisation failure must not corrupt platform memory authority.

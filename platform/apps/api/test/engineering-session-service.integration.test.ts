@@ -40,6 +40,21 @@ async function setupProject() {
       role: 'engineer', createdBy: alice.id, now,
     });
   }
+  const assignments = new EngineeringSessionRepository(pool);
+  for (const [userId, workstreamId, taskId, agentId] of [
+    [alice.id, 'payments', 'task-backend', 'agent-backend'],
+    [alice.id, undefined, 'task-backend', 'agent-backend'],
+    [alice.id, undefined, 'task-codex-target', 'agent-codex-target'],
+    [alice.id, undefined, 'task-claude-target', 'agent-claude-target'],
+    [alice.id, undefined, 'task-review-forge', 'agent-review-forge'],
+    [alice.id, undefined, 'task-rebind-race', 'agent-rebind-race'],
+    [alice.id, undefined, 'task-revoke-race', 'agent-revoke-race'],
+    [bob.id, 'payments', 'task-test', 'agent-test'],
+    [bob.id, 'payments', 'task-other', 'agent-other'],
+  ] as const) {
+    await assignments.grantAssignment({ organisationId: 'org-001', projectId: project.id, userId,
+      ...(workstreamId === undefined ? {} : { workstreamId }), taskId, agentId, createdBy: alice.id, now });
+  }
   return { alice, bob, project };
 }
 
@@ -57,6 +72,14 @@ beforeEach(async () => resetDatabase());
 afterAll(async () => closeDatabase());
 
 describe('EngineeringSessionService', () => {
+  it('rejects a caller-selected workstream/agent session without a platform assignment', async () => {
+    const { alice, project } = await setupProject();
+    await expect(service().startSession({
+      organisationId: 'org-001', projectId: project.id, actorUserId: alice.id,
+      workstreamId: 'payments', taskId: 'task-self-asserted', agentId: 'agent-security',
+      harnessId: 'codex', now,
+    })).rejects.toThrow(/assignment|required|forbidden/i);
+  });
   it('starts parallel OS sessions with independent agents/harnesses and durable audit', async () => {
     const { alice, bob, project } = await setupProject();
     const sessions = service();
@@ -174,12 +197,12 @@ describe('EngineeringSessionService', () => {
       taskId: 'task-review-forge', agentId: 'agent-review-forge', harnessId: 'codex', now,
     });
     const memories = new CollaborativeMemoryRepository(pool);
-    await memories.createMemory(createCollaborativeMemoryRecord({
+    await expect(memories.createMemory(createCollaborativeMemoryRecord({
       id: 'mem_forged_reviewer', organisationId: 'org-001', projectId: project.id,
       scope: 'review', visibility: 'reviewer_private', reviewerAssignmentId: 'assignment-secret',
       kind: 'evidence', trust: 'unreviewed', title: 'Reviewer private', content: 'Peer finding context.',
       createdBy: alice.id, sourceType: 'review_council', createdAt: now,
-    }));
+    }))).rejects.toThrow(/reviewer.*assignment/i);
     await memories.createMemory(createCollaborativeMemoryRecord({
       id: 'mem_forged_adjudication', organisationId: 'org-001', projectId: project.id,
       scope: 'review', visibility: 'adjudication_shared', kind: 'evidence', trust: 'unreviewed',
@@ -224,6 +247,75 @@ describe('EngineeringSessionService', () => {
     });
     expect(context.items.map((item) => item.memoryId)).toContain(checkpoint.id);
   });
+  it('rejects a stale concurrent session rebind instead of last-writer-wins', async () => {
+    const { alice, project } = await setupProject();
+    const sessions = service();
+    const session = await sessions.startSession({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: alice.id, taskId: 'task-rebind-race', agentId: 'agent-rebind-race', harnessId: 'codex', now });
+    const blocker = await pool.connect();
+    await blocker.query('BEGIN');
+    await blocker.query('LOCK TABLE audit_events IN ACCESS EXCLUSIVE MODE');
+    try {
+      const first = sessions.continueSession({ organisationId: 'org-001', projectId: project.id, actorUserId: alice.id,
+        sessionId: session.id, harnessId: 'claude-code', runnerId: 'runner-first', now: new Date(now.getTime()+1) });
+      let blockedOnAudit = false;
+      for (let attempt=0; attempt<100 && !blockedOnAudit; attempt+=1) {
+        const q=await pool.query<{count:string}>(`SELECT count(*)::text AS count FROM pg_stat_activity
+          WHERE datname=current_database() AND query LIKE 'INSERT INTO audit_events%' AND wait_event_type='Lock'`);
+        blockedOnAudit=Number(q.rows[0]?.count??0)>0;
+        if(!blockedOnAudit) await new Promise((resolve)=>setTimeout(resolve,10));
+      }
+      expect(blockedOnAudit).toBe(true);
+      const second = sessions.continueSession({ organisationId: 'org-001', projectId: project.id, actorUserId: alice.id,
+        sessionId: session.id, harnessId: 'opencode', runnerId: 'runner-second', now: new Date(now.getTime()+2) });
+      await blocker.query('COMMIT');
+      const results = await Promise.allSettled([first, second]);
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+      const stored = await new EngineeringSessionRepository(pool).get('org-001', project.id, session.id);
+      expect(stored).toMatchObject({ harnessId: 'claude-code', runnerId: 'runner-first' });
+    } finally {
+      try { await blocker.query('ROLLBACK'); } catch {}
+      blocker.release();
+    }
+  });
+
+  it('serializes checkpoint authority against a concurrent project revocation', async () => {
+    const { alice, project } = await setupProject();
+    const sessions = service();
+    const session = await sessions.startSession({
+      organisationId: 'org-001', projectId: project.id, actorUserId: alice.id,
+      taskId: 'task-revoke-race', agentId: 'agent-revoke-race', harnessId: 'codex', now,
+    });
+    const blocker = await pool.connect();
+    await blocker.query('BEGIN');
+    await blocker.query('LOCK TABLE collaborative_memories IN ACCESS EXCLUSIVE MODE');
+    try {
+      const checkpoint = sessions.recordCheckpoint({ organisationId: 'org-001', projectId: project.id,
+        actorUserId: alice.id, sessionId: session.id, title: 'Blocked checkpoint', content: 'Authority race proof.', now });
+      let reachedInsert = false;
+      for (let attempt = 0; attempt < 100 && !reachedInsert; attempt += 1) {
+        const waiting = await pool.query<{ count: string }>(`SELECT count(*)::text AS count FROM pg_stat_activity
+          WHERE datname = current_database() AND query LIKE 'INSERT INTO collaborative_memories%' AND wait_event_type = 'Lock'`);
+        reachedInsert = Number(waiting.rows[0]?.count ?? 0) > 0;
+        if (!reachedInsert) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(reachedInsert).toBe(true);
+      let revoked = false;
+      const revoke = new MembershipRepository(pool).revokeProject(
+        'org-001', project.id, alice.id, new Date(now.getTime() + 1),
+      ).finally(() => { revoked = true; });
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      expect(revoked).toBe(false);
+      await blocker.query('COMMIT');
+      await checkpoint;
+      await revoke;
+    } finally {
+      try { await blocker.query('ROLLBACK'); } catch {}
+      blocker.release();
+    }
+  });
+
   it('fails closed after project membership revocation and after account suspension', async () => {
     const { alice, project } = await setupProject();
     const sessions = service();

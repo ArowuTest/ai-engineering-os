@@ -79,6 +79,14 @@ describe('Collaborative Memory domain', () => {
     })).toThrow(/tags.*duplicate/i);
   });
 
+  it('enforces the persisted 64KiB memory-content limit in UTF-8 bytes', () => {
+    const multiByteContent = String.fromCodePoint(0x1F600).repeat(20_000);
+    expect(Buffer.byteLength(multiByteContent, 'utf8')).toBeGreaterThan(65_536);
+    expect(multiByteContent.length).toBeLessThanOrEqual(65_536);
+    expect(() => createCollaborativeMemoryRecord({ ...baseMemory(), content: multiByteContent }))
+      .toThrowError(DomainValidationError);
+  });
+
   it('requires project identity for collaborative project/workstream/agent/session/review scopes', () => {
     for (const scope of ['project', 'workstream', 'agent', 'session', 'review'] as const) {
       expect(() => createCollaborativeMemoryRecord({

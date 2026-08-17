@@ -91,11 +91,11 @@ export class EngineeringSessionService {
     });
 
     await this.dependencies.unitOfWork.run(async ({ users, memberships, engineeringSessions, audit }) => {
-      const user = await users.getById(input.actorUserId);
+      const user = await users.getByIdForUpdate(input.actorUserId);
       const organisationMembership = await memberships.getOrganisationForUpdate(
         input.organisationId, input.actorUserId,
       );
-      const projectMembership = await memberships.getProject(
+      const projectMembership = await memberships.getProjectForUpdate(
         input.organisationId, input.projectId, input.actorUserId,
       );
       if (
@@ -103,6 +103,11 @@ export class EngineeringSessionService {
         !organisationMembership || organisationMembership.status !== 'active' ||
         !projectMembership || projectMembership.status !== 'active'
       ) throw new Error('forbidden');
+      await engineeringSessions.requireActiveAssignmentForUpdate({
+        organisationId: input.organisationId, projectId: input.projectId, userId: input.actorUserId,
+        ...(input.workstreamId === undefined ? {} : { workstreamId: input.workstreamId }),
+        taskId: input.taskId, agentId: input.agentId,
+      });
       await engineeringSessions.create(session);
       await audit.append(createAuditEvent({
         organisationId: input.organisationId, projectId: input.projectId,
@@ -132,11 +137,11 @@ export class EngineeringSessionService {
     });
 
     await this.dependencies.unitOfWork.run(async ({ users, memberships, collaborativeMemory, audit }) => {
-      const user = await users.getById(input.actorUserId);
+      const user = await users.getByIdForUpdate(input.actorUserId);
       const organisationMembership = await memberships.getOrganisationForUpdate(
         input.organisationId, input.actorUserId,
       );
-      const projectMembership = await memberships.getProject(
+      const projectMembership = await memberships.getProjectForUpdate(
         input.organisationId, input.projectId, input.actorUserId,
       );
       if (!user || user.status !== 'active' || !organisationMembership || organisationMembership.status !== 'active' ||
@@ -189,11 +194,11 @@ export class EngineeringSessionService {
     });
 
     await this.dependencies.unitOfWork.run(async ({ users, memberships, collaborativeMemory, audit }) => {
-      const user = await users.getById(input.actorUserId);
+      const user = await users.getByIdForUpdate(input.actorUserId);
       const organisationMembership = await memberships.getOrganisationForUpdate(
         input.organisationId, input.actorUserId,
       );
-      const projectMembership = await memberships.getProject(
+      const projectMembership = await memberships.getProjectForUpdate(
         input.organisationId, input.projectId, input.actorUserId,
       );      if (!user || user.status !== 'active' || !organisationMembership || organisationMembership.status !== 'active' ||
           !projectMembership || projectMembership.status !== 'active') throw new Error('forbidden');
@@ -225,7 +230,13 @@ export class EngineeringSessionService {
       throw new Error('review_context_requires_review_council_authority');
     }
     const candidates = await this.dependencies.collaborativeMemory.listProjectMemoriesForUser(
-      input.organisationId, input.projectId, input.actorUserId,
+      input.organisationId, input.projectId, input.actorUserId, {
+        sessionId: session.id,
+        ...(session.workstreamId === undefined ? {} : { workstreamId: session.workstreamId }),
+        agentId: session.agentId,
+        ...(session.harnessId === undefined ? {} : { harnessId: session.harnessId }),
+        reviewPhase: 'normal', maxCandidates: input.maxItems,
+      },
     );
     const access: MemoryAccessContext = {
       organisationId: input.organisationId, projectId: input.projectId, userId: input.actorUserId,
@@ -258,16 +269,16 @@ export class EngineeringSessionService {
     });
 
     await this.dependencies.unitOfWork.run(async ({ users, memberships, engineeringSessions, audit }) => {
-      const user = await users.getById(input.actorUserId);
+      const user = await users.getByIdForUpdate(input.actorUserId);
       const organisationMembership = await memberships.getOrganisationForUpdate(
         input.organisationId, input.actorUserId,
       );
-      const projectMembership = await memberships.getProject(
+      const projectMembership = await memberships.getProjectForUpdate(
         input.organisationId, input.projectId, input.actorUserId,
       );
       if (!user || user.status !== 'active' || !organisationMembership || organisationMembership.status !== 'active' ||
           !projectMembership || projectMembership.status !== 'active') throw new Error('forbidden');
-      await engineeringSessions.rebindExecution(rebound);
+      await engineeringSessions.rebindExecution(rebound, current.updatedAt);
       await audit.append(createAuditEvent({
         organisationId: input.organisationId, projectId: input.projectId,
         eventType: 'engineering.session.execution_rebound', actorType: 'user', actorId: input.actorUserId,

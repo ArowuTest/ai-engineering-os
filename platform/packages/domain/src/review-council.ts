@@ -379,9 +379,10 @@ export function evaluateReviewGate(
     }
   }
 
-  const blockingFindingIds = findings
+  const materialFindings = findings
     .map(createReviewFinding)
-    .filter((finding) => finding.severity === 'critical' || finding.severity === 'important')
+    .filter((finding) => finding.severity === 'critical' || finding.severity === 'important');
+  const blockingFindingIds = materialFindings
     .filter((finding) => {
       const adjudication = latestByFinding.get(finding.id);
       return adjudication?.reviewRunId === finding.reviewRunId &&
@@ -394,6 +395,19 @@ export function evaluateReviewGate(
     return { status: 'blocked', blockingFindingIds };
   }
   const requiredCompletedReviewers = Math.floor(evidence.assignedReviewers / 2) + 1;
+  const unresolvedMaterialFinding = materialFindings.some((finding) => {
+    const adjudication = latestByFinding.get(finding.id);
+    return adjudication?.reviewRunId !== finding.reviewRunId ||
+      adjudication.status === 'INSUFFICIENT_EVIDENCE';
+  });
+  if (unresolvedMaterialFinding) {
+    return {
+      status: 'insufficient_evidence', blockingFindingIds: [],
+      assignedReviewers: evidence.assignedReviewers,
+      completedReviewers: evidence.completedReviewers,
+      requiredCompletedReviewers,
+    };
+  }
   if (evidence.completedReviewers < requiredCompletedReviewers) {
     return {
       status: 'insufficient_evidence',

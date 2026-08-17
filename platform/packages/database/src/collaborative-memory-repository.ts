@@ -139,26 +139,39 @@ export class CollaborativeMemoryRepository {
     organisationId: string,
     projectId: string,
     userId: string,
+    context: {
+      sessionId?: string; workstreamId?: string; reviewerAssignmentId?: string;
+      agentId?: string; harnessId?: string; reviewPhase?: 'normal' | 'blind_collecting' | 'adjudicating';
+      maxCandidates?: number;
+    } = {},
   ): Promise<CollaborativeMemoryRecord[]> {
+    const maxCandidates = context.maxCandidates ?? 256;
+    if (!Number.isInteger(maxCandidates) || maxCandidates <= 0 || maxCandidates > 256) {
+      throw new TypeError('maxCandidates must be an integer between 1 and 256');
+    }
     const result = await this.database.query<MemoryRow>(
       `SELECT ${MEMORY_COLUMNS_FROM_M}
        FROM collaborative_memories m
-       JOIN project_memberships pm
-         ON pm.organisation_id = m.organisation_id AND pm.project_id = m.project_id
-       JOIN organisation_memberships om
-         ON om.organisation_id = pm.organisation_id AND om.user_id = pm.user_id
-       JOIN users u ON u.id = pm.user_id
-       WHERE m.organisation_id = $1 AND m.project_id = $2 AND pm.user_id = $3
-         AND pm.status = 'active' AND om.status = 'active' AND u.status = 'active'
-         AND NOT EXISTS (
-           SELECT 1 FROM collaborative_memory_links supersession
-           WHERE supersession.organisation_id = m.organisation_id
-             AND supersession.project_id = m.project_id
-             AND supersession.target_memory_id = m.id
-             AND supersession.relation = 'supersedes'
-         )
-       ORDER BY m.created_at ASC, m.id ASC`,
-      [organisationId, projectId, userId],
+       JOIN project_memberships pm ON pm.organisation_id=m.organisation_id AND pm.project_id=m.project_id
+       JOIN organisation_memberships om ON om.organisation_id=pm.organisation_id AND om.user_id=pm.user_id
+       JOIN users u ON u.id=pm.user_id
+       WHERE m.organisation_id=$1 AND m.project_id=$2 AND pm.user_id=$3
+         AND pm.status='active' AND om.status='active' AND u.status='active'
+         AND (m.visibility='project_shared'
+           OR (m.visibility='session_private' AND $4::text IS NOT NULL AND m.source_session_id=$4)
+           OR (m.visibility='workstream_shared' AND $5::text IS NOT NULL AND m.workstream_id=$5)
+           OR (m.visibility='reviewer_private' AND $6::text IS NOT NULL AND m.reviewer_assignment_id=$6)
+           OR (m.visibility='adjudication_shared' AND $7::text='adjudicating'))
+         AND (cardinality(m.target_agent_ids)=0 OR ($8::text IS NOT NULL AND $8=ANY(m.target_agent_ids)))
+         AND (cardinality(m.target_session_ids)=0 OR ($4::text IS NOT NULL AND $4=ANY(m.target_session_ids)))
+         AND (cardinality(m.target_harness_ids)=0 OR ($9::text IS NOT NULL AND $9=ANY(m.target_harness_ids)))
+         AND NOT EXISTS (SELECT 1 FROM collaborative_memory_links supersession
+           WHERE supersession.organisation_id=m.organisation_id AND supersession.project_id=m.project_id
+             AND supersession.target_memory_id=m.id AND supersession.relation='supersedes')
+       ORDER BY m.created_at DESC, m.id DESC LIMIT $10`,
+      [organisationId, projectId, userId, context.sessionId ?? null, context.workstreamId ?? null,
+       context.reviewerAssignmentId ?? null, context.reviewPhase ?? 'normal', context.agentId ?? null,
+       context.harnessId ?? null, maxCandidates],
     );
     return result.rows.map(mapMemory);
   }
@@ -220,6 +233,37 @@ const SESSION_COLUMNS = `id, organisation_id, project_id, workstream_id, task_id
 
 export class EngineeringSessionRepository {
   constructor(private readonly database: DatabaseQueryable) {}
+  async grantAssignment(input: {
+    organisationId: string; projectId: string; userId: string; workstreamId?: string;
+    taskId: string; agentId: string; createdBy: string; now: Date;
+  }): Promise<void> {
+    await this.database.query(
+      `INSERT INTO engineering_session_assignments
+        (organisation_id, project_id, user_id, workstream_id, task_id, agent_id,
+         status, created_by, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8,$8)
+       ON CONFLICT (organisation_id, project_id, user_id, COALESCE(workstream_id, ''), task_id, agent_id)
+       DO UPDATE SET status='active', updated_at=EXCLUDED.updated_at`,
+      [input.organisationId, input.projectId, input.userId, input.workstreamId ?? null,
+       input.taskId, input.agentId, input.createdBy, input.now],
+    );
+  }
+
+  async requireActiveAssignmentForUpdate(input: {
+    organisationId: string; projectId: string; userId: string; workstreamId?: string;
+    taskId: string; agentId: string;
+  }): Promise<void> {
+    const result = await this.database.query(
+      `SELECT 1 FROM engineering_session_assignments
+       WHERE organisation_id=$1 AND project_id=$2 AND user_id=$3
+         AND workstream_id IS NOT DISTINCT FROM $4 AND task_id=$5 AND agent_id=$6
+         AND status='active' FOR UPDATE`,
+      [input.organisationId, input.projectId, input.userId, input.workstreamId ?? null,
+       input.taskId, input.agentId],
+    );
+    if (result.rowCount !== 1) throw new Error('session_assignment_required');
+  }
+
   async create(input: EngineeringSession): Promise<void> {
     const session = createEngineeringSession(input);
     await this.database.query(
@@ -243,7 +287,7 @@ export class EngineeringSessionRepository {
     return result.rows[0] ? mapSession(result.rows[0]) : null;
   }
 
-  async rebindExecution(input: EngineeringSession): Promise<void> {
+  async rebindExecution(input: EngineeringSession, expectedUpdatedAt: Date): Promise<void> {
     const session = rebindEngineeringSessionExecution(input, {
       ...(input.harnessId === undefined ? {} : { harnessId: input.harnessId }),
       ...(input.modelRouteId === undefined ? {} : { modelRouteId: input.modelRouteId }),
@@ -256,13 +300,14 @@ export class EngineeringSessionRepository {
       `UPDATE engineering_sessions SET
          status = $4, harness_id = $5, model_route_id = $6, runner_id = $7,
          environment_id = $8, workspace_reference = $9, updated_at = $10
-       WHERE organisation_id = $1 AND project_id = $2 AND id = $3`,
+       WHERE organisation_id = $1 AND project_id = $2 AND id = $3 AND updated_at = $11`,
       [
         session.organisationId, session.projectId, session.id, session.status,
         session.harnessId ?? null, session.modelRouteId ?? null, session.runnerId ?? null,
         session.environmentId ?? null, session.workspaceReference ?? null, session.updatedAt,
+        expectedUpdatedAt,
       ],
     );
-    if (result.rowCount !== 1) throw new Error('engineering session not found for rebind');
+    if (result.rowCount !== 1) throw new Error('engineering session execution conflict');
   }
 }

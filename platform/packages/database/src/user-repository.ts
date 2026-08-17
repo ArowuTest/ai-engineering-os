@@ -62,6 +62,16 @@ export class UserRepository {
     return row ? mapUser(row) : null;
   }
 
+  async getByIdForUpdate(id: string): Promise<UserAccountRecord | null> {
+    const result = await this.database.query<UserRow>(
+      `SELECT id, user_id, password_hash, status, created_at, updated_at
+       FROM users WHERE id = $1 FOR UPDATE`,
+      [id],
+    );
+    const row = result.rows[0];
+    return row ? mapUser(row) : null;
+  }
+
   async setStatus(id: string, status: AccountStatus, updatedAt: Date): Promise<void> {
     await this.database.query(
       `UPDATE users SET status = $2, updated_at = $3 WHERE id = $1`,

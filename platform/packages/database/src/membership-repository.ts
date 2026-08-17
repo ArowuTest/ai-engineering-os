@@ -146,6 +146,21 @@ export class MembershipRepository {
     return row ? mapProject(row) : null;
   }
 
+  async getProjectForUpdate(
+    organisationId: string, projectId: string, userId: string,
+  ): Promise<ProjectMembershipRecord | null> {
+    const result = await this.database.query<ProjectMembershipRow>(
+      `SELECT organisation_id, project_id, user_id, role, status,
+              created_by, created_at, updated_at
+       FROM project_memberships
+       WHERE organisation_id = $1 AND project_id = $2 AND user_id = $3
+       FOR UPDATE`,
+      [organisationId, projectId, userId],
+    );
+    const row = result.rows[0];
+    return row ? mapProject(row) : null;
+  }
+
   async revokeProject(
     organisationId: string,
     projectId: string,

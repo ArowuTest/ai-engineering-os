@@ -102,6 +102,17 @@ describe('Review Council domain', () => {
     });
   });
 
+  it('does not clear a material finding until independent adjudication resolves it', () => {
+    const finding = materialFinding('important');
+    expect(evaluateReviewGate([finding], [], { assignedReviewers: 2, completedReviewers: 2 }).status).toBe('insufficient_evidence');
+    const unresolved = createFindingAdjudication({
+      id: 'adj-unresolved', findingId: finding.id, reviewRunId: finding.reviewRunId,
+      status: 'INSUFFICIENT_EVIDENCE', rationale: 'More source evidence is required',
+      evidenceReferences: ['src/a.ts:10-20'], adjudicatedBy: 'independent-adjudicator', createdAt: now,
+    });
+    expect(evaluateReviewGate([finding], [unresolved], { assignedReviewers: 2, completedReviewers: 2 }).status).toBe('insufficient_evidence');
+  });
+
   it('mirrors durable Review Council text and evidence bounds before persistence', () => {
     const findingBase = {
       id: 'finding-bounds', reviewRunId: 'review-run-1', reviewerAssignmentId: 'assignment-1',

@@ -5,7 +5,14 @@ CREATE TABLE review_runs (
   source_digest char(64) NOT NULL CHECK (source_digest ~ '^[a-f0-9]{64}$'),
   evidence_digest char(64) NOT NULL CHECK (evidence_digest ~ '^[a-f0-9]{64}$'),
   packet_digest char(64) NOT NULL CHECK (packet_digest ~ '^[a-f0-9]{64}$'),
+  source_material text NOT NULL CHECK (octet_length(source_material) BETWEEN 1 AND 33554432),
+  evidence_material text NOT NULL CHECK (octet_length(evidence_material) BETWEEN 1 AND 33554432),
+  invariant_ids text[] NOT NULL CHECK (cardinality(invariant_ids) BETWEEN 1 AND 64),
   status text NOT NULL CHECK (status IN ('collecting','adjudicating','blocked','accepted','invalidated')),
+  collection_claim_token text CHECK (
+    collection_claim_token IS NULL OR collection_claim_token ~ '^[a-z0-9][a-z0-9._-]{0,63}$'
+  ),
+  collection_claim_expires_at timestamptz,
   created_by text NOT NULL CHECK (length(trim(created_by)) > 0),
   created_at timestamptz NOT NULL,
   invalidated_at timestamptz,
@@ -16,6 +23,11 @@ CREATE TABLE review_runs (
   UNIQUE (organisation_id, id, packet_digest),
   FOREIGN KEY (organisation_id, project_id)
     REFERENCES projects(organisation_id, id) ON DELETE RESTRICT,
+  CONSTRAINT review_runs_collection_claim_ck CHECK (
+    (status = 'collecting' AND ((collection_claim_token IS NULL AND collection_claim_expires_at IS NULL)
+      OR (collection_claim_token IS NOT NULL AND collection_claim_expires_at IS NOT NULL)))
+    OR (status <> 'collecting' AND collection_claim_token IS NULL AND collection_claim_expires_at IS NULL)
+  ),
   CONSTRAINT review_runs_invalidation_ck CHECK (
     (status = 'invalidated' AND invalidated_at IS NOT NULL
       AND invalidated_by_source_digest IS NOT NULL
@@ -125,6 +137,25 @@ CREATE TABLE review_architecture_invariants (
   created_at timestamptz NOT NULL
 );
 
+CREATE FUNCTION enforce_collaborative_memory_reviewer_assignment()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE assignment_project_id uuid;
+BEGIN
+  IF NEW.reviewer_assignment_id IS NULL THEN RETURN NEW; END IF;
+  SELECT rr.project_id INTO assignment_project_id
+  FROM review_reviewer_assignments ra
+  JOIN review_runs rr ON rr.organisation_id = ra.organisation_id AND rr.id = ra.review_run_id
+  WHERE ra.organisation_id = NEW.organisation_id AND ra.id = NEW.reviewer_assignment_id;
+  IF assignment_project_id IS NULL OR assignment_project_id IS DISTINCT FROM NEW.project_id THEN
+    RAISE EXCEPTION 'reviewer-private memory requires a same-project durable reviewer assignment';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER collaborative_memory_reviewer_assignment_scope
+BEFORE INSERT OR UPDATE ON collaborative_memories
+FOR EACH ROW EXECUTE FUNCTION enforce_collaborative_memory_reviewer_assignment();
+
 CREATE FUNCTION prevent_review_append_only_mutation()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -170,10 +201,12 @@ CREATE FUNCTION prevent_review_run_identity_mutation()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF ROW(OLD.id, OLD.organisation_id, OLD.project_id, OLD.source_digest,
-         OLD.evidence_digest, OLD.packet_digest, OLD.created_by, OLD.created_at)
+         OLD.evidence_digest, OLD.packet_digest, OLD.source_material, OLD.evidence_material,
+         OLD.invariant_ids, OLD.created_by, OLD.created_at)
      IS DISTINCT FROM
      ROW(NEW.id, NEW.organisation_id, NEW.project_id, NEW.source_digest,
-         NEW.evidence_digest, NEW.packet_digest, NEW.created_by, NEW.created_at) THEN
+         NEW.evidence_digest, NEW.packet_digest, NEW.source_material, NEW.evidence_material,
+         NEW.invariant_ids, NEW.created_by, NEW.created_at) THEN
     RAISE EXCEPTION 'review run identity is immutable';
   END IF;
   RETURN NEW;

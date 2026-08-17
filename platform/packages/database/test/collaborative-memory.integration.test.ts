@@ -90,6 +90,29 @@ describe('CollaborativeMemoryRepository', () => {
     );
     expect(await repo.listProjectMemoriesForUser('org-001', project.id, userId)).toEqual([]);
   });
+  it('rejects session-private memory that references a nonexistent project session', async () => {
+    const { userId, project } = await seedProject();
+    const memory = createCollaborativeMemoryRecord({
+      id: 'mem_bad_session_ref', organisationId: 'org-001', projectId: project.id,
+      scope: 'session', visibility: 'session_private', kind: 'checkpoint', trust: 'unreviewed',
+      title: 'Invalid session ref', content: 'Must not outlive session authority.',
+      createdBy: userId, sourceType: 'agent', sourceAgentId: 'agent-backend',
+      sourceSessionId: 'session-does-not-exist', createdAt: now,
+    });
+    await expect(new CollaborativeMemoryRepository(pool).createMemory(memory)).rejects.toThrow();
+  });
+
+  it('rejects reviewer-private memory that references a fabricated reviewer assignment', async () => {
+    const { userId, project } = await seedProject();
+    const memory = createCollaborativeMemoryRecord({
+      id: 'mem_bad_review_ref', organisationId: 'org-001', projectId: project.id,
+      scope: 'review', visibility: 'reviewer_private', kind: 'evidence', trust: 'unreviewed',
+      title: 'Invalid reviewer ref', content: 'Must bind to durable review authority.',
+      createdBy: userId, sourceType: 'review_council', reviewerAssignmentId: 'assignment-fabricated', createdAt: now,
+    });
+    await expect(new CollaborativeMemoryRepository(pool).createMemory(memory)).rejects.toThrow();
+  });
+
   it('persists full ECC identity, source-document provenance and tags without truncation', async () => {
     const { userId, project } = await seedProject();
     const repo = new CollaborativeMemoryRepository(pool);
@@ -101,6 +124,26 @@ describe('CollaborativeMemoryRepository', () => {
     });
     await repo.createMemory(memory);
     expect(await repo.getProjectMemory('org-001', project.id, id)).toEqual(memory);
+  });
+
+  it('bounds context candidates in SQL and excludes other sessions before policy assembly', async () => {
+    const { userId, project } = await seedProject();
+    const repo = new CollaborativeMemoryRepository(pool);
+    const sessions = new EngineeringSessionRepository(pool);
+    const own = createEngineeringSession({ id: 'session-context-own', organisationId: 'org-001', projectId: project.id,
+      workstreamId: 'payments', taskId: 'task-own', agentId: 'agent-own', createdBy: userId, createdAt: now });
+    const other = createEngineeringSession({ id: 'session-context-other', organisationId: 'org-001', projectId: project.id,
+      workstreamId: 'payments', taskId: 'task-other', agentId: 'agent-other', createdBy: userId, createdAt: now });
+    await sessions.create(own); await sessions.create(other);
+    for (let n=0; n<12; n+=1) await repo.createMemory(projectMemory(project.id,userId,`mem_ctx_${String(n).padStart(2,'0')}`));
+    await repo.createMemory(createCollaborativeMemoryRecord({ id:'mem_other_private', organisationId:'org-001', projectId:project.id,
+      scope:'session', visibility:'session_private', kind:'checkpoint', trust:'unreviewed', title:'Other private', content:'Must be SQL-filtered.',
+      createdBy:userId, sourceType:'agent', sourceAgentId:'agent-other', sourceSessionId:other.id, createdAt:new Date(now.getTime()+1000) }));
+    const candidates = await (repo as any).listProjectMemoriesForUser('org-001', project.id, userId, {
+      sessionId: own.id, workstreamId:'payments', agentId:'agent-own', maxCandidates:5, reviewPhase:'normal',
+    });
+    expect(candidates).toHaveLength(5);
+    expect(candidates.map((memory: {id:string})=>memory.id)).not.toContain('mem_other_private');
   });
 
   it('keeps user-private memory owner-scoped and outside project reads', async () => {
@@ -182,7 +225,7 @@ describe('EngineeringSessionRepository', () => {
       harnessId: 'claude-code', modelRouteId: 'anthropic-sonnet', runnerId: 'runner-002',
       environmentId: 'opensandbox', updatedAt: new Date(now.getTime() + 1000),
     });
-    await repo.rebindExecution(rebound);
+    await repo.rebindExecution(rebound, session.updatedAt);
     expect(await repo.get('org-001', project.id, session.id)).toEqual(rebound);
   });
 });

@@ -197,29 +197,33 @@
 - [x] **Step 1: Inventory inherited ECC council/eval/verification/team-agent primitives** and record `REUSE | ADAPT | PRODUCTISE | SUPERSEDE | REFERENCE | EXCLUDE` decisions before new source implementation.
 - [x] **Step 2: Write RED domain tests** for blind packet identity, source/evidence digest, materiality/severity, adjudication states, fresh-source invalidation, reviewer availability states, and one-confirmed-Important/Critical blocking semantics. Genuine RED captured against missing Review Council exports.
 - [x] **Step 3: Verify RED**, then implement minimal domain constructors/validators. Focused domain suite is GREEN 12/12 in the active worktree; implementation is not yet committed/accepted.
-- [ ] **Step 4: Write RED PostgreSQL tests** for durable runs/findings/adjudications/rechallenges/calibration and transaction rollback on incomplete authority mutations; implement repository to GREEN. **Paused before RED execution/production persistence** until the Collaborative Memory written-spec gate is approved so Review Council uses the shared session/visibility/provenance substrate.
-- [ ] **Step 5: Write API/service RED tests then implement orchestration** so comparative reviewers receive the same canonical packet but never one another's findings; record exact route/model/version, preserve private rechallenge isolation, and classify timeout/empty/malformed output as availability failure rather than verdict.
-- [ ] **Step 6: Add calibration aggregation** as evidence only; it may rank eligible routes but never create permanent model-role bindings. Prove material source digest changes invalidate prior acceptance.
-- [ ] **Step 7: Run the combined focused Task 8 suite**, domain/database/API type checks and migration checks; commit coherent domain/persistence/orchestration increments without paying the whole-platform/council gate between each increment.
-- [ ] **Step 8: Freeze the Task 8 source and run broad static/unit/integration/type/ECC gates plus one fresh blind multi-model council**. Any confirmed/partially-valid blocking defect re-enters RED/GREEN and invalidates the prior council packet.
+- [x] **Step 4: Persist Collaborative Memory + Review Council authority to GREEN.** PostgreSQL migrations/repositories now enforce session/reviewer referential integrity, bounded recall candidates, append-oriented review evidence, durable source/evidence/invariant material and transactional authority.
+- [x] **Step 5: Implement and harden Review Council orchestration through RED -> GREEN.** Blind seats receive one canonical packet with reviewer-private isolation, run-level collection single-flight, bounded seat/concurrency limits, exact route/model/version evidence, private rechallenge isolation and typed availability failures.
+- [x] **Step 6: Complete calibration/acceptance authority.** Calibration remains evidence only; material source changes invalidate acceptance; unadjudicated material findings cannot clear; engineers cannot self-certify; authority-sensitive writes serialize current user/project membership.
+- [x] **Step 7: Re-gate the adjudicated remediation batch.** Current evidence before source freeze: 102/102 focused remediation tests, 33/33 static, 321/321 unit, 319/319 PostgreSQL integration across 38 files, root/web TypeScript PASS, Next production build PASS, production dependency audit 0 vulnerabilities, Harness Adapter Compliance 11 PASS, Harness Audit 80/80, catalogue/registry/Unicode/IOC/diff checks PASS.
+- [ ] **Step 8: Freeze the remediated Task 8 source and run the required fresh exact-source blind council.** Deterministic gates are GREEN. The inherited ECC Windows symlink tests retain an explicit non-gating host-capability caveat (`EPERM` while creating test symlinks); platform ECC adapter/materialisation tests are GREEN. Task 8 is **not accepted** until the new SHA receives fresh blind review and all material findings are adjudicated.
 
-### Task 9: Add governed model + harness catalogue and user eligibility/release surfaces
+### Task 9: Governed Capability Estate / Admin Release / User Eligibility + Studio Multimodal
 
 **Files:**
-- Create/modify domain/database/API files for model catalogue records, harness catalogue/release records and policy.
-- Modify: `platform/apps/api/src/model-runtime.ts`
-- Modify: existing model-route/AI-connection/harness HTTP surfaces.
-- Modify: `platform/apps/web` model-selection, harness-selection and admin catalogue surfaces and tests.
-**Interfaces:**
-- Produces: admin-governed model `approved | trial_calibration | disabled` state; harness discovery/maturity/release state; user-visible eligible model route and released-harness lists.
-- Consumes: provider discovery/configured routes, ECC harness discovery/compatibility metadata, organisation/user connection eligibility, runner/environment availability, release scope, calibration evidence.
+- Create/modify domain/database/API records and policy for model, harness, agent, skill and MCP/tool catalogue/release state.
+- Modify: `platform/apps/api/src/model-runtime.ts` and existing model-route/AI-connection/harness/agent capability surfaces.
+- Modify: `platform/apps/web` Studio composer, Agent Auto/specialist selector, model/harness selectors and Admin capability-estate release surfaces.
+- Add governed interaction-artefact persistence/object-reference contracts for uploads/captured media without embedding large payloads in relational rows.
 
-- [ ] **Step 1: Write RED API/domain tests** proving raw OpenRouter discovery is not automatically user-visible; inherited/discovered ECC harnesses are admin-visible but not automatically user-visible; disabled models cannot be selected; unreleased harnesses cannot be selected; trial models require calibration/admin context; and `Auto` resolves only eligible approved candidates.
-- [ ] **Step 2: Verify RED**, then implement minimal model + harness catalogue/policy persistence. Preserve separate dimensions for discovery/maturity, admin release, execution verification, operation authority, sharing/persistence and environment eligibility.
-- [ ] **Step 3: Write RED web tests** for Admin seeing the broad harness catalogue and releasing approved subsets by supported scope, plus user dropdowns showing only released harnesses and `Auto`/approved eligible routes with source labels such as organisation API/personal subscription/OpenRouter.
-- [ ] **Step 4: Implement minimal UI** without exposing API keys, local auth state, unreleased harnesses, hidden disabled routes or runner-local credentials.
-- [ ] **Step 5: Verify GREEN** API/web focused tests + typecheck + production web build, including a regression proving catalogue discovery does not create execution authority.
-- [ ] **Step 6: Commit** `feat: govern model and harness catalogue release`.
+**Interfaces:**
+- Produces: Admin-visible capability estate; release state and scope; project/user eligibility; `Agent: Auto`; specialist-agent selection; user-visible eligible model/harness/agent choices; governed Studio attachment references.
+- Consumes: inherited ECC capability inventory, provider/model discovery/configured routes, calibration evidence, project RBAC, AI connection eligibility, runner/environment availability, Collaborative Memory/context policy and object-storage artefact authority.
+- Preserves: provider/model/route/harness/agent/skill/tool/connection/runner dimensions remain independent. Release or selection in one dimension never creates authority in another.
+
+- [ ] **Step 1: RED — capability estate and release policy.** Prove raw OpenRouter/model discovery and inherited ECC harness/agent/skill/MCP discovery are Admin-visible inventory only; disabled/unreleased capabilities are never user-selectable; trial/calibration state is explicit; release is scoped and audited; `Auto` resolves only independently eligible approved/released candidates.
+- [ ] **Step 2: GREEN — minimal governed catalogue persistence/API.** Implement model + harness + agent/capability catalogue/release/eligibility contracts while preserving discovery, maturity, release, execution verification, operation authority, sharing/persistence and environment eligibility as separate states.
+- [ ] **Step 3: RED — Studio interaction contract.** Prove the normal composer supports text, microphone/voice instruction, file/document upload, images/screenshots and an extensible video/screen-recording ingestion boundary; `Agent: Auto` is default; only Admin-released/project-eligible specialists are selectable; agent choice does not silently change model or harness.
+- [ ] **Step 4: GREEN — governed interaction artefacts.** Attachments/captured media become project/context artefacts with digest/provenance, creator, tenant/project scope, media type, permissions/visibility, retention/audit metadata and bounded context materialisation. Large bodies remain in approved object storage.
+- [ ] **Step 5: RED/GREEN — Admin + user UI.** Admin sees the broad inherited/discovered capability estate and can release subsets by supported population/scope. Studio users see `Agent: Auto` plus eligible specialists (Principal/Lead, Architecture, Backend, Frontend, Database, Security, QA, DevOps where released), and only eligible model/harness choices. Voice input feeds the normal Studio turn flow; persistent real-time voice remains a later extension behind the same authority/state boundary.
+- [ ] **Step 6: Verify the substantial Task-9 slice.** Focused API/domain/database/web tests, typecheck, production build and regression proofs that catalogue discovery/release/attachment ingestion never creates execution authority or exposes provider/local auth secrets.
+- [ ] **Step 7: Freeze, full gate, blind council, adjudicate/remediate, then continue.** Do not stop at the first UI/API increment; review the coherent capability-estate + Studio boundary as one substantial engineering slice.
+
 
 ### Task 10: Whole-slice verification, review, merge, and remote proof
 
