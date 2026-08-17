@@ -79,6 +79,8 @@ describe('004_extensible_execution_routes migration', () => {
       '006_ai_connections_and_delegation.sql',
       '007_ai_runners.sql',
       '008_ai_dispatches.sql',
+      '009_collaborative_memory.sql',
+      '010_review_council.sql',
     ]);
     expect(second).toEqual([]);
 
