@@ -85,6 +85,21 @@ describe('Review Council domain', () => {
     expect(classifyReviewerOutcome({ kind: 'completed', content: 'NO FINDINGS' })).toEqual({
       status: 'completed', content: 'NO FINDINGS'
     });
+    expect(classifyReviewerOutcome({
+      kind: 'unexpected_runtime_state', content: 'looks-valid-but-kind-is-unknown',
+    } as unknown as Parameters<typeof classifyReviewerOutcome>[0])).toEqual({
+      status: 'availability_failure', reason: 'malformed_output'
+    });
+  });
+
+  it('requires a strict majority of assigned reviewers to complete before a gate can be clear', () => {
+    expect(evaluateReviewGate([], [], { assignedReviewers: 4, completedReviewers: 2 } as never)).toEqual({
+      status: 'insufficient_evidence', blockingFindingIds: [],
+      assignedReviewers: 4, completedReviewers: 2, requiredCompletedReviewers: 3,
+    });
+    expect(evaluateReviewGate([], [], { assignedReviewers: 4, completedReviewers: 3 } as never)).toEqual({
+      status: 'clear', blockingFindingIds: [],
+    });
   });
 
   it('supports the locked adjudication states and private rechallenge eligibility', () => {
@@ -107,7 +122,7 @@ describe('Review Council domain', () => {
       status: 'CONFIRMED', rationale: 'Reproduced by deterministic test',
       evidenceReferences: ['test:review-regression'], adjudicatedBy: 'independent-adjudicator', createdAt: now
     });
-    expect(evaluateReviewGate([finding], [adjudication])).toEqual({
+    expect(evaluateReviewGate([finding], [adjudication], { assignedReviewers: 2, completedReviewers: 2 })).toEqual({
       status: 'blocked', blockingFindingIds: [finding.id]
     });
   });
@@ -119,7 +134,7 @@ describe('Review Council domain', () => {
       status: 'PARTIALLY_VALID', rationale: 'Core defect is valid but scope was overstated',
       evidenceReferences: ['src/a.ts:10-20'], adjudicatedBy: 'independent-adjudicator', createdAt: now
     });
-    expect(evaluateReviewGate([finding], [adjudication]).status).toBe('blocked');
+    expect(evaluateReviewGate([finding], [adjudication], { assignedReviewers: 2, completedReviewers: 2 }).status).toBe('blocked');
   });
 
   it('does not let rejected, insufficient, minor, or observation findings block acceptance', () => {
@@ -129,7 +144,7 @@ describe('Review Council domain', () => {
       status: 'REJECTED', rationale: 'Source disproves the claim', evidenceReferences: ['src/a.ts:10-20'],
       adjudicatedBy: 'independent-adjudicator', createdAt: now
     });
-    expect(evaluateReviewGate([finding], [rejected])).toEqual({ status: 'clear', blockingFindingIds: [] });
+    expect(evaluateReviewGate([finding], [rejected], { assignedReviewers: 2, completedReviewers: 2 })).toEqual({ status: 'clear', blockingFindingIds: [] });
   });
   it('invalidates prior acceptance when material source changes', () => {
     const run = createReviewRun({

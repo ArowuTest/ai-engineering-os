@@ -122,6 +122,18 @@ describe('Collaborative Memory domain', () => {
       userId: 'user-002', organisationId: 'org-001', projectId: 'project-001',
       projectAuthorized: true, organisationAuthorized: true,
     })).toBe(false);
+
+    const harnessTargeted = createCollaborativeMemoryRecord({
+      ...userMemory, id: 'mem_user_harness', scope: 'user', visibility: 'user_private',
+      ownerUserId: 'user-001', kind: 'preference', title: 'Harness preference',
+      content: 'Only recall this preference in Claude Code.', targetHarnessIds: ['claude-code'],
+    });
+    expect(canRecallCollaborativeMemory(harnessTargeted, {
+      userId: 'user-001', harnessId: 'codex', projectAuthorized: false, organisationAuthorized: false,
+    })).toBe(false);
+    expect(canRecallCollaborativeMemory(harnessTargeted, {
+      userId: 'user-001', harnessId: 'claude-code', projectAuthorized: false, organisationAuthorized: false,
+    })).toBe(true);
   });
 
   it('excludes rejected and superseded memory from normal recall', () => {
@@ -157,6 +169,12 @@ describe('Collaborative Memory domain', () => {
     };
     expect(canRecallCollaborativeMemory(reviewerPrivate, { ...peer, reviewerAssignmentId: 'assignment-001' })).toBe(true);
     expect(canRecallCollaborativeMemory(reviewerPrivate, peer)).toBe(false);
+    expect(canRecallCollaborativeMemory(reviewerPrivate, {
+      ...peer, reviewerAssignmentId: 'assignment-001', reviewPhase: 'adjudicating',
+    })).toBe(false);
+    expect(canRecallCollaborativeMemory(reviewerPrivate, {
+      ...peer, reviewerAssignmentId: 'assignment-001', reviewPhase: 'normal',
+    })).toBe(false);
 
     const adjudication = createCollaborativeMemoryRecord({
       ...baseMemory(), scope: 'review', visibility: 'adjudication_shared', kind: 'evidence',

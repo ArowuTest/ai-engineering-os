@@ -461,7 +461,13 @@ export class ReviewCouncilService {
       const adjudications = await reviewCouncil.listAdjudications(
         input.organisationId, input.reviewRunId,
       );
-      const gate = evaluateReviewGate(findings, adjudications);
+      const assignments = await reviewCouncil.listReviewerAssignments(
+        input.organisationId, input.reviewRunId,
+      );
+      const gate = evaluateReviewGate(findings, adjudications, {
+        assignedReviewers: assignments.length,
+        completedReviewers: assignments.filter((assignment) => assignment.status === 'completed').length,
+      });
       if (gate.status === 'blocked') {
         await reviewCouncil.markBlocked(input.organisationId, input.reviewRunId);
         await audit.append(createAuditEvent({
@@ -469,6 +475,14 @@ export class ReviewCouncilService {
           eventType: 'review.run.blocked', actorType: 'user', actorId: input.actorUserId,
           subjectType: 'review_run', subjectId: input.reviewRunId,
           metadata: { blockingFindingIds: gate.blockingFindingIds },
+        }));
+      } else if (gate.status === 'clear') {
+        await reviewCouncil.markAccepted(input.organisationId, input.reviewRunId);
+        await audit.append(createAuditEvent({
+          organisationId: input.organisationId, projectId: input.projectId,
+          eventType: 'review.run.accepted', actorType: 'user', actorId: input.actorUserId,
+          subjectType: 'review_run', subjectId: input.reviewRunId,
+          metadata: { completedReviewers: assignments.filter((assignment) => assignment.status === 'completed').length },
         }));
       }
       return gate;

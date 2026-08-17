@@ -159,6 +159,9 @@ describe('ReviewCouncilService blind collection', () => {
         outcome: { kind: 'completed', content: 'A malformed structured finding follows.' },
         findings: [{ severity: 'invalid', category: '', summary: '', evidenceReferences: [] }],
       } as unknown as ReviewExecutionResult],
+      ['assignment-unknown-kind', {
+        outcome: { kind: 'unexpected_runtime_state', content: 'Looks like content but kind is unknown.' }, findings: [],
+      } as unknown as ReviewExecutionResult],
     ]);
     const council = service(new FakeExecutor(results));
     const created = await council.createBlindRun({
@@ -167,6 +170,7 @@ describe('ReviewCouncilService blind collection', () => {
       reviewers: [
         { id: 'assignment-invalid-outcome', role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1' },
         { id: 'assignment-invalid-finding', role: 'security', routeId: 'route-b', modelId: 'model-b', modelVersion: 'v1' },
+        { id: 'assignment-unknown-kind', role: 'database', routeId: 'route-c', modelId: 'model-c', modelVersion: 'v1' },
       ], now,
     });
     const collected = await council.collectBlindReviews({
@@ -176,6 +180,7 @@ describe('ReviewCouncilService blind collection', () => {
     expect(collected.map((entry) => [entry.assignment.id, entry.outcome])).toEqual([
       ['assignment-invalid-finding', { status: 'availability_failure', reason: 'malformed_output' }],
       ['assignment-invalid-outcome', { status: 'availability_failure', reason: 'malformed_output' }],
+      ['assignment-unknown-kind', { status: 'availability_failure', reason: 'malformed_output' }],
     ]);
     expect(await new ReviewCouncilRepository(pool).listFindings('org-001', created.run.id)).toEqual([]);
     expect((await new ReviewCouncilRepository(pool).getRun('org-001', created.run.id))?.status).toBe('adjudicating');
@@ -251,6 +256,13 @@ describe('ReviewCouncilService blind collection', () => {
     const stored = await new ReviewCouncilRepository(pool).listReviewerAssignments('org-001', created.run.id);
     expect(stored.every((assignment) => assignment.status === 'availability_failure')).toBe(true);
     expect(await new ReviewCouncilRepository(pool).listFindings('org-001', created.run.id)).toEqual([]);
+    expect(await council.evaluateGate({
+      organisationId: 'org-001', projectId: project.id, actorUserId: userId, reviewRunId: created.run.id,
+    })).toEqual({
+      status: 'insufficient_evidence', blockingFindingIds: [],
+      assignedReviewers: 3, completedReviewers: 0, requiredCompletedReviewers: 2,
+    });
+    expect((await new ReviewCouncilRepository(pool).getRun('org-001', created.run.id))?.status).toBe('adjudicating');
   });
 });
 
@@ -323,6 +335,31 @@ describe('ReviewCouncilService adjudication and acceptance', () => {
     await expect(council.evaluateGate({
       organisationId: 'org-001', projectId: project.id, actorUserId: userId, reviewRunId: created.run.id,
     })).rejects.toThrow(/invalidated|adjudicating/i);
+  });
+
+  it('accepts a clean council with a strict majority completed while one reviewer is unavailable', async () => {
+    const { userId, project } = await seedProject();
+    const council = service(new FakeExecutor(new Map([
+      ['assignment-d', { outcome: { kind: 'timeout' }, findings: [] }],
+    ])));
+    const created = await council.createBlindRun({
+      id: 'run-clean-majority', organisationId: 'org-001', projectId: project.id,
+      actorUserId: userId, source, evidence, invariantIds: ['runner-local-auth'],
+      reviewers: [
+        { id: 'assignment-a', role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1' },
+        { id: 'assignment-b', role: 'security', routeId: 'route-b', modelId: 'model-b', modelVersion: 'v1' },
+        { id: 'assignment-c', role: 'database', routeId: 'route-c', modelId: 'model-c', modelVersion: 'v1' },
+        { id: 'assignment-d', role: 'architecture', routeId: 'route-d', modelId: 'model-d', modelVersion: 'v1' },
+      ], now,
+    });
+    await council.collectBlindReviews({
+      organisationId: 'org-001', projectId: project.id, actorUserId: userId, reviewRunId: created.run.id,
+      source, evidence, invariantIds: ['runner-local-auth'], maxMemoryItems: 10, maxMemoryBytes: 10_000,
+    });
+    expect(await council.evaluateGate({
+      organisationId: 'org-001', projectId: project.id, actorUserId: userId, reviewRunId: created.run.id,
+    })).toEqual({ status: 'clear', blockingFindingIds: [] });
+    expect((await new ReviewCouncilRepository(pool).getRun('org-001', created.run.id))?.status).toBe('accepted');
   });
 
   it('blocks acceptance on one independently confirmed Important finding even when another reviewer has no findings', async () => {

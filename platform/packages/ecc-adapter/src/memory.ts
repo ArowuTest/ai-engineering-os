@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import {
+  collaborativeMemoryTargetsAllow,
   createCollaborativeMemoryRecord,
   type CollaborativeMemoryRecord,
   type MemoryKind,
@@ -180,6 +181,8 @@ export interface MaterializeCollaborativeMemoryOptions {
   allowedVisibilities: MemoryVisibility[];
   sourceHarness: string;
   targetHarnesses: string[];
+  agentId?: string;
+  sessionId?: string;
   tags?: string[];
   linkedMemoryIds?: string[];
   now?: Date;
@@ -205,6 +208,18 @@ export function materializeCollaborativeMemoryToEcc(
   }
   if (record.trust === 'rejected' || record.trust === 'superseded') {
     throw new Error(`memory trust ${record.trust} is not active for ECC materialization`);
+  }
+  const materializationHarnesses = options.targetHarnesses.length > 0
+    ? options.targetHarnesses
+    : [undefined];
+  for (const harnessId of materializationHarnesses) {
+    if (!collaborativeMemoryTargetsAllow(record, {
+      ...(options.agentId === undefined ? {} : { agentId: options.agentId }),
+      ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
+      ...(harnessId === undefined ? {} : { harnessId }),
+    })) {
+      throw new Error('Collaborative Memory target restrictions do not authorize ECC materialization');
+    }
   }
   if (!ECC_ID_PATTERN.test(record.id)) {
     throw new Error('Collaborative Memory id is not compatible with ecc.memory.v1');

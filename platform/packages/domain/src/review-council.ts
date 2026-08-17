@@ -105,9 +105,19 @@ export interface ArchitectureInvariant {
   createdAt: Date;
 }
 
-export interface ReviewGateResult {
-  status: 'clear' | 'blocked';
-  blockingFindingIds: string[];
+export type ReviewGateResult =
+  | { status: 'clear' | 'blocked'; blockingFindingIds: string[] }
+  | {
+      status: 'insufficient_evidence';
+      blockingFindingIds: [];
+      assignedReviewers: number;
+      completedReviewers: number;
+      requiredCompletedReviewers: number;
+    };
+
+export interface ReviewGateEvidence {
+  assignedReviewers: number;
+  completedReviewers: number;
 }
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
@@ -313,8 +323,22 @@ export function createArchitectureInvariant(input: ArchitectureInvariant): Archi
 
 export function evaluateReviewGate(
   findings: ReviewFinding[],
-  adjudications: FindingAdjudication[]
+  adjudications: FindingAdjudication[],
+  evidence: ReviewGateEvidence,
 ): ReviewGateResult {
+  if (!Number.isInteger(evidence.assignedReviewers) || evidence.assignedReviewers <= 0) {
+    throw new DomainValidationError('assignedReviewers', 'assignedReviewers must be a positive integer');
+  }
+  if (
+    !Number.isInteger(evidence.completedReviewers) ||
+    evidence.completedReviewers < 0 ||
+    evidence.completedReviewers > evidence.assignedReviewers
+  ) {
+    throw new DomainValidationError(
+      'completedReviewers',
+      'completedReviewers must be an integer between zero and assignedReviewers',
+    );
+  }
   const latestByFinding = new Map<string, FindingAdjudication>();
   for (const adjudication of adjudications) {
     const normalized = createFindingAdjudication(adjudication);
@@ -335,7 +359,20 @@ export function evaluateReviewGate(
     .map((finding) => finding.id)
     .sort();
 
-  return { status: blockingFindingIds.length > 0 ? 'blocked' : 'clear', blockingFindingIds };
+  if (blockingFindingIds.length > 0) {
+    return { status: 'blocked', blockingFindingIds };
+  }
+  const requiredCompletedReviewers = Math.floor(evidence.assignedReviewers / 2) + 1;
+  if (evidence.completedReviewers < requiredCompletedReviewers) {
+    return {
+      status: 'insufficient_evidence',
+      blockingFindingIds: [],
+      assignedReviewers: evidence.assignedReviewers,
+      completedReviewers: evidence.completedReviewers,
+      requiredCompletedReviewers,
+    };
+  }
+  return { status: 'clear', blockingFindingIds: [] };
 }
 export function invalidateReviewRunForSource(
   run: ReviewRun,
@@ -366,10 +403,16 @@ export type ReviewerOutcome =
   | { status: 'completed'; content: string }
   | { status: 'availability_failure'; reason: 'empty_output' | 'timeout' | 'malformed_output' };
 export function classifyReviewerOutcome(input: ReviewerOutcomeInput): ReviewerOutcome {
+  if (input === null || typeof input !== 'object' || typeof (input as { kind?: unknown }).kind !== 'string') {
+    return { status: 'availability_failure', reason: 'malformed_output' };
+  }
   if (input.kind === 'timeout') {
     return { status: 'availability_failure', reason: 'timeout' };
   }
   if (input.kind === 'malformed') {
+    return { status: 'availability_failure', reason: 'malformed_output' };
+  }
+  if (input.kind !== 'completed') {
     return { status: 'availability_failure', reason: 'malformed_output' };
   }
   const content = requireNonBlankOrEmpty(input.content);

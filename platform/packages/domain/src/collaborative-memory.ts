@@ -390,7 +390,7 @@ function sameTenantProject(record: CollaborativeMemoryRecord, context: MemoryAcc
   return true;
 }
 
-function targetsAllow(record: CollaborativeMemoryRecord, context: MemoryAccessContext): boolean {
+export function collaborativeMemoryTargetsAllow(record: CollaborativeMemoryRecord, context: Pick<MemoryAccessContext, 'agentId' | 'sessionId' | 'harnessId'>): boolean {
   if (record.targetAgentIds && record.targetAgentIds.length > 0 && !record.targetAgentIds.includes(context.agentId ?? '')) return false;
   if (record.targetSessionIds && record.targetSessionIds.length > 0 && !record.targetSessionIds.includes(context.sessionId ?? '')) return false;
   if (record.targetHarnessIds && record.targetHarnessIds.length > 0 && !record.targetHarnessIds.includes(context.harnessId ?? '')) return false;
@@ -401,8 +401,9 @@ export function canRecallCollaborativeMemory(
   context: MemoryAccessContext,
 ): boolean {
   if (record.trust === 'rejected' || record.trust === 'superseded') return false;
+  if (!collaborativeMemoryTargetsAllow(record, context)) return false;
   if (record.visibility === 'user_private') return record.ownerUserId === context.userId;
-  if (!sameTenantProject(record, context) || !targetsAllow(record, context)) return false;
+  if (!sameTenantProject(record, context)) return false;
 
   switch (record.visibility) {
     case 'session_private':
@@ -414,7 +415,7 @@ export function canRecallCollaborativeMemory(
     case 'organisation_shared':
       return context.organisationAuthorized;
     case 'reviewer_private':
-      return context.projectAuthorized &&
+      return context.projectAuthorized && context.reviewPhase === 'blind_collecting' &&
         record.reviewerAssignmentId === context.reviewerAssignmentId;
     case 'adjudication_shared':
       return context.projectAuthorized && context.reviewPhase === 'adjudicating' && context.canAdjudicate === true;

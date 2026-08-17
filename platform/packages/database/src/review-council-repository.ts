@@ -279,6 +279,17 @@ export class ReviewCouncilRepository {
     return mapRun(result.rows[0]);
   }
 
+  async markAccepted(organisationId: string, reviewRunId: string): Promise<ReviewRun> {
+    const result = await this.database.query<ReviewRunRow>(
+      `UPDATE review_runs SET status = 'accepted'
+       WHERE organisation_id = $1 AND id = $2 AND status = 'adjudicating'
+       RETURNING ${RUN_COLUMNS}`,
+      [organisationId, reviewRunId],
+    );
+    if (!result.rows[0]) throw new Error('review run is not adjudicating');
+    return mapRun(result.rows[0]);
+  }
+
   async createReviewerAssignment(input: CreateReviewerAssignmentInput): Promise<ReviewerAssignmentRecord> {
     const assignment = normalizeAssignment(input);
     const run = await this.database.query<{ packet_digest: string; status: ReviewRun['status'] }>(

@@ -125,6 +125,38 @@ describe('ECC Collaborative Memory adapter', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+  it('enforces durable agent, session, and harness targets before ECC materialization', () => {
+    const root = mkdtempSync(join(tmpdir(), 'platform-ecc-targets-'));
+    try {
+      const record = createCollaborativeMemoryRecord({
+        id: 'mem_20260817_targeted', organisationId: 'org-001', projectId: 'project-001',
+        scope: 'project', visibility: 'project_shared', kind: 'context', trust: 'unreviewed',
+        title: 'Targeted context', content: 'Only the selected execution context may materialize this.',
+        targetAgentIds: ['agent-a'], targetSessionIds: ['session-a'], targetHarnessIds: ['claude-code'],
+        createdBy: 'user-001', sourceType: 'agent', createdAt: new Date('2026-08-17T00:20:00.000Z'),
+      });
+      expect(() => materializeCollaborativeMemoryToEcc(record, {
+        approvedRoot: root, taskRoot: join(root, 'wrong-harness'), allowedVisibilities: ['project_shared'],
+        sourceHarness: 'codex', targetHarnesses: ['codex'], agentId: 'agent-a', sessionId: 'session-a',
+      } as never)).toThrow(/target|harness|authori[sz]ed/i);
+      expect(() => materializeCollaborativeMemoryToEcc(record, {
+        approvedRoot: root, taskRoot: join(root, 'missing-agent'), allowedVisibilities: ['project_shared'],
+        sourceHarness: 'codex', targetHarnesses: ['claude-code'], sessionId: 'session-a',
+      } as never)).toThrow(/target|agent|authori[sz]ed/i);
+      expect(() => materializeCollaborativeMemoryToEcc(record, {
+        approvedRoot: root, taskRoot: join(root, 'wrong-session'), allowedVisibilities: ['project_shared'],
+        sourceHarness: 'codex', targetHarnesses: ['claude-code'], agentId: 'agent-a', sessionId: 'session-b',
+      } as never)).toThrow(/target|session|authori[sz]ed/i);
+      const materialized = materializeCollaborativeMemoryToEcc(record, {
+        approvedRoot: root, taskRoot: join(root, 'matched'), allowedVisibilities: ['project_shared'],
+        sourceHarness: 'codex', targetHarnesses: ['claude-code'], agentId: 'agent-a', sessionId: 'session-a',
+      } as never);
+      expect(materialized.eccMemory.targetHarnesses).toEqual(['claude-code']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('refuses materialization outside the approved root and refuses private memory without explicit visibility approval', () => {
     const approved = mkdtempSync(join(tmpdir(), 'platform-ecc-approved-'));
     const outside = mkdtempSync(join(tmpdir(), 'platform-ecc-outside-'));
