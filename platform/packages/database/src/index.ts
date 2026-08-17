@@ -4,6 +4,7 @@ export * from './ai-runner-repository.js';
 export * from './audit-repository.js';
 export * from './client.js';
 export * from './conversation-repository.js';
+export * from './collaborative-memory-repository.js';
 export * from './invitation-repository.js';
 export * from './knowledge-candidate-repository.js';
 export * from './knowledge-repository.js';

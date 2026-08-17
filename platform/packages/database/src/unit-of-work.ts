@@ -3,6 +3,7 @@ import { AIConnectionRepository } from './ai-connection-repository.js';
 import { AIRunnerRepository } from './ai-runner-repository.js';
 import { AuditRepository } from './audit-repository.js';
 import { ConversationRepository } from './conversation-repository.js';
+import { CollaborativeMemoryRepository, EngineeringSessionRepository } from './collaborative-memory-repository.js';
 import { InvitationRepository } from './invitation-repository.js';
 import { KnowledgeCandidateRepository } from './knowledge-candidate-repository.js';
 import { KnowledgeRepository } from './knowledge-repository.js';
@@ -14,6 +15,8 @@ import { UserRepository } from './user-repository.js';
 export interface TransactionRepositories {
   projects: ProjectRepository;
   conversations: ConversationRepository;
+  collaborativeMemory: CollaborativeMemoryRepository;
+  engineeringSessions: EngineeringSessionRepository;
   knowledge: KnowledgeRepository;
   knowledgeCandidates: KnowledgeCandidateRepository;
   users: UserRepository;
@@ -35,6 +38,8 @@ export class DatabaseUnitOfWork {
       const result = await work({
         projects: new ProjectRepository(client),
         conversations: new ConversationRepository(client),
+        collaborativeMemory: new CollaborativeMemoryRepository(client),
+        engineeringSessions: new EngineeringSessionRepository(client),
         knowledge: new KnowledgeRepository(client),
         knowledgeCandidates: new KnowledgeCandidateRepository(client),
         users: new UserRepository(client),
