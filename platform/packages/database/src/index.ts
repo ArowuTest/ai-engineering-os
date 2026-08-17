@@ -11,6 +11,7 @@ export * from './knowledge-repository.js';
 export * from './membership-repository.js';
 export * from './migrations.js';
 export * from './project-repository.js';
+export * from './review-council-repository.js';
 export * from './queryable.js';
 export * from './session-repository.js';
 export * from './unit-of-work.js';

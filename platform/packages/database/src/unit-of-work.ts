@@ -9,11 +9,13 @@ import { KnowledgeCandidateRepository } from './knowledge-candidate-repository.j
 import { KnowledgeRepository } from './knowledge-repository.js';
 import { MembershipRepository } from './membership-repository.js';
 import { ProjectRepository } from './project-repository.js';
+import { ReviewCouncilRepository } from './review-council-repository.js';
 import { SessionRepository } from './session-repository.js';
 import { UserRepository } from './user-repository.js';
 
 export interface TransactionRepositories {
   projects: ProjectRepository;
+  reviewCouncil: ReviewCouncilRepository;
   conversations: ConversationRepository;
   collaborativeMemory: CollaborativeMemoryRepository;
   engineeringSessions: EngineeringSessionRepository;
@@ -37,6 +39,7 @@ export class DatabaseUnitOfWork {
       await client.query('BEGIN');
       const result = await work({
         projects: new ProjectRepository(client),
+        reviewCouncil: new ReviewCouncilRepository(client),
         conversations: new ConversationRepository(client),
         collaborativeMemory: new CollaborativeMemoryRepository(client),
         engineeringSessions: new EngineeringSessionRepository(client),
