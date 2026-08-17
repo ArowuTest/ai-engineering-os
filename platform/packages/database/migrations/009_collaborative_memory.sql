@@ -23,7 +23,10 @@ CREATE TABLE engineering_sessions (
 CREATE INDEX engineering_sessions_project_idx
   ON engineering_sessions (organisation_id, project_id, status, updated_at DESC);
 CREATE TABLE collaborative_memories (
-  id text PRIMARY KEY CHECK (id ~ '^[a-z0-9][a-z0-9._-]{0,63}$'),
+  id text PRIMARY KEY CHECK (
+    id ~ '^[a-z0-9][a-z0-9._-]{0,63}$'
+    OR id ~ '^mem_[a-z0-9][a-z0-9_-]{2,127}$'
+  ),
   organisation_id text,
   project_id uuid,
   workstream_id text CHECK (workstream_id IS NULL OR workstream_id ~ '^[a-z0-9][a-z0-9._-]{0,63}$'),
@@ -46,11 +49,19 @@ CREATE TABLE collaborative_memories (
   source_agent_id text,
   source_session_id text,
   source_harness_id text,
+  source_schema text,
+  source_document_digest char(64) CHECK (source_document_digest IS NULL OR source_document_digest ~ '^[a-f0-9]{64}$'),
+  source_reference text CHECK (source_reference IS NULL OR length(trim(source_reference)) BETWEEN 1 AND 4096),
+  tags text[] NOT NULL DEFAULT ARRAY[]::text[] CHECK (cardinality(tags) <= 32),
   reviewer_assignment_id text,
   target_agent_ids text[] NOT NULL DEFAULT ARRAY[]::text[],
   target_session_ids text[] NOT NULL DEFAULT ARRAY[]::text[],
   target_harness_ids text[] NOT NULL DEFAULT ARRAY[]::text[],
-  created_at timestamptz NOT NULL,  UNIQUE (organisation_id, project_id, id),
+  created_at timestamptz NOT NULL,
+  UNIQUE (organisation_id, project_id, id),
+  CONSTRAINT collaborative_memories_ecc_provenance_ck CHECK (
+    source_type <> 'ecc_import' OR (source_schema IS NOT NULL AND source_document_digest IS NOT NULL)
+  ),
   CONSTRAINT collaborative_memories_project_scope_ck CHECK (
     scope NOT IN ('project','workstream','agent','session','review')
     OR (organisation_id IS NOT NULL AND project_id IS NOT NULL)

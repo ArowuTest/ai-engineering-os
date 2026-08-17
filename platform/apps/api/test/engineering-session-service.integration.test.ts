@@ -103,6 +103,7 @@ describe('EngineeringSessionService', () => {
       content: 'Payment service implementation is complete and unit tests pass.', now: new Date(now.getTime() + 3),
     });
     expect(checkpoint.visibility).toBe('session_private');
+    expect(checkpoint.id).toMatch(/^mem_[a-z0-9_-]+$/);
 
     const handoff = await sessions.createHandoff({
       organisationId: 'org-001', projectId: project.id, actorUserId: alice.id,
@@ -112,6 +113,7 @@ describe('EngineeringSessionService', () => {
     });
     expect(handoff.handoff.targetAgentIds).toEqual(['agent-test']);
     expect(handoff.memory.kind).toBe('handoff');
+    expect(handoff.memory.id).toMatch(/^mem_[a-z0-9_-]+$/);
     expect(handoff.memory.visibility).toBe('workstream_shared');
 
     const backendContext = await sessions.getContext({

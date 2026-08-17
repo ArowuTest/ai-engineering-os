@@ -90,6 +90,19 @@ describe('CollaborativeMemoryRepository', () => {
     );
     expect(await repo.listProjectMemoriesForUser('org-001', project.id, userId)).toEqual([]);
   });
+  it('persists full ECC identity, source-document provenance and tags without truncation', async () => {
+    const { userId, project } = await seedProject();
+    const repo = new CollaborativeMemoryRepository(pool);
+    const id = 'mem_20260817_' + 'a'.repeat(70);
+    const memory = createCollaborativeMemoryRecord({
+      ...projectMemory(project.id, userId, id), sourceType: 'ecc_import',
+      sourceSchema: 'ecc.memory.v1', sourceDocumentDigest: 'c'.repeat(64),
+      sourceReference: 'project:handoffs/' + id + '.md', tags: ['auth', 'handoff'],
+    });
+    await repo.createMemory(memory);
+    expect(await repo.getProjectMemory('org-001', project.id, id)).toEqual(memory);
+  });
+
   it('keeps user-private memory owner-scoped and outside project reads', async () => {
     const { userId, project } = await seedProject();
     const repo = new CollaborativeMemoryRepository(pool);

@@ -130,6 +130,18 @@ AI Engineering OS does not blindly merge upstream ECC changes. Upstream changes 
 
 The original ECC README is preserved at `docs/upstream/ECC-README.md` so ECC catalog compatibility can be verified without turning the product homepage back into an ECC landing page.
 
+### Unified Memory runtime
+
+AI Engineering OS productises ECC Unified Memory through the platform Collaborative Memory layer. The inherited local CLI/MCP interoperability surface still requires the ECC runtime when an operator or harness uses those commands directly:
+
+```bash
+npm install -g ecc-universal
+ecc memory --help
+command -v ecc-memory-mcp
+```
+
+The optional `ecc-memory-mcp` process exposes the bounded local Memory Vault tools; it is not the platform source of authority and is not enabled automatically for every harness.
+
 ## Branch model
 
 ```text

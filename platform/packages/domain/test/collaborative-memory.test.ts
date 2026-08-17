@@ -57,6 +57,28 @@ describe('Collaborative Memory domain', () => {
       targetHarnessIds: ['claude-code', 'opencode'],
     });
   });
+  it('preserves full ECC-compatible identity and import provenance', () => {
+    const eccId = 'mem_20260817_' + 'a'.repeat(70);
+    const record = createCollaborativeMemoryRecord({
+      ...baseMemory(), id: eccId, sourceType: 'ecc_import', sourceSchema: 'ecc.memory.v1',
+      sourceDocumentDigest: 'b'.repeat(64), sourceReference: 'project:handoffs/' + eccId + '.md',
+      tags: ['auth', 'handoff'],
+    });
+    expect(record.id).toBe(eccId);
+    expect(record.sourceSchema).toBe('ecc.memory.v1');
+    expect(record.sourceDocumentDigest).toBe('b'.repeat(64));
+    expect(record.tags).toEqual(['auth', 'handoff']);
+  });
+
+  it('requires complete ECC import provenance and unique bounded tags', () => {
+    expect(() => createCollaborativeMemoryRecord({ ...baseMemory(), sourceType: 'ecc_import' }))
+      .toThrow(/source.*digest|provenance|schema/i);
+    expect(() => createCollaborativeMemoryRecord({
+      ...baseMemory(), sourceType: 'ecc_import', sourceSchema: 'ecc.memory.v1',
+      sourceDocumentDigest: 'b'.repeat(64), tags: ['auth', 'auth'],
+    })).toThrow(/tags.*duplicate/i);
+  });
+
   it('requires project identity for collaborative project/workstream/agent/session/review scopes', () => {
     for (const scope of ['project', 'workstream', 'agent', 'session', 'review'] as const) {
       expect(() => createCollaborativeMemoryRecord({

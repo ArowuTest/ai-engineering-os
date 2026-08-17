@@ -21,14 +21,15 @@ interface MemoryRow {
   scope: MemoryScope; visibility: MemoryVisibility; kind: MemoryKind; trust: MemoryTrustState;
   title: string; content: string; content_digest: string; owner_user_id: string | null;
   created_by: string; source_type: MemorySourceType; source_agent_id: string | null;
-  source_session_id: string | null; source_harness_id: string | null; reviewer_assignment_id: string | null;
+  source_session_id: string | null; source_harness_id: string | null; source_schema: string | null;
+  source_document_digest: string | null; source_reference: string | null; tags: string[]; reviewer_assignment_id: string | null;
   target_agent_ids: string[]; target_session_ids: string[]; target_harness_ids: string[]; created_at: Date;
 }
 
 const MEMORY_COLUMNS = `id, organisation_id, project_id, workstream_id, scope, visibility, kind, trust,
   title, content, content_digest, owner_user_id, created_by, source_type, source_agent_id,
-  source_session_id, source_harness_id, reviewer_assignment_id, target_agent_ids,
-  target_session_ids, target_harness_ids, created_at`;
+  source_session_id, source_harness_id, source_schema, source_document_digest, source_reference, tags,
+  reviewer_assignment_id, target_agent_ids, target_session_ids, target_harness_ids, created_at`;
 const MEMORY_COLUMNS_FROM_M = MEMORY_COLUMNS.split(',').map((column) => `m.${column.trim()}`).join(', ');
 function mapMemory(row: MemoryRow): CollaborativeMemoryRecord {
   const input = {
@@ -42,6 +43,10 @@ function mapMemory(row: MemoryRow): CollaborativeMemoryRecord {
     ...(row.source_agent_id === null ? {} : { sourceAgentId: row.source_agent_id }),
     ...(row.source_session_id === null ? {} : { sourceSessionId: row.source_session_id }),
     ...(row.source_harness_id === null ? {} : { sourceHarnessId: row.source_harness_id }),
+    ...(row.source_schema === null ? {} : { sourceSchema: row.source_schema }),
+    ...(row.source_document_digest === null ? {} : { sourceDocumentDigest: row.source_document_digest }),
+    ...(row.source_reference === null ? {} : { sourceReference: row.source_reference }),
+    ...(row.tags.length === 0 ? {} : { tags: [...row.tags] }),
     ...(row.reviewer_assignment_id === null ? {} : { reviewerAssignmentId: row.reviewer_assignment_id }),
     ...(row.target_agent_ids.length === 0 ? {} : { targetAgentIds: [...row.target_agent_ids] }),
     ...(row.target_session_ids.length === 0 ? {} : { targetSessionIds: [...row.target_session_ids] }),
@@ -100,12 +105,13 @@ export class CollaborativeMemoryRepository {
     await this.database.query(
       `INSERT INTO collaborative_memories
         (${MEMORY_COLUMNS})
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)`,
       [
         memory.id, memory.organisationId ?? null, memory.projectId ?? null, memory.workstreamId ?? null,
         memory.scope, memory.visibility, memory.kind, memory.trust, memory.title, memory.content,
         memory.contentDigest, memory.ownerUserId ?? null, memory.createdBy, memory.sourceType,
         memory.sourceAgentId ?? null, memory.sourceSessionId ?? null, memory.sourceHarnessId ?? null,
+        memory.sourceSchema ?? null, memory.sourceDocumentDigest ?? null, memory.sourceReference ?? null, memory.tags ?? [],
         memory.reviewerAssignmentId ?? null, memory.targetAgentIds ?? [], memory.targetSessionIds ?? [],
         memory.targetHarnessIds ?? [], memory.createdAt,
       ],

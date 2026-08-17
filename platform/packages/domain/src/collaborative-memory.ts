@@ -42,6 +42,10 @@ export interface CreateCollaborativeMemoryRecordInput {
   sourceAgentId?: string;
   sourceSessionId?: string;
   sourceHarnessId?: string;
+  sourceSchema?: string;
+  sourceDocumentDigest?: string;
+  sourceReference?: string;
+  tags?: string[];
   reviewerAssignmentId?: string;
   targetAgentIds?: string[];
   targetSessionIds?: string[];
@@ -131,6 +135,8 @@ export interface MemoryAccessContext {
 const PROJECT_SCOPES = new Set<MemoryScope>(['project', 'workstream', 'agent', 'session', 'review']);
 const MAX_MEMORY_CONTENT_BYTES = 65_536;
 const MAX_MEMORY_TITLE_LENGTH = 512;
+const ECC_MEMORY_IDENTIFIER_PATTERN = /^mem_[a-z0-9][a-z0-9_-]{2,127}$/;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 function requireEnum<T extends string>(value: unknown, values: readonly T[], field: string): T {
   if (typeof value !== 'string' || !values.includes(value as T)) {
     throw new DomainValidationError(field, `${field} must be a supported value`);
@@ -145,9 +151,22 @@ function requireDate(value: unknown, field: string): Date {
   return new Date(value.getTime());
 }
 
+function requireMemoryIdentifier(value: unknown, field: string): string {
+  if (typeof value === 'string' && ECC_MEMORY_IDENTIFIER_PATTERN.test(value)) return value;
+  return requireStableIdentifier(value, field);
+}
+
 function optionalIdentifier(value: unknown, field: string): string | undefined {
   return value === undefined ? undefined : requireStableIdentifier(value, field);
 }
+
+function requireSha256(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !SHA256_PATTERN.test(value)) {
+    throw new DomainValidationError(field, field + ' must be a lowercase SHA-256 digest');
+  }
+  return value;
+}
+
 
 function identifierList(value: unknown, field: string): string[] | undefined {
   if (value === undefined) return undefined;
@@ -157,6 +176,14 @@ function identifierList(value: unknown, field: string): string[] | undefined {
     throw new DomainValidationError(field, `${field} must not contain duplicates`);
   }
   return result;
+}
+
+function tagList(value: unknown): string[] | undefined {
+  const tags = identifierList(value, 'tags');
+  if (tags !== undefined && tags.length > 32) {
+    throw new DomainValidationError('tags', 'tags has too many values');
+  }
+  return tags;
 }
 
 function stringList(value: unknown, field: string): string[] {
@@ -229,12 +256,15 @@ export function createCollaborativeMemoryRecord(input: CreateCollaborativeMemory
   const kind = requireEnum(input.kind, MEMORY_KINDS, 'kind');
   const trust = requireEnum(input.trust, MEMORY_TRUST_STATES, 'trust');
   const sourceType = requireEnum(input.sourceType, MEMORY_SOURCE_TYPES, 'sourceType');
+  if (sourceType === 'ecc_import' && (input.sourceSchema === undefined || input.sourceDocumentDigest === undefined)) {
+    throw new DomainValidationError('sourceDocumentDigest', 'ECC import provenance requires source schema and source document digest');
+  }
   validateMemoryScope({ ...input, scope, visibility, kind, trust, sourceType });
   validateMemoryVisibility({ ...input, scope, visibility, kind, trust, sourceType });
   const content = requireSafeText(input.content, 'content', MAX_MEMORY_CONTENT_BYTES);
   const title = requireSafeText(input.title, 'title', MAX_MEMORY_TITLE_LENGTH);
   const record: CollaborativeMemoryRecord = {
-    id: requireStableIdentifier(input.id, 'id'),
+    id: requireMemoryIdentifier(input.id, 'id'),
     scope, visibility, kind, trust, title, content,
     contentDigest: digestMemoryContent(content),
     createdBy: requireNonBlank(input.createdBy, 'createdBy'),
@@ -254,6 +284,15 @@ export function createCollaborativeMemoryRecord(input: CreateCollaborativeMemory
   for (const [key, value] of optionals) {
     if (value !== undefined) (record as unknown as Record<string, unknown>)[key] = value;
   }
+  if (input.sourceSchema !== undefined) record.sourceSchema = requireStableIdentifier(input.sourceSchema, 'sourceSchema');
+  if (input.sourceDocumentDigest !== undefined) {
+    record.sourceDocumentDigest = requireSha256(input.sourceDocumentDigest, 'sourceDocumentDigest');
+  }
+  if (input.sourceReference !== undefined) {
+    record.sourceReference = requireSafeText(input.sourceReference, 'sourceReference', 4096);
+  }
+  const tags = tagList(input.tags);
+  if (tags !== undefined) record.tags = tags;
   for (const [key, value] of [
     ['targetAgentIds', identifierList(input.targetAgentIds, 'targetAgentIds')],
     ['targetSessionIds', identifierList(input.targetSessionIds, 'targetSessionIds')],
@@ -265,8 +304,8 @@ export function createCollaborativeMemoryRecord(input: CreateCollaborativeMemory
 }
 
 export function createMemoryLink(input: MemoryLink): MemoryLink {
-  const sourceMemoryId = requireStableIdentifier(input.sourceMemoryId, 'sourceMemoryId');
-  const targetMemoryId = requireStableIdentifier(input.targetMemoryId, 'targetMemoryId');
+  const sourceMemoryId = requireMemoryIdentifier(input.sourceMemoryId, 'sourceMemoryId');
+  const targetMemoryId = requireMemoryIdentifier(input.targetMemoryId, 'targetMemoryId');
   if (sourceMemoryId === targetMemoryId) throw new DomainValidationError('targetMemoryId', 'memory cannot link to itself');
   return { sourceMemoryId, targetMemoryId, relation: requireEnum(input.relation, MEMORY_LINK_RELATIONS, 'relation') };
 }

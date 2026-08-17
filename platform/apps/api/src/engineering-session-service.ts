@@ -27,6 +27,10 @@ export interface EngineeringSessionServiceDependencies {
   engineeringSessions: EngineeringSessionRepository;
 }
 
+function newMemoryId(): string {
+  return `mem_${randomUUID().replaceAll('-', '')}`;
+}
+
 function requireDate(value: Date | undefined): Date {
   const resolved = value ?? new Date();
   if (!(resolved instanceof Date) || !Number.isFinite(resolved.getTime())) {
@@ -118,7 +122,7 @@ export class EngineeringSessionService {
       input.organisationId, input.projectId, input.actorUserId, input.sessionId,
     );
     const memory = createCollaborativeMemoryRecord({
-      id: randomUUID(), organisationId: input.organisationId, projectId: input.projectId,
+      id: newMemoryId(), organisationId: input.organisationId, projectId: input.projectId,
       ...(sourceSession.workstreamId === undefined ? {} : { workstreamId: sourceSession.workstreamId }),
       scope: 'session', visibility: 'session_private', kind: 'checkpoint', trust: 'unreviewed',
       title: input.title, content: input.content, createdBy: input.actorUserId,
@@ -173,7 +177,7 @@ export class EngineeringSessionService {
     });
     const sharedByWorkstream = sourceSession.workstreamId !== undefined;
     const memory = createCollaborativeMemoryRecord({
-      id: randomUUID(), organisationId: input.organisationId, projectId: input.projectId,
+      id: newMemoryId(), organisationId: input.organisationId, projectId: input.projectId,
       ...(sourceSession.workstreamId === undefined ? {} : { workstreamId: sourceSession.workstreamId }),
       scope: sharedByWorkstream ? 'workstream' : 'project',
       visibility: sharedByWorkstream ? 'workstream_shared' : 'project_shared',
