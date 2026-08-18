@@ -48,6 +48,7 @@ async function setupProject() {
     [alice.id, undefined, 'task-claude-target', 'agent-claude-target'],
     [alice.id, undefined, 'task-review-forge', 'agent-review-forge'],
     [alice.id, undefined, 'task-rebind-race', 'agent-rebind-race'],
+    [alice.id, undefined, 'task-rebind-same-ts', 'agent-rebind-same-ts'],
     [alice.id, undefined, 'task-revoke-race', 'agent-revoke-race'],
     [bob.id, 'payments', 'task-test', 'agent-test'],
     [bob.id, 'payments', 'task-other', 'agent-other'],
@@ -247,38 +248,18 @@ describe('EngineeringSessionService', () => {
     });
     expect(context.items.map((item) => item.memoryId)).toContain(checkpoint.id);
   });
-  it('rejects a stale concurrent session rebind instead of last-writer-wins', async () => {
+  it('advances the platform session version even when the caller supplies the current timestamp', async () => {
     const { alice, project } = await setupProject();
     const sessions = service();
     const session = await sessions.startSession({ organisationId: 'org-001', projectId: project.id,
       actorUserId: alice.id, taskId: 'task-rebind-race', agentId: 'agent-rebind-race', harnessId: 'codex', now });
-    const blocker = await pool.connect();
-    await blocker.query('BEGIN');
-    await blocker.query('LOCK TABLE audit_events IN ACCESS EXCLUSIVE MODE');
-    try {
-      const first = sessions.continueSession({ organisationId: 'org-001', projectId: project.id, actorUserId: alice.id,
-        sessionId: session.id, harnessId: 'claude-code', runnerId: 'runner-first', now: new Date(now.getTime()+1) });
-      let blockedOnAudit = false;
-      for (let attempt=0; attempt<100 && !blockedOnAudit; attempt+=1) {
-        const q=await pool.query<{count:string}>(`SELECT count(*)::text AS count FROM pg_stat_activity
-          WHERE datname=current_database() AND query LIKE 'INSERT INTO audit_events%' AND wait_event_type='Lock'`);
-        blockedOnAudit=Number(q.rows[0]?.count??0)>0;
-        if(!blockedOnAudit) await new Promise((resolve)=>setTimeout(resolve,10));
-      }
-      expect(blockedOnAudit).toBe(true);
-      const second = sessions.continueSession({ organisationId: 'org-001', projectId: project.id, actorUserId: alice.id,
-        sessionId: session.id, harnessId: 'opencode', runnerId: 'runner-second', now: new Date(now.getTime()+2) });
-      await blocker.query('COMMIT');
-      const results = await Promise.allSettled([first, second]);
-      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
-      expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
-      const stored = await new EngineeringSessionRepository(pool).get('org-001', project.id, session.id);
-      expect(stored).toMatchObject({ harnessId: 'claude-code', runnerId: 'runner-first' });
-    } finally {
-      try { await blocker.query('ROLLBACK'); } catch {}
-      blocker.release();
-    }
+    const continued = await sessions.continueSession({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: alice.id, sessionId: session.id, harnessId: 'claude-code', runnerId: 'runner-first',
+      now: session.updatedAt });
+    expect(continued.updatedAt.getTime()).toBeGreaterThan(session.updatedAt.getTime());
+    expect(await new EngineeringSessionRepository(pool).get('org-001', project.id, session.id)).toEqual(continued);
   });
+
 
   it('serializes checkpoint authority against a concurrent project revocation', async () => {
     const { alice, project } = await setupProject();

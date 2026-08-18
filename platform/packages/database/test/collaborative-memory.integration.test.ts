@@ -146,6 +146,24 @@ describe('CollaborativeMemoryRepository', () => {
     expect(candidates.map((memory: {id:string})=>memory.id)).not.toContain('mem_other_private');
   });
 
+  it('applies hard trust denial before the SQL candidate limit', async () => {
+    const { userId, project } = await seedProject(); const repo=new CollaborativeMemoryRepository(pool);
+    const live=createCollaborativeMemoryRecord({ ...projectMemory(project.id,userId,'mem_live_before_rejected'), createdAt: now });
+    await repo.createMemory(live);
+    for(let i=0;i<5;i+=1){ await repo.createMemory(createCollaborativeMemoryRecord({ ...projectMemory(project.id,userId,`mem_rejected_${i}`), trust:'rejected', createdAt:new Date(now.getTime()+100+i) })); }
+    const candidates=await repo.listProjectMemoriesForUser('org-001',project.id,userId,{maxCandidates:5,reviewPhase:'normal'});
+    expect(candidates.map((memory)=>memory.id)).toContain(live.id);
+    expect(candidates.every((memory)=>memory.trust!=='rejected'&&memory.trust!=='superseded')).toBe(true);
+  });
+
+  it('recalls governed organisation-shared memory into an authorised project context', async () => {
+    const { userId, project } = await seedProject(); const repo=new CollaborativeMemoryRepository(pool);
+    const orgMemory=createCollaborativeMemoryRecord({ id:'mem_org_governed', organisationId:'org-001', scope:'organisation', visibility:'organisation_shared', kind:'runbook', trust:'governed', title:'Organisation runbook', content:'Approved organisation-wide engineering guidance.', createdBy:userId, sourceType:'human', createdAt:now });
+    await repo.createMemory(orgMemory);
+    const candidates=await repo.listProjectMemoriesForUser('org-001',project.id,userId,{maxCandidates:10,reviewPhase:'normal'});
+    expect(candidates.map((memory)=>memory.id)).toContain(orgMemory.id);
+  });
+
   it('keeps user-private memory owner-scoped and outside project reads', async () => {
     const { userId, project } = await seedProject();
     const repo = new CollaborativeMemoryRepository(pool);
@@ -227,6 +245,23 @@ describe('EngineeringSessionRepository', () => {
     });
     await repo.rebindExecution(rebound, session.updatedAt);
     expect(await repo.get('org-001', project.id, session.id)).toEqual(rebound);
+  });
+
+  it('rejects a stale execution CAS after another writer advances the session version', async () => {
+    const { userId, project } = await seedProject();
+    const repo = new EngineeringSessionRepository(pool);
+    const session = createEngineeringSession({ id:'session-cas', organisationId:'org-001', projectId:project.id,
+      taskId:'task-cas', agentId:'agent-cas', harnessId:'codex', runnerId:'runner-old', createdBy:userId, createdAt:now });
+    await repo.create(session);
+    const winner = rebindEngineeringSessionExecution(session, {
+      harnessId:'claude-code', runnerId:'runner-first', updatedAt:new Date(now.getTime()+1),
+    });
+    const stale = rebindEngineeringSessionExecution(session, {
+      harnessId:'opencode', runnerId:'runner-second', updatedAt:new Date(now.getTime()+1),
+    });
+    await repo.rebindExecution(winner, session.updatedAt);
+    await expect(repo.rebindExecution(stale, session.updatedAt)).rejects.toThrow('engineering session execution conflict');
+    expect(await repo.get('org-001', project.id, session.id)).toEqual(winner);
   });
 });
 describe('Collaborative Memory unit of work', () => {

@@ -152,12 +152,15 @@ export class CollaborativeMemoryRepository {
     const result = await this.database.query<MemoryRow>(
       `SELECT ${MEMORY_COLUMNS_FROM_M}
        FROM collaborative_memories m
-       JOIN project_memberships pm ON pm.organisation_id=m.organisation_id AND pm.project_id=m.project_id
+       JOIN project_memberships pm ON pm.organisation_id=$1 AND pm.project_id=$2 AND pm.user_id=$3
        JOIN organisation_memberships om ON om.organisation_id=pm.organisation_id AND om.user_id=pm.user_id
        JOIN users u ON u.id=pm.user_id
-       WHERE m.organisation_id=$1 AND m.project_id=$2 AND pm.user_id=$3
+       WHERE m.organisation_id=$1
+         AND (m.project_id=$2 OR (m.visibility='organisation_shared' AND m.project_id IS NULL))
          AND pm.status='active' AND om.status='active' AND u.status='active'
-         AND (m.visibility='project_shared'
+         AND m.trust NOT IN ('rejected','superseded')
+         AND ((m.visibility='project_shared' AND ($7::text <> 'blind_collecting' OR m.trust='governed'))
+           OR (m.visibility='organisation_shared' AND m.trust='governed')
            OR (m.visibility='session_private' AND $4::text IS NOT NULL AND m.source_session_id=$4)
            OR (m.visibility='workstream_shared' AND $5::text IS NOT NULL AND m.workstream_id=$5)
            OR (m.visibility='reviewer_private' AND $6::text IS NOT NULL AND m.reviewer_assignment_id=$6)
@@ -288,7 +291,7 @@ export class EngineeringSessionRepository {
   }
 
   async rebindExecution(input: EngineeringSession, expectedUpdatedAt: Date): Promise<void> {
-    const session = rebindEngineeringSessionExecution(input, {
+    const session = rebindEngineeringSessionExecution({ ...input, updatedAt: expectedUpdatedAt }, {
       ...(input.harnessId === undefined ? {} : { harnessId: input.harnessId }),
       ...(input.modelRouteId === undefined ? {} : { modelRouteId: input.modelRouteId }),
       ...(input.runnerId === undefined ? {} : { runnerId: input.runnerId }),

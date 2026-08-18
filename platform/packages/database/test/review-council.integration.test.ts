@@ -143,6 +143,14 @@ describe('ReviewCouncilRepository', () => {
     })).rejects.toThrow(/packet/i);
   });
 
+  it('does not automatically steal an expired collection claim and supports explicit stale recovery', async () => {
+    const project=await seedProject(); const repo=new ReviewCouncilRepository(pool); const run=makeRun(project); await repo.createRun(run,reviewMaterial);
+    await repo.claimCollection(project.organisationId,run.id,'claim-a',now,new Date(now.getTime()+1));
+    await expect(repo.claimCollection(project.organisationId,run.id,'claim-b',new Date(now.getTime()+2),new Date(now.getTime()+1000))).rejects.toThrow(/collection|progress|claim/i);
+    await (repo as any).releaseExpiredCollectionClaim(project.organisationId,run.id,new Date(now.getTime()+2));
+    await repo.claimCollection(project.organisationId,run.id,'claim-b',new Date(now.getTime()+3),new Date(now.getTime()+1000));
+  });
+
   it('durably distinguishes completed reviewer output from availability failure', async () => {
     const project = await seedProject();
     const repo = new ReviewCouncilRepository(pool);

@@ -288,12 +288,24 @@ export class ReviewCouncilRepository {
     const expires = requireDate(expiresAt, 'expiresAt');
     if (expires.getTime() <= claimed.getTime()) throw new TypeError('expiresAt must be after claimedAt');
     const result = await this.database.query(
-      `UPDATE review_runs SET collection_claim_token = $3, collection_claim_expires_at = $5
+      `UPDATE review_runs SET collection_claim_token = $3, collection_claim_expires_at = $4
        WHERE organisation_id = $1 AND id = $2 AND status = 'collecting'
-         AND (collection_claim_token IS NULL OR collection_claim_expires_at <= $4)`,
-      [organisationId, reviewRunId, token, claimed, expires],
+         AND collection_claim_token IS NULL`,
+      [organisationId, reviewRunId, token, expires],
     );
     if (result.rowCount !== 1) throw new Error('review collection already in progress or run is not collecting');
+  }
+
+  async releaseExpiredCollectionClaim(organisationId: string, reviewRunId: string, observedAt: Date): Promise<boolean> {
+    const observed = requireDate(observedAt, 'observedAt');
+    const result = await this.database.query(
+      `UPDATE review_runs SET collection_claim_token = NULL, collection_claim_expires_at = NULL
+       WHERE organisation_id = $1 AND id = $2 AND status = 'collecting'
+         AND collection_claim_token IS NOT NULL AND collection_claim_expires_at IS NOT NULL
+         AND collection_claim_expires_at <= $3`,
+      [organisationId, reviewRunId, observed],
+    );
+    return result.rowCount === 1;
   }
 
   async requireCollectionClaim(organisationId: string, reviewRunId: string, claimToken: string): Promise<void> {

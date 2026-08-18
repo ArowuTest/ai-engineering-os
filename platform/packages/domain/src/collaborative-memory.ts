@@ -345,8 +345,8 @@ export function rebindEngineeringSessionExecution(
   },
 ): EngineeringSession {
   const updatedAt = requireDate(input.updatedAt, 'updatedAt');
-  if (updatedAt.getTime() < session.updatedAt.getTime()) {
-    throw new DomainValidationError('updatedAt', 'updatedAt must not precede current session state');
+  if (updatedAt.getTime() <= session.updatedAt.getTime()) {
+    throw new DomainValidationError('updatedAt', 'updatedAt must advance current session state');
   }
   const rebound: EngineeringSession = { ...session, updatedAt };
   for (const [key, value] of Object.entries(input)) {

@@ -256,16 +256,17 @@ export class EngineeringSessionService {
     harnessId?: string; modelRouteId?: string; runnerId?: string; environmentId?: string;
     workspaceReference?: string; now?: Date;
   }): Promise<EngineeringSession> {
-    const now = requireDate(input.now);    const current = await this.requireOwnedSession(
+    const requestedAt = requireDate(input.now);    const current = await this.requireOwnedSession(
       input.organisationId, input.projectId, input.actorUserId, input.sessionId,
     );
+    const updatedAt = new Date(Math.max(requestedAt.getTime(), current.updatedAt.getTime() + 1));
     const rebound = rebindEngineeringSessionExecution(current, {
       ...(input.harnessId === undefined ? {} : { harnessId: input.harnessId }),
       ...(input.modelRouteId === undefined ? {} : { modelRouteId: input.modelRouteId }),
       ...(input.runnerId === undefined ? {} : { runnerId: input.runnerId }),
       ...(input.environmentId === undefined ? {} : { environmentId: input.environmentId }),
       ...(input.workspaceReference === undefined ? {} : { workspaceReference: input.workspaceReference }),
-      updatedAt: now,
+      updatedAt,
     });
 
     await this.dependencies.unitOfWork.run(async ({ users, memberships, engineeringSessions, audit }) => {
