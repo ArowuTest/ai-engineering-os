@@ -118,6 +118,18 @@ describe('ReviewCouncilRepository', () => {
     expect(await repo.getRun('org-other', run.id)).toBeNull();
   });
 
+  it('allows the same public run and assignment ids in independent organisations', async () => {
+    const first = await seedProject('org-001'); const second = await seedProject('org-002');
+    const repo = new ReviewCouncilRepository(pool); const runA = makeRun(first); const runB = makeRun(second);
+    await repo.createRun(runA, reviewMaterial); await expect(repo.createRun(runB, reviewMaterial)).resolves.toBeUndefined();
+    for (const project of [first, second]) {
+      const run = project.organisationId === 'org-001' ? runA : runB;
+      await expect(repo.createReviewerAssignment({ id: 'assignment-shared', organisationId: project.organisationId,
+        reviewRunId: run.id, role: 'general', routeId: 'route-1', modelId: 'model-1', modelVersion: 'v1',
+        packetDigest: run.packetDigest, createdAt: now })).resolves.toMatchObject({ id: 'assignment-shared' });
+    }
+  });
+
   it('records reviewer assignment with the exact blind packet and resolved route identity', async () => {
     const project = await seedProject();
     const repo = new ReviewCouncilRepository(pool);
@@ -161,8 +173,11 @@ describe('ReviewCouncilRepository', () => {
       role: 'general', routeId: 'route-1', modelId: 'model-1', modelVersion: 'v1',
       packetDigest: run.packetDigest, createdAt: now
     });
+    const claimNow = new Date();
+    await repo.claimCollection(project.organisationId, run.id, 'claim-failure', claimNow, new Date(claimNow.getTime() + 5000));
+    await repo.beginReviewerExecution(project.organisationId, run.id, 'assignment-1', 'claim-failure', claimNow);
     const failed = await repo.recordReviewerAvailabilityFailure(
-      project.organisationId, 'assignment-1', 'empty_output', new Date(now.getTime() + 1000)
+      project.organisationId, 'assignment-1', 'empty_output', new Date(now.getTime() + 1000), 'claim-failure'
     );
     expect(failed).toMatchObject({ status: 'availability_failure', availabilityReason: 'empty_output' });
     expect(failed.contentDigest).toBeUndefined();
@@ -177,9 +192,12 @@ describe('ReviewCouncilRepository', () => {
       role: 'security', routeId: 'route-1', modelId: 'model-1', modelVersion: 'v1',
       packetDigest: run.packetDigest, createdAt: now
     });
+    const claimNow = new Date();
+    await repo.claimCollection(project.organisationId, run.id, 'claim-completed', claimNow, new Date(claimNow.getTime() + 5000));
+    await repo.beginReviewerExecution(project.organisationId, run.id, 'assignment-1', 'claim-completed', claimNow);
     const contentDigest = digestReviewMaterial('NO FINDINGS');
     const completed = await repo.recordReviewerCompleted(
-      project.organisationId, 'assignment-1', contentDigest, new Date(now.getTime() + 1000)
+      project.organisationId, 'assignment-1', contentDigest, new Date(now.getTime() + 1000), 'claim-completed'
     );
     expect(completed).toMatchObject({ status: 'completed', contentDigest });
     expect(completed.availabilityReason).toBeUndefined();

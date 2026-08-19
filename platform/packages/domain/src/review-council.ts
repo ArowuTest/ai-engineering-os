@@ -185,7 +185,7 @@ function requireBoundedStringList(
   return normalized;
 }
 function normalizeInvariantIds(value: unknown): string[] {
-  return requireStringList(value, 'invariantIds').map((id, index) =>
+  return requireBoundedStringList(value, 'invariantIds', { minLength: 1, maxLength: 64 }).map((id, index) =>
     requireStableIdentifier(id, `invariantIds[${index}]`)
   );
 }
@@ -370,9 +370,9 @@ export function evaluateReviewGate(
       'completedReviewers must be an integer between zero and assignedReviewers',
     );
   }
+  const normalizedAdjudications = adjudications.map(createFindingAdjudication);
   const latestByFinding = new Map<string, FindingAdjudication>();
-  for (const adjudication of adjudications) {
-    const normalized = createFindingAdjudication(adjudication);
+  for (const normalized of normalizedAdjudications) {
     const existing = latestByFinding.get(normalized.findingId);
     if (!existing || existing.createdAt.getTime() <= normalized.createdAt.getTime()) {
       latestByFinding.set(normalized.findingId, normalized);
@@ -383,11 +383,10 @@ export function evaluateReviewGate(
     .map(createReviewFinding)
     .filter((finding) => finding.severity === 'critical' || finding.severity === 'important');
   const blockingFindingIds = materialFindings
-    .filter((finding) => {
-      const adjudication = latestByFinding.get(finding.id);
-      return adjudication?.reviewRunId === finding.reviewRunId &&
-        (adjudication.status === 'CONFIRMED' || adjudication.status === 'PARTIALLY_VALID');
-    })
+    .filter((finding) => normalizedAdjudications.some((adjudication) =>
+      adjudication.findingId === finding.id && adjudication.reviewRunId === finding.reviewRunId &&
+      (adjudication.status === 'CONFIRMED' || adjudication.status === 'PARTIALLY_VALID')
+    ))
     .map((finding) => finding.id)
     .sort();
 
@@ -442,17 +441,21 @@ export function invalidateReviewRunForSource(
 export type ReviewerOutcomeInput =
   | { kind: 'completed'; content: string }
   | { kind: 'timeout' }
+  | { kind: 'executor_failure'; detail?: string }
   | { kind: 'malformed'; detail?: string };
 
 export type ReviewerOutcome =
   | { status: 'completed'; content: string }
-  | { status: 'availability_failure'; reason: 'empty_output' | 'timeout' | 'malformed_output' };
+  | { status: 'availability_failure'; reason: 'empty_output' | 'timeout' | 'executor_failure' | 'malformed_output' };
 export function classifyReviewerOutcome(input: ReviewerOutcomeInput): ReviewerOutcome {
   if (input === null || typeof input !== 'object' || typeof (input as { kind?: unknown }).kind !== 'string') {
     return { status: 'availability_failure', reason: 'malformed_output' };
   }
   if (input.kind === 'timeout') {
     return { status: 'availability_failure', reason: 'timeout' };
+  }
+  if (input.kind === 'executor_failure') {
+    return { status: 'availability_failure', reason: 'executor_failure' };
   }
   if (input.kind === 'malformed') {
     return { status: 'availability_failure', reason: 'malformed_output' };

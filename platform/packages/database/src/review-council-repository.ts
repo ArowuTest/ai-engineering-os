@@ -21,8 +21,8 @@ import type { DatabaseQueryable } from './queryable.js';
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
-export type ReviewerAssignmentStatus = 'assigned' | 'completed' | 'availability_failure';
-export type ReviewerAvailabilityReason = 'empty_output' | 'timeout' | 'malformed_output';
+export type ReviewerAssignmentStatus = 'assigned' | 'executing' | 'completed' | 'availability_failure';
+export type ReviewerAvailabilityReason = 'empty_output' | 'timeout' | 'executor_failure' | 'malformed_output';
 
 export interface ReviewerAssignmentRecord {
   id: string;
@@ -36,6 +36,8 @@ export interface ReviewerAssignmentRecord {
   status: ReviewerAssignmentStatus;
   availabilityReason?: ReviewerAvailabilityReason;
   contentDigest?: string;
+  executionClaimToken?: string;
+  executionStartedAt?: Date;
   createdAt: Date;
   resolvedAt?: Date;
 }
@@ -62,7 +64,8 @@ interface AssignmentRow {
   id: string; organisation_id: string; review_run_id: string; role: string;
   route_id: string; model_id: string; model_version: string; packet_digest: string;
   status: ReviewerAssignmentStatus; availability_reason: ReviewerAvailabilityReason | null;
-  content_digest: string | null; created_at: Date; resolved_at: Date | null;
+  content_digest: string | null; execution_claim_token: string | null;
+  execution_started_at: Date | null; created_at: Date; resolved_at: Date | null;
 }
 
 interface FindingRow {
@@ -162,6 +165,8 @@ function mapAssignment(row: AssignmentRow): ReviewerAssignmentRecord {
     status: row.status,
     ...(row.availability_reason === null ? {} : { availabilityReason: row.availability_reason }),
     ...(row.content_digest === null ? {} : { contentDigest: row.content_digest }),
+    ...(row.execution_claim_token === null ? {} : { executionClaimToken: row.execution_claim_token }),
+    ...(row.execution_started_at === null ? {} : { executionStartedAt: new Date(row.execution_started_at) }),
     createdAt: new Date(row.created_at),
     ...(row.resolved_at === null ? {} : { resolvedAt: new Date(row.resolved_at) }),
   };
@@ -233,7 +238,8 @@ function mapInvariant(row: InvariantRow): ArchitectureInvariant {
 const RUN_COLUMNS = `id, organisation_id, project_id, source_digest, evidence_digest,
   packet_digest, status, created_by, created_at, invalidated_at, invalidated_by_source_digest`;
 const ASSIGNMENT_COLUMNS = `id, organisation_id, review_run_id, role, route_id, model_id,
-  model_version, packet_digest, status, availability_reason, content_digest, created_at, resolved_at`;
+  model_version, packet_digest, status, availability_reason, content_digest, execution_claim_token,
+  execution_started_at, created_at, resolved_at`;
 
 export class ReviewCouncilRepository {
   constructor(private readonly database: DatabaseQueryable) {}
@@ -297,13 +303,13 @@ export class ReviewCouncilRepository {
   }
 
   async releaseExpiredCollectionClaim(organisationId: string, reviewRunId: string, observedAt: Date): Promise<boolean> {
-    const observed = requireDate(observedAt, 'observedAt');
+    requireDate(observedAt, 'observedAt');
     const result = await this.database.query(
       `UPDATE review_runs SET collection_claim_token = NULL, collection_claim_expires_at = NULL
        WHERE organisation_id = $1 AND id = $2 AND status = 'collecting'
          AND collection_claim_token IS NOT NULL AND collection_claim_expires_at IS NOT NULL
-         AND collection_claim_expires_at <= $3`,
-      [organisationId, reviewRunId, observed],
+         AND collection_claim_expires_at <= CURRENT_TIMESTAMP`,
+      [organisationId, reviewRunId],
     );
     return result.rowCount === 1;
   }
@@ -311,10 +317,11 @@ export class ReviewCouncilRepository {
   async requireCollectionClaim(organisationId: string, reviewRunId: string, claimToken: string): Promise<void> {
     const result = await this.database.query(
       `SELECT 1 FROM review_runs WHERE organisation_id = $1 AND id = $2
-         AND status = 'collecting' AND collection_claim_token = $3`,
+         AND status = 'collecting' AND collection_claim_token = $3
+         AND collection_claim_expires_at IS NOT NULL AND collection_claim_expires_at > CURRENT_TIMESTAMP`,
       [organisationId, reviewRunId, requireStableIdentifier(claimToken, 'claimToken')],
     );
-    if (result.rowCount !== 1) throw new Error('review collection claim is stale');
+    if (result.rowCount !== 1) throw new Error('review collection claim is stale or expired');
   }
 
   async releaseCollectionClaim(organisationId: string, reviewRunId: string, claimToken: string): Promise<void> {
@@ -329,7 +336,9 @@ export class ReviewCouncilRepository {
     const result = await this.database.query<ReviewRunRow>(
       `UPDATE review_runs SET status = 'adjudicating', collection_claim_token = NULL,
          collection_claim_expires_at = NULL WHERE organisation_id = $1 AND id = $2
-         AND status = 'collecting' AND collection_claim_token = $3 RETURNING ${RUN_COLUMNS}`,
+         AND status = 'collecting' AND collection_claim_token = $3
+         AND collection_claim_expires_at IS NOT NULL AND collection_claim_expires_at > CURRENT_TIMESTAMP
+       RETURNING ${RUN_COLUMNS}`,
       [organisationId, reviewRunId, requireStableIdentifier(claimToken, 'claimToken')],
     );
     if (!result.rows[0]) throw new Error('review run is not collecting or collection claim is stale');
@@ -408,22 +417,67 @@ export class ReviewCouncilRepository {
     return result.rows[0] ? mapAssignment(result.rows[0]) : null;
   }
 
+  async beginReviewerExecution(
+    organisationId: string,
+    reviewRunId: string,
+    assignmentId: string,
+    claimToken: string,
+    startedAt: Date,
+  ): Promise<ReviewerAssignmentRecord> {
+    const result = await this.database.query<AssignmentRow>(
+      `UPDATE review_reviewer_assignments
+       SET status = 'executing', execution_claim_token = $4, execution_started_at = $5
+       WHERE organisation_id = $1 AND review_run_id = $2 AND id = $3 AND status = 'assigned'
+         AND EXISTS (
+           SELECT 1 FROM review_runs r
+           WHERE r.organisation_id = $1 AND r.id = $2 AND r.status = 'collecting'
+             AND r.collection_claim_token = $4
+             AND r.collection_claim_expires_at IS NOT NULL
+             AND r.collection_claim_expires_at > CURRENT_TIMESTAMP
+         )
+       RETURNING ${ASSIGNMENT_COLUMNS}`,
+      [organisationId, reviewRunId, assignmentId, requireStableIdentifier(claimToken, 'claimToken'),
+       requireDate(startedAt, 'startedAt')],
+    );
+    if (!result.rows[0]) throw new Error('reviewer assignment not found or not assignable');
+    return mapAssignment(result.rows[0]);
+  }
+
+  async recoverExecutingReviewerAssignments(
+    organisationId: string, reviewRunId: string, resolvedAt: Date, claimToken?: string,
+  ): Promise<number> {
+    const token = claimToken === undefined ? undefined : requireStableIdentifier(claimToken, 'claimToken');
+    const result = await this.database.query(
+      `UPDATE review_reviewer_assignments
+       SET status = 'availability_failure', availability_reason = 'executor_failure',
+           content_digest = NULL, execution_claim_token = NULL, resolved_at = $3
+       WHERE organisation_id = $1 AND review_run_id = $2 AND status = 'executing'
+         ${token === undefined ? '' : 'AND execution_claim_token = $4'}`,
+      token === undefined
+        ? [organisationId, reviewRunId, requireDate(resolvedAt, 'resolvedAt')]
+        : [organisationId, reviewRunId, requireDate(resolvedAt, 'resolvedAt'), token],
+    );
+    return result.rowCount ?? 0;
+  }
+
   async recordReviewerAvailabilityFailure(
     organisationId: string,
     assignmentId: string,
     reason: ReviewerAvailabilityReason,
     resolvedAt: Date,
+    claimToken: string,
   ): Promise<ReviewerAssignmentRecord> {
-    if (!['empty_output','timeout','malformed_output'].includes(reason)) {
+    if (!['empty_output','timeout','executor_failure','malformed_output'].includes(reason)) {
       throw new TypeError('unknown reviewer availability reason');
     }
     const result = await this.database.query<AssignmentRow>(
       `UPDATE review_reviewer_assignments
        SET status = 'availability_failure', availability_reason = $3,
-           content_digest = NULL, resolved_at = $4
-       WHERE organisation_id = $1 AND id = $2 AND status = 'assigned'
+           content_digest = NULL, execution_claim_token = NULL, resolved_at = $4
+       WHERE organisation_id = $1 AND id = $2 AND status = 'executing' AND execution_claim_token = $5
        RETURNING ${ASSIGNMENT_COLUMNS}`,
-      [organisationId, assignmentId, reason, requireDate(resolvedAt, 'resolvedAt')],
+      [organisationId, assignmentId, reason, requireDate(resolvedAt, 'resolvedAt'),
+       requireStableIdentifier(claimToken, 'claimToken')],
     );
     if (!result.rows[0]) throw new Error('reviewer assignment not found or already resolved');
     return mapAssignment(result.rows[0]);
@@ -433,15 +487,16 @@ export class ReviewCouncilRepository {
     assignmentId: string,
     contentDigest: string,
     resolvedAt: Date,
+    claimToken: string,
   ): Promise<ReviewerAssignmentRecord> {
     const result = await this.database.query<AssignmentRow>(
       `UPDATE review_reviewer_assignments
        SET status = 'completed', availability_reason = NULL,
-           content_digest = $3, resolved_at = $4
-       WHERE organisation_id = $1 AND id = $2 AND status = 'assigned'
+           content_digest = $3, execution_claim_token = NULL, resolved_at = $4
+       WHERE organisation_id = $1 AND id = $2 AND status = 'executing' AND execution_claim_token = $5
        RETURNING ${ASSIGNMENT_COLUMNS}`,
       [organisationId, assignmentId, requireDigest(contentDigest, 'contentDigest'),
-       requireDate(resolvedAt, 'resolvedAt')],
+       requireDate(resolvedAt, 'resolvedAt'), requireStableIdentifier(claimToken, 'claimToken')],
     );
     if (!result.rows[0]) throw new Error('reviewer assignment not found or already resolved');
     return mapAssignment(result.rows[0]);

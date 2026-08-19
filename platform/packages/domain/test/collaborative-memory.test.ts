@@ -158,11 +158,11 @@ describe('Collaborative Memory domain', () => {
       sourceSessionId: 'session-001',
     });
     expect(canRecallCollaborativeMemory(sessionPrivate, {
-      organisationId: 'org-001', projectId: 'project-001', sessionId: 'session-001',
+      organisationId: 'org-001', projectId: 'project-001', sessionId: 'session-001', sessionAuthorized: true,
       projectAuthorized: true, organisationAuthorized: true,
     })).toBe(true);
     expect(canRecallCollaborativeMemory(sessionPrivate, {
-      organisationId: 'org-001', projectId: 'project-001', sessionId: 'session-002',
+      organisationId: 'org-001', projectId: 'project-001', sessionId: 'session-002', sessionAuthorized: true,
       projectAuthorized: true, organisationAuthorized: true,
     })).toBe(false);
   });
@@ -264,6 +264,45 @@ describe('Collaborative Memory domain', () => {
       taskId: 'task-001', agentId: 'agent-backend', harnessId: 'claude-code',
       modelRouteId: 'anthropic-sonnet', environmentId: 'opensandbox',
     });
+  });
+
+  it('bounds engineering-session workspace references to the persisted 4096-character contract', () => {
+    const baseSession = {
+      id: 'session-workspace-bound', organisationId: 'org-001', projectId: 'project-001',
+      taskId: 'task-001', agentId: 'agent-backend', createdBy: 'user-001', createdAt: now,
+    };
+    expect(createEngineeringSession({ ...baseSession, workspaceReference: 'x'.repeat(4096) }).workspaceReference)
+      .toHaveLength(4096);
+    expect(() => createEngineeringSession({ ...baseSession, workspaceReference: 'x'.repeat(4097) }))
+      .toThrowError(DomainValidationError);
+
+    const session = createEngineeringSession(baseSession);
+    expect(() => rebindEngineeringSessionExecution(session, {
+      workspaceReference: 'y'.repeat(4097), updatedAt: new Date(now.getTime() + 1),
+    })).toThrowError(DomainValidationError);
+  });
+
+  it('bounds collaborative-memory targets and handoff target/evidence/blocker arrays', () => {
+    const ids = Array.from({ length: 65 }, (_, index) => 'target-' + index);
+    expect(() => createCollaborativeMemoryRecord({ ...baseMemory(), targetAgentIds: ids }))
+      .toThrow(/targetAgentIds|too many|64/i);
+    expect(() => createCollaborativeMemoryRecord({ ...baseMemory(), targetSessionIds: ids }))
+      .toThrow(/targetSessionIds|too many|64/i);
+    expect(() => createAgentHandoff({
+      id: 'handoff-over-targets', organisationId: 'org-001', projectId: 'project-001',
+      sourceSessionId: 'session-001', sourceAgentId: 'agent-backend', targetSessionIds: ids,
+      targetAgentIds: [], summary: 'bounded', evidenceReferences: [], blockers: [], createdBy: 'user-001', createdAt: now,
+    })).toThrow(/targetSessionIds|too many|64/i);
+    expect(() => createAgentHandoff({
+      id: 'handoff-over-evidence', organisationId: 'org-001', projectId: 'project-001',
+      sourceSessionId: 'session-001', sourceAgentId: 'agent-backend', targetSessionIds: ['session-002'],
+      targetAgentIds: [], summary: 'bounded', evidenceReferences: ids, blockers: [], createdBy: 'user-001', createdAt: now,
+    })).toThrow(/evidenceReferences|too many|64/i);
+    expect(() => createAgentHandoff({
+      id: 'handoff-over-blockers', organisationId: 'org-001', projectId: 'project-001',
+      sourceSessionId: 'session-001', sourceAgentId: 'agent-backend', targetSessionIds: ['session-002'],
+      targetAgentIds: [], summary: 'bounded', evidenceReferences: [], blockers: ids, createdBy: 'user-001', createdAt: now,
+    })).toThrow(/blockers|too many|64/i);
   });
 
   it('creates a credential-free durable handoff between sessions or agents', () => {

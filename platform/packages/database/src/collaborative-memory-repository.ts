@@ -161,7 +161,9 @@ export class CollaborativeMemoryRepository {
          AND m.trust NOT IN ('rejected','superseded')
          AND ((m.visibility='project_shared' AND ($7::text <> 'blind_collecting' OR m.trust='governed'))
            OR (m.visibility='organisation_shared' AND m.trust='governed')
-           OR (m.visibility='session_private' AND $4::text IS NOT NULL AND m.source_session_id=$4)
+           OR (m.visibility='session_private' AND $4::text IS NOT NULL AND m.source_session_id=$4
+             AND EXISTS (SELECT 1 FROM engineering_sessions es WHERE es.organisation_id=$1
+               AND es.project_id=$2 AND es.id=$4 AND es.created_by=$3::text))
            OR (m.visibility='workstream_shared' AND $5::text IS NOT NULL AND m.workstream_id=$5)
            OR (m.visibility='reviewer_private' AND $6::text IS NOT NULL AND m.reviewer_assignment_id=$6)
            OR (m.visibility='adjudication_shared' AND $7::text='adjudicating'))
@@ -171,7 +173,7 @@ export class CollaborativeMemoryRepository {
          AND NOT EXISTS (SELECT 1 FROM collaborative_memory_links supersession
            WHERE supersession.organisation_id=m.organisation_id AND supersession.project_id=m.project_id
              AND supersession.target_memory_id=m.id AND supersession.relation='supersedes')
-       ORDER BY m.created_at DESC, m.id DESC LIMIT $10`,
+       ORDER BY CASE m.trust WHEN 'governed' THEN 0 WHEN 'verified' THEN 1 ELSE 2 END, m.created_at DESC, m.id DESC LIMIT $10`,
       [organisationId, projectId, userId, context.sessionId ?? null, context.workstreamId ?? null,
        context.reviewerAssignmentId ?? null, context.reviewPhase ?? 'normal', context.agentId ?? null,
        context.harnessId ?? null, maxCandidates],
@@ -285,6 +287,16 @@ export class EngineeringSessionRepository {
     const result = await this.database.query<SessionRow>(
       `SELECT ${SESSION_COLUMNS} FROM engineering_sessions
        WHERE organisation_id = $1 AND project_id = $2 AND id = $3`,
+      [organisationId, projectId, sessionId],
+    );
+    return result.rows[0] ? mapSession(result.rows[0]) : null;
+  }
+
+  async getForUpdate(organisationId: string, projectId: string, sessionId: string): Promise<EngineeringSession | null> {
+    const result = await this.database.query<SessionRow>(
+      `SELECT ${SESSION_COLUMNS} FROM engineering_sessions
+       WHERE organisation_id = $1 AND project_id = $2 AND id = $3
+       FOR UPDATE`,
       [organisationId, projectId, sessionId],
     );
     return result.rows[0] ? mapSession(result.rows[0]) : null;

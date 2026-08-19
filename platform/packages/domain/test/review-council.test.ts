@@ -45,6 +45,13 @@ describe('Review Council domain', () => {
     expect(run.packetDigest).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it('requires at least one architecture invariant before a review run can exist', () => {
+    expect(() => createReviewRun({
+      id: 'review-run-empty-invariants', organisationId: 'org-1', projectId: 'project-1',
+      sourceDigest, evidenceDigest, invariantIds: [], createdBy: 'user-1', createdAt: now,
+    })).toThrowError(DomainValidationError);
+  });
+
   it('binds invariant IDs into packet identity and rejects invariant drift', () => {
     const first = createReviewRun({
       id: 'review-run-1', organisationId: 'org-1', projectId: 'project-1',
@@ -81,6 +88,9 @@ describe('Review Council domain', () => {
     });
     expect(classifyReviewerOutcome({ kind: 'malformed', detail: 'invalid-json' })).toEqual({
       status: 'availability_failure', reason: 'malformed_output'
+    });
+    expect(classifyReviewerOutcome({ kind: 'executor_failure', detail: 'provider socket reset' })).toEqual({
+      status: 'availability_failure', reason: 'executor_failure'
     });
     expect(classifyReviewerOutcome({ kind: 'completed', content: 'NO FINDINGS' })).toEqual({
       status: 'completed', content: 'NO FINDINGS'
@@ -161,6 +171,18 @@ describe('Review Council domain', () => {
     expect(evaluateReviewGate([finding], [adjudication], { assignedReviewers: 2, completedReviewers: 2 })).toEqual({
       status: 'blocked', blockingFindingIds: [finding.id]
     });
+  });
+
+  it('keeps historical confirmed material evidence blocking even if a later row says rejected', () => {
+    const finding = materialFinding('important');
+    const confirmed = createFindingAdjudication({ id: 'adj-terminal-confirmed', findingId: finding.id,
+      reviewRunId: finding.reviewRunId, status: 'CONFIRMED', rationale: 'Reproduced',
+      evidenceReferences: ['test:red'], adjudicatedBy: 'independent-adjudicator', createdAt: now });
+    const laterRejected = createFindingAdjudication({ id: 'adj-terminal-rejected', findingId: finding.id,
+      reviewRunId: finding.reviewRunId, status: 'REJECTED', rationale: 'Late downgrade',
+      evidenceReferences: ['test:late'], adjudicatedBy: 'independent-adjudicator', createdAt: new Date(now.getTime() + 1) });
+    expect(evaluateReviewGate([finding], [confirmed, laterRejected], { assignedReviewers: 3, completedReviewers: 3 }))
+      .toEqual({ status: 'blocked', blockingFindingIds: [finding.id] });
   });
 
   it('also blocks a material partially-valid finding until the valid defect is resolved', () => {

@@ -24,7 +24,7 @@ function memory(overrides: Partial<Parameters<typeof createCollaborativeMemoryRe
 function context(overrides: Partial<MemoryAccessContext> = {}): MemoryAccessContext {
   return {
     organisationId: 'org-001', projectId: 'project-001', userId: 'user-001',
-    agentId: 'agent-test', sessionId: 'session-002', workstreamId: 'payments',
+    agentId: 'agent-test', sessionId: 'session-002', sessionAuthorized: true, workstreamId: 'payments',
     projectAuthorized: true, organisationAuthorized: true, reviewPhase: 'normal',
     ...overrides,
   };
@@ -35,6 +35,22 @@ describe('Collaborative Memory context policy', () => {
     expect(resolveMemoryVisibility(record, context())).toEqual({ allowed: true, reason: 'project_shared' });
     expect(resolveMemoryVisibility(record, context({ projectAuthorized: false })))
       .toEqual({ allowed: false, reason: 'policy_denied' });
+  });
+
+  it('requires governed shared memory at the blind-collection policy boundary', () => {
+    const blind = context({ reviewPhase: 'blind_collecting' });
+    const unreviewedProject = memory({ id: 'mem-blind-project', trust: 'unreviewed' });
+    const governedProject = memory({ id: 'mem-blind-project-governed', trust: 'governed' });
+    const unreviewedOrganisation = memory({
+      id: 'mem-blind-org', scope: 'organisation', visibility: 'organisation_shared', trust: 'unreviewed',
+    });
+    const governedOrganisation = memory({
+      id: 'mem-blind-org-governed', scope: 'organisation', visibility: 'organisation_shared', trust: 'governed',
+    });
+    expect(resolveMemoryVisibility(unreviewedProject, blind)).toEqual({ allowed: false, reason: 'policy_denied' });
+    expect(resolveMemoryVisibility(governedProject, blind)).toEqual({ allowed: true, reason: 'project_shared' });
+    expect(resolveMemoryVisibility(unreviewedOrganisation, blind)).toEqual({ allowed: false, reason: 'policy_denied' });
+    expect(resolveMemoryVisibility(governedOrganisation, blind)).toEqual({ allowed: true, reason: 'organisation_shared' });
   });
 
   it('keeps session-private memory inside the owning platform session', () => {
@@ -109,9 +125,15 @@ describe('Collaborative Memory context policy', () => {
     expect(byCount.items.map((item) => item.memoryId)).toEqual(['mem-a', 'mem-b']);
     expect(byCount.excluded.find((item) => item.reason === 'budget_exceeded' && item.memoryId === 'mem-c')?.reason).toBe('budget_exceeded');
 
-    const byBytes = selectCollaborativeContext(records, context(), { maxItems: 10, maxBytes: 25 });
+    const firstItemBytes = Buffer.byteLength(JSON.stringify({
+      memoryId: records[0]!.id, reason: 'project_shared', record: records[0]!,
+    }), 'utf8');
+    const byBytes = selectCollaborativeContext(records, context(), {
+      maxItems: 10, maxBytes: firstItemBytes * 2 - 1,
+    });
     expect(byBytes.items.map((item) => item.memoryId)).toEqual(['mem-a']);
     expect(byBytes.items[0]?.record.content).toBe('A'.repeat(20));
+    expect(byBytes.totalBytes).toBe(firstItemBytes);
     expect(byBytes.excluded.find((item) => item.reason === 'budget_exceeded' && item.memoryId === 'mem-b')?.reason).toBe('budget_exceeded');
   });
 });

@@ -44,6 +44,14 @@ async function seedProject(role: 'reviewer' | 'engineer' | 'product_owner' = 're
     organisationId: 'org-001', projectId: project.id, userId,
     role, createdBy: userId, now,
   });
+  const reviewCouncil = new ReviewCouncilRepository(pool);
+  if (!(await reviewCouncil.listArchitectureInvariants()).some((entry) => entry.id === 'runner-local-auth')) {
+    await reviewCouncil.createArchitectureInvariant({
+      id: 'runner-local-auth', key: 'runner-local-auth',
+      description: 'Runner authentication remains local to the authorised runner boundary.',
+      severity: 'important', createdAt: now,
+    });
+  }
   return { userId, project };
 }
 
@@ -59,7 +67,7 @@ class FakeExecutor implements ReviewCouncilExecutor {
   }
 }
 
-function service(executor: ReviewCouncilExecutor) {
+function service(executor: ReviewCouncilExecutor, options: { reviewExecutionTimeoutMs?: number } = {}) {
   return new ReviewCouncilService({
     unitOfWork: new DatabaseUnitOfWork(pool),
     memberships: new MembershipRepository(pool),
@@ -67,6 +75,7 @@ function service(executor: ReviewCouncilExecutor) {
     reviewCouncil: new ReviewCouncilRepository(pool),
     collaborativeMemory: new CollaborativeMemoryRepository(pool),
     executor,
+    ...options,
   });
 }
 
@@ -177,6 +186,18 @@ describe('ReviewCouncilService blind collection', () => {
     expect((await new ReviewCouncilRepository(pool).getRun('org-001', created.run.id))?.status).toBe('collecting');
   });
 
+  it('rejects a blind run that binds an invariant ID absent from the durable registry', async () => {
+    const { userId, project } = await seedProject();
+    const council = service(new FakeExecutor(new Map()));
+    await expect(council.createBlindRun({
+      id: 'run-missing-invariant', organisationId: 'org-001', projectId: project.id,
+      actorUserId: userId, source, evidence, invariantIds: ['missing-invariant'],
+      reviewers: [{ id: 'assignment-missing-invariant', role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1' }],
+      now,
+    })).rejects.toThrow(/invariant/i);
+    expect(await new ReviewCouncilRepository(pool).getRun('org-001', 'run-missing-invariant')).toBeNull();
+  });
+
   it('requires review authority before creating or collecting a council run', async () => {
     const engineer = await seedProject('engineer');
     const engineerExecutor = new FakeExecutor(new Map());
@@ -206,8 +227,206 @@ describe('ReviewCouncilService blind collection', () => {
     const callsBeforeRelease=calls; release();
     const settled=await Promise.all([first,second]);
     expect(callsBeforeRelease).toBe(1);
-    expect(settled.filter((result)=>result.ok)).toHaveLength(1);
-    expect(settled.filter((result)=>!result.ok)).toHaveLength(1);
+    expect(settled.filter((result)=>result.ok)).toHaveLength(0);
+    expect(settled.filter((result)=>!result.ok)).toHaveLength(2);
+  });
+
+  it('stops queued reviewer work when the active collection claim expires mid-collection', async () => {
+    const { userId, project } = await seedProject();
+    let calls = 0;
+    const council = service({ async review() {
+      calls += 1;
+      if (calls === 1) {
+        await pool.query(
+          'UPDATE review_runs SET collection_claim_expires_at=$3 WHERE organisation_id=$1 AND id=$2',
+          ['org-001', 'run-midloop-expiry', new Date(Date.now() - 1_000)],
+        );
+      }
+      return { outcome: { kind: 'completed', content: 'NO FINDINGS' }, findings: [] };
+    } });
+    const reviewers = Array.from({ length: 5 }, (_, index) => ({
+      id: `assignment-expire-${index}`, role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1',
+    }));
+    const created = await council.createBlindRun({ id: 'run-midloop-expiry', organisationId: 'org-001',
+      projectId: project.id, actorUserId: userId, source, evidence, invariantIds: ['runner-local-auth'], reviewers, now });
+
+    await expect(council.collectBlindReviews({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: userId, reviewRunId: created.run.id, maxMemoryItems: 10, maxMemoryBytes: 10_000 }))
+      .rejects.toThrow(/claim|stale|expired/i);
+    expect(calls).toBeGreaterThanOrEqual(1);
+    expect(calls).toBeLessThan(reviewers.length);
+  });
+
+  it('recovers an explicitly expired crash claim through reviewer-authorised service recovery', async () => {
+    const { userId, project } = await seedProject();
+    const council = service(new FakeExecutor(new Map()));
+    const created = await council.createBlindRun({
+      id: 'run-crash-recovery', organisationId: 'org-001', projectId: project.id, actorUserId: userId,
+      source, evidence, invariantIds: ['runner-local-auth'],
+      reviewers: [{ id: 'assignment-crash', role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1' }], now,
+    });
+    const repo = new ReviewCouncilRepository(pool);
+    await repo.claimCollection('org-001', created.run.id, 'lost-claim', now, new Date(now.getTime() + 100));
+    await expect((council as any).recoverExpiredCollectionClaim({
+      organisationId: 'org-001', projectId: project.id, actorUserId: userId,
+      reviewRunId: created.run.id, observedAt: new Date(now.getTime() + 101),
+    })).resolves.toBe(true);
+    await expect(council.collectBlindReviews({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: userId, reviewRunId: created.run.id, maxMemoryItems: 10, maxMemoryBytes: 10_000 })).resolves.toHaveLength(1);
+  });
+
+  it('does not recover a database-valid collection claim using a future application observation time', async () => {
+    const { userId, project } = await seedProject();
+    const council = service(new FakeExecutor(new Map()));
+    const created = await council.createBlindRun({
+      id: 'run-db-clock-recovery', organisationId: 'org-001', projectId: project.id, actorUserId: userId,
+      source, evidence, invariantIds: ['runner-local-auth'],
+      reviewers: [{ id: 'assignment-db-clock', role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1' }], now,
+    });
+    const repo = new ReviewCouncilRepository(pool);
+    const claimNow = new Date();
+    await repo.claimCollection('org-001', created.run.id, 'db-clock-claim', claimNow, new Date(claimNow.getTime() + 300_000));
+    await expect(council.recoverExpiredCollectionClaim({
+      organisationId: 'org-001', projectId: project.id, actorUserId: userId,
+      reviewRunId: created.run.id, observedAt: new Date(claimNow.getTime() + 86_400_000),
+    })).resolves.toBe(false);
+    await expect(repo.requireCollectionClaim('org-001', created.run.id, 'db-clock-claim')).resolves.toBeUndefined();
+  });
+
+  it('durably checkpoints a completed reviewer before slower seats finish', async () => {
+    const { userId, project } = await seedProject();
+    let releaseSlow!: () => void; let fastReturned!: () => void;
+    const slowBarrier = new Promise<void>((resolve) => { releaseSlow = resolve; });
+    const fastDone = new Promise<void>((resolve) => { fastReturned = resolve; });
+    const council = service({ async review(input) {
+      if (input.assignment.id === 'assignment-checkpoint-fast') {
+        fastReturned(); return { outcome:{kind:'completed',content:'fast'}, findings:[] };
+      }
+      await slowBarrier; return { outcome:{kind:'completed',content:'slow'}, findings:[] };
+    }});
+    const created = await council.createBlindRun({ id:'run-seat-checkpoint', organisationId:'org-001', projectId:project.id,
+      actorUserId:userId, source, evidence, invariantIds:['runner-local-auth'], reviewers:[
+        {id:'assignment-checkpoint-fast',role:'general',routeId:'route-a',modelId:'model-a',modelVersion:'v1'},
+        {id:'assignment-checkpoint-slow',role:'security',routeId:'route-b',modelId:'model-b',modelVersion:'v1'},
+      ], now });
+    const collecting = council.collectBlindReviews({ organisationId:'org-001', projectId:project.id, actorUserId:userId,
+      reviewRunId:created.run.id, maxMemoryItems:10, maxMemoryBytes:10_000 });
+    await fastDone; await new Promise((resolve)=>setTimeout(resolve,75));
+    const fastStatus=(await new ReviewCouncilRepository(pool).getReviewerAssignment(
+      'org-001', created.run.id, 'assignment-checkpoint-fast'))?.status;
+    releaseSlow(); await collecting;
+    expect(fastStatus).toBe('completed');
+  });
+
+  it('returns a timeout within a fixed bound even when the executor ignores abort forever', async () => {
+    const { userId, project } = await seedProject();
+    const council=service({ async review(){ return new Promise<ReviewExecutionResult>(()=>{}); } }, {reviewExecutionTimeoutMs:20});
+    const created=await council.createBlindRun({id:'run-never-settles',organisationId:'org-001',projectId:project.id,
+      actorUserId:userId,source,evidence,invariantIds:['runner-local-auth'],reviewers:[
+        {id:'assignment-never-settles',role:'general',routeId:'route-a',modelId:'model-a',modelVersion:'v1'}],now});
+    const collection=council.collectBlindReviews({organisationId:'org-001',projectId:project.id,actorUserId:userId,
+      reviewRunId:created.run.id,maxMemoryItems:10,maxMemoryBytes:10_000});
+    const bounded=await Promise.race([collection.then(()=>true,()=>true),new Promise<boolean>((resolve)=>setTimeout(()=>resolve(false),1500))]);
+    expect(bounded).toBe(true);
+  });
+
+  it('does not recover an expired database claim while its provider call is still live', async () => {
+    const { userId, project } = await seedProject();
+    let entered!:()=>void; const started=new Promise<void>((resolve)=>{entered=resolve;});
+    const council=service({ async review(){ entered(); return new Promise<ReviewExecutionResult>(()=>{}); } }, {reviewExecutionTimeoutMs:20});
+    const created=await council.createBlindRun({id:'run-live-claim-recovery',organisationId:'org-001',projectId:project.id,
+      actorUserId:userId,source,evidence,invariantIds:['runner-local-auth'],reviewers:[
+        {id:'assignment-live-claim',role:'general',routeId:'route-a',modelId:'model-a',modelVersion:'v1'}],now});
+    const collection=council.collectBlindReviews({organisationId:'org-001',projectId:project.id,actorUserId:userId,
+      reviewRunId:created.run.id,maxMemoryItems:10,maxMemoryBytes:10_000}).then(()=>true,()=>true);
+    await started; await new Promise((resolve)=>setTimeout(resolve,35));
+    const beforeRecovery=await new ReviewCouncilRepository(pool).getRun('org-001',created.run.id);
+    if (beforeRecovery?.status === 'collecting') {
+      await pool.query('UPDATE review_runs SET collection_claim_expires_at=$3 WHERE organisation_id=$1 AND id=$2',
+        ['org-001',created.run.id,new Date(Date.now()-1000)]);
+    }
+    const recovered=await council.recoverExpiredCollectionClaim({organisationId:'org-001',projectId:project.id,
+      actorUserId:userId,reviewRunId:created.run.id,observedAt:new Date()}).then((value)=>value,()=>false);
+    expect(recovered).toBe(false);
+    expect(await Promise.race([collection,new Promise<boolean>((resolve)=>setTimeout(()=>resolve(false),1500))])).toBe(true);
+  });
+
+  it('recovers a stale executing seat terminally and never re-sends it to the provider', async () => {
+    const { userId, project } = await seedProject();
+    const executor = new FakeExecutor(new Map());
+    const council = service(executor);
+    const created = await council.createBlindRun({ id:'run-stale-executing-no-resend', organisationId:'org-001',
+      projectId:project.id, actorUserId:userId, source, evidence, invariantIds:['runner-local-auth'], reviewers:[
+        {id:'assignment-stale-executing',role:'general',routeId:'route-a',modelId:'model-a',modelVersion:'v1'}], now });
+    const repo = new ReviewCouncilRepository(pool);
+    const claimNow = new Date();
+    await repo.claimCollection('org-001', created.run.id, 'stale-seat-claim', claimNow, new Date(claimNow.getTime()+5000));
+    await repo.beginReviewerExecution('org-001', created.run.id, 'assignment-stale-executing', 'stale-seat-claim', claimNow);
+    await pool.query('UPDATE review_runs SET collection_claim_expires_at=$3 WHERE organisation_id=$1 AND id=$2',
+      ['org-001', created.run.id, new Date(Date.now()-1000)]);
+    expect(await council.recoverExpiredCollectionClaim({ organisationId:'org-001', projectId:project.id,
+      actorUserId:userId, reviewRunId:created.run.id, observedAt:new Date() })).toBe(true);
+    expect(await repo.getReviewerAssignment('org-001', created.run.id, 'assignment-stale-executing'))
+      .toMatchObject({ status:'availability_failure', availabilityReason:'executor_failure' });
+    await council.collectBlindReviews({ organisationId:'org-001', projectId:project.id, actorUserId:userId,
+      reviewRunId:created.run.id, maxMemoryItems:10, maxMemoryBytes:10_000 });
+    expect(executor.calls).toHaveLength(0);
+  });
+
+  it('records executor faults distinctly from malformed reviewer output', async () => {
+    const { userId, project } = await seedProject();
+    const council = service({ async review() { throw new Error('provider socket reset'); } });
+    const created = await council.createBlindRun({
+      id: 'run-executor-failure', organisationId: 'org-001', projectId: project.id, actorUserId: userId,
+      source, evidence, invariantIds: ['runner-local-auth'],
+      reviewers: [{ id: 'assignment-executor-failure', role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1' }], now,
+    });
+    const [result] = await council.collectBlindReviews({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: userId, reviewRunId: created.run.id, maxMemoryItems: 10, maxMemoryBytes: 10_000 });
+    expect(result?.outcome).toEqual({ status: 'availability_failure', reason: 'executor_failure' });
+    expect((await new ReviewCouncilRepository(pool).getReviewerAssignment(
+      'org-001', created.run.id, 'assignment-executor-failure'))?.availabilityReason).toBe('executor_failure');
+  });
+
+  it('passes a bounded cancellation signal and classifies service deadline expiry as timeout', async () => {
+    const { userId, project } = await seedProject();
+    let seenSignal: AbortSignal | undefined;
+    const council = service({ async review(input) {
+      seenSignal = (input as any).signal;
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      return { outcome: { kind: 'completed', content: 'late' }, findings: [] };
+    } }, { reviewExecutionTimeoutMs: 20 });
+    const created = await council.createBlindRun({ id: 'run-deadline', organisationId: 'org-001', projectId: project.id,
+      actorUserId: userId, source, evidence, invariantIds: ['runner-local-auth'],
+      reviewers: [{ id: 'assignment-deadline', role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1' }], now });
+    const [result] = await council.collectBlindReviews({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: userId, reviewRunId: created.run.id, maxMemoryItems: 10, maxMemoryBytes: 10_000 });
+    expect(seenSignal).toBeInstanceOf(AbortSignal);
+    expect(result?.outcome).toEqual({ status: 'availability_failure', reason: 'timeout' });
+  });
+
+  it('does not start queued reviewer provider calls after the run is invalidated', async () => {
+    const { userId, project } = await seedProject();
+    let calls = 0; let entered = 0; let release!: () => void; let fourEntered!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { fourEntered = resolve; });
+    const council = service({ async review() {
+      calls += 1; entered += 1; if (entered === 4) fourEntered();
+      await barrier; return { outcome: { kind: 'completed', content: 'done' }, findings: [] };
+    } });
+    const reviewers = Array.from({ length: 6 }, (_, i) => ({
+      id: 'assignment-queued-' + i, role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1',
+    }));
+    const created = await council.createBlindRun({ id: 'run-invalidate-queued', organisationId: 'org-001',
+      projectId: project.id, actorUserId: userId, source, evidence, invariantIds: ['runner-local-auth'], reviewers, now });
+    const collecting = council.collectBlindReviews({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: userId, reviewRunId: created.run.id, maxMemoryItems: 10, maxMemoryBytes: 10_000 })
+      .then((value) => ({ ok: true as const, value }), (error) => ({ ok: false as const, error }));
+    await started;
+    await council.invalidateRunForSource({ organisationId: 'org-001', projectId: project.id, actorUserId: userId,
+      reviewRunId: created.run.id, replacementSource: source + '\nchanged', now: new Date(now.getTime() + 1) });
+    release(); const result = await collecting;
+    expect(result.ok).toBe(false); expect(calls).toBe(4);
   });
 
   it('caps council seat count before persistence', async () => {
@@ -223,6 +442,59 @@ describe('ReviewCouncilService blind collection', () => {
     expect(await new ReviewCouncilRepository(pool).getRun('org-001','run-seat-cap')).toBeNull();
   });
 
+  it('does not terminally burn a reviewer seat while waiting for capacity held by another run', async () => {
+    const { userId, project } = await seedProject();
+    const calls: string[] = [];
+    const council = service({ async review(input) {
+      calls.push(input.assignment.id);
+      if (input.assignment.id.startsWith('assignment-capacity-hold-')) {
+        return new Promise<ReviewExecutionResult>(() => {});
+      }
+      return { outcome: { kind: 'completed', content: 'NO FINDINGS' }, findings: [] };
+    } }, { reviewExecutionTimeoutMs: 20 });
+    const holding = await council.createBlindRun({
+      id: 'run-capacity-holder', organisationId: 'org-001', projectId: project.id, actorUserId: userId,
+      source, evidence, invariantIds: ['runner-local-auth'],
+      reviewers: Array.from({ length: 4 }, (_, index) => ({
+        id: `assignment-capacity-hold-${index}`, role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1',
+      })), now,
+    });
+    await council.collectBlindReviews({ organisationId: 'org-001', projectId: project.id, actorUserId: userId,
+      reviewRunId: holding.run.id, maxMemoryItems: 10, maxMemoryBytes: 10_000 });
+    const waiting = await council.createBlindRun({
+      id: 'run-capacity-waiter', organisationId: 'org-001', projectId: project.id, actorUserId: userId,
+      source, evidence, invariantIds: ['runner-local-auth'],
+      reviewers: [{ id: 'assignment-capacity-waiter', role: 'general', routeId: 'route-b', modelId: 'model-b', modelVersion: 'v1' }], now,
+    });
+    await expect(council.collectBlindReviews({ organisationId: 'org-001', projectId: project.id, actorUserId: userId,
+      reviewRunId: waiting.run.id, maxMemoryItems: 10, maxMemoryBytes: 10_000 })).rejects.toThrow(/capacity|busy/i);
+    expect(await new ReviewCouncilRepository(pool).getReviewerAssignment(
+      'org-001', waiting.run.id, 'assignment-capacity-waiter')).toMatchObject({ status: 'assigned' });
+    expect((await new ReviewCouncilRepository(pool).getRun('org-001', waiting.run.id))?.status).toBe('collecting');
+    expect(calls).not.toContain('assignment-capacity-waiter');
+  });
+
+  it('caps pending review execution waiters instead of growing an unbounded queue', async () => {
+    const council = service(new FakeExecutor(new Map()), { reviewExecutionTimeoutMs: 5_000 });
+    const permits = council as unknown as { acquireReviewExecutionPermit(): Promise<(() => void) | null> };
+    const active = await Promise.all(Array.from({ length: 4 }, () => permits.acquireReviewExecutionPermit()));
+    const queued = Array.from({ length: 4 }, () => permits.acquireReviewExecutionPermit());
+    const overflow = permits.acquireReviewExecutionPermit();
+    try {
+      const state = await Promise.race([
+        overflow.then((release) => release === null ? 'rejected' : 'acquired'),
+        new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), 50)),
+      ]);
+      expect(state).toBe('rejected');
+    } finally {
+      active.forEach((release) => release?.());
+      const queuedReleases = await Promise.all(queued);
+      queuedReleases.forEach((release) => release?.());
+      const overflowRelease = await overflow;
+      overflowRelease?.();
+    }
+  });
+
   it('bounds simultaneous reviewer executions even inside one claimed run', async () => {
     const { userId, project } = await seedProject();
     let active=0, maxActive=0;
@@ -235,6 +507,29 @@ describe('ReviewCouncilService blind collection', () => {
     const reviewers=Array.from({length:6},(_,index)=>({id:`assignment-bound-${index}`,role:'general',routeId:'route-a',modelId:'model-a',modelVersion:'v1'}));
     const created=await council.createBlindRun({id:'run-bounded-fanout',organisationId:'org-001',projectId:project.id,actorUserId:userId,source,evidence,invariantIds:['runner-local-auth'],reviewers,now});
     await council.collectBlindReviews({organisationId:'org-001',projectId:project.id,actorUserId:userId,reviewRunId:created.run.id,maxMemoryItems:10,maxMemoryBytes:10_000});
+    expect(maxActive).toBeLessThanOrEqual(4);
+  });
+
+  it('keeps timed-out provider executions inside the four-call bulkhead until they actually settle', async () => {
+    const { userId, project } = await seedProject();
+    let active = 0;
+    let maxActive = 0;
+    const council = service({ async review() {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      active -= 1;
+      return { outcome: { kind: 'completed', content: 'late result' }, findings: [] };
+    } }, { reviewExecutionTimeoutMs: 20 });
+    const reviewers = Array.from({ length: 6 }, (_, index) => ({
+      id: `assignment-timeout-bound-${index}`, role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1',
+    }));
+    const created = await council.createBlindRun({ id: 'run-timeout-bulkhead', organisationId: 'org-001',
+      projectId: project.id, actorUserId: userId, source, evidence, invariantIds: ['runner-local-auth'], reviewers, now });
+
+    await council.collectBlindReviews({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: userId, reviewRunId: created.run.id, maxMemoryItems: 10, maxMemoryBytes: 10_000 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
     expect(maxActive).toBeLessThanOrEqual(4);
   });
 
@@ -327,7 +622,7 @@ describe('ReviewCouncilService blind collection', () => {
       source, evidence, invariantIds: ['runner-local-auth'], maxMemoryItems: 10, maxMemoryBytes: 10_000,
     })).rejects.toThrow(/invalidated|collecting/i);
     const assignments = await repository.listReviewerAssignments('org-001', reviewRunId);
-    expect(assignments[0]?.status).toBe('assigned');
+    expect(assignments[0]).toMatchObject({ status: 'availability_failure', availabilityReason: 'executor_failure' });
     expect(await repository.listFindings('org-001', reviewRunId)).toEqual([]);
     expect((await repository.getRun('org-001', reviewRunId))?.status).toBe('invalidated');
   });
@@ -381,8 +676,27 @@ describe('ReviewCouncilService blind collection', () => {
       reviewRunId: created.run.id, source, evidence, invariantIds: ['runner-local-auth'],
       maxMemoryItems: 10, maxMemoryBytes: 10_000 })).rejects.toThrow('normalizer internal fault');
     const [assignment] = await new ReviewCouncilRepository(pool).listReviewerAssignments('org-001', created.run.id);
-    expect(assignment?.status).toBe('assigned');
+    expect(assignment).toMatchObject({ status: 'availability_failure', availabilityReason: 'executor_failure' });
     expect((await new ReviewCouncilRepository(pool).getRun('org-001', created.run.id))?.status).toBe('collecting');
+  });
+
+  it('preserves the original collection failure when claim cleanup also fails', async () => {
+    const { userId, project } = await seedProject();
+    const poisoned = { outcome: { kind: 'completed', content: 'valid content' } } as unknown as ReviewExecutionResult;
+    Object.defineProperty(poisoned, 'findings', { get() { throw new Error('primary collection failure'); } });
+    const council = service({ async review() { return poisoned; } });
+    const repository = (council as any).dependencies.reviewCouncil as ReviewCouncilRepository;
+    repository.releaseCollectionClaim = async () => { throw new Error('claim cleanup failure'); };
+    const created = await council.createBlindRun({
+      id: 'run-cleanup-failure', organisationId: 'org-001', projectId: project.id, actorUserId: userId,
+      source, evidence, invariantIds: ['runner-local-auth'], reviewers: [
+        { id: 'assignment-cleanup-failure', role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1' },
+      ], now,
+    });
+
+    await expect(council.collectBlindReviews({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: userId, reviewRunId: created.run.id, maxMemoryItems: 10, maxMemoryBytes: 10_000 }))
+      .rejects.toThrow(/primary collection failure/i);
   });
 
   it('records timeout, empty, and malformed reviewer results only as availability failures', async () => {
@@ -472,6 +786,28 @@ describe('ReviewCouncilService adjudication and acceptance', () => {
       rationale: 'Should not be reachable while collecting.', evidenceReferences: ['src/a.ts:1-2'], now,
     })).rejects.toThrow(/collecting|adjudicating/i);
     expect(await new ReviewCouncilRepository(pool).listAdjudications('org-001', created.run.id)).toEqual([]);
+  });
+
+  it('does not allow a later adjudication to clear an already confirmed material finding', async () => {
+    const { userId, project } = await seedProject('reviewer');
+    const council = service(new FakeExecutor(new Map([['assignment-terminal', {
+      outcome: { kind: 'completed', content: 'material' },
+      findings: [{ severity: 'important', category: 'security', summary: 'terminal blocker', evidenceReferences: ['src/a.ts:1'] }],
+    }]])));
+    const created = await council.createBlindRun({ id: 'run-terminal-adjudication', organisationId: 'org-001',
+      projectId: project.id, actorUserId: userId, source, evidence, invariantIds: ['runner-local-auth'],
+      reviewers: [{ id: 'assignment-terminal', role: 'security', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1' }], now });
+    await council.collectBlindReviews({ organisationId: 'org-001', projectId: project.id, actorUserId: userId,
+      reviewRunId: created.run.id, maxMemoryItems: 10, maxMemoryBytes: 10_000 });
+    const [finding] = await new ReviewCouncilRepository(pool).listFindings('org-001', created.run.id);
+    await council.adjudicateFinding({ organisationId: 'org-001', projectId: project.id, actorUserId: userId,
+      reviewRunId: created.run.id, findingId: finding!.id, status: 'CONFIRMED', rationale: 'confirmed with evidence',
+      evidenceReferences: ['src/a.ts:1'], now });
+    await expect(council.adjudicateFinding({ organisationId: 'org-001', projectId: project.id, actorUserId: userId,
+      reviewRunId: created.run.id, findingId: finding!.id, status: 'REJECTED', rationale: 'later downgrade',
+      evidenceReferences: ['src/a.ts:1'], now: new Date(now.getTime() + 1) })).rejects.toThrow(/terminal|confirmed|adjudicat/i);
+    expect((await council.evaluateGate({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: userId, reviewRunId: created.run.id })).status).toBe('blocked');
   });
 
   it('requires review authority to invalidate accepted review state', async () => {

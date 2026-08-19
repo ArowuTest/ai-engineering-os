@@ -90,6 +90,20 @@ describe('CollaborativeMemoryRepository', () => {
     );
     expect(await repo.listProjectMemoriesForUser('org-001', project.id, userId)).toEqual([]);
   });
+  it('allows the same portable memory id in independent tenant/project scopes', async () => {
+    const { userId, project } = await seedProject();
+    const otherProject = createProject({ organisationId: 'org-002', name: 'Other tenant memory', createdBy: userId });
+    await new ProjectRepository(pool).create(otherProject);
+    const repo = new CollaborativeMemoryRepository(pool);
+    const id = 'mem_portable_shared_id';
+    const first = createCollaborativeMemoryRecord({ ...projectMemory(project.id, userId, id), organisationId: 'org-001' });
+    const second = createCollaborativeMemoryRecord({ ...projectMemory(otherProject.id, userId, id), organisationId: 'org-002' });
+    await repo.createMemory(first);
+    await expect(repo.createMemory(second)).resolves.toBeUndefined();
+    expect((await repo.getProjectMemory('org-001', project.id, id))?.projectId).toBe(project.id);
+    expect((await repo.getProjectMemory('org-002', otherProject.id, id))?.projectId).toBe(otherProject.id);
+  });
+
   it('rejects session-private memory that references a nonexistent project session', async () => {
     const { userId, project } = await seedProject();
     const memory = createCollaborativeMemoryRecord({
@@ -154,6 +168,23 @@ describe('CollaborativeMemoryRepository', () => {
     const candidates=await repo.listProjectMemoriesForUser('org-001',project.id,userId,{maxCandidates:5,reviewPhase:'normal'});
     expect(candidates.map((memory)=>memory.id)).toContain(live.id);
     expect(candidates.every((memory)=>memory.trust!=='rejected'&&memory.trust!=='superseded')).toBe(true);
+  });
+
+  it('prioritizes governed project references before newer unreviewed flood rows hit the candidate limit', async () => {
+    const { userId, project } = await seedProject(); const repo=new CollaborativeMemoryRepository(pool);
+    const governed=createCollaborativeMemoryRecord({ ...projectMemory(project.id,userId,'mem_governed_priority'),
+      trust:'governed', createdAt:now });
+    await repo.createMemory(governed);
+    for(let i=0;i<8;i+=1){ await repo.createMemory(createCollaborativeMemoryRecord({
+      ...projectMemory(project.id,userId,`mem_unreviewed_flood_${i}`), trust:'unreviewed',
+      createdAt:new Date(now.getTime()+100+i) })); }
+    const candidates=await repo.listProjectMemoriesForUser('org-001',project.id,userId,{maxCandidates:5,reviewPhase:'normal'});
+    expect(candidates.map((memory)=>memory.id)).toContain(governed.id);
+  });
+
+  it('installs a target-side supersession lookup index for bounded recall', async () => {
+    const indexes=await pool.query<{indexdef:string}>(`SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND tablename='collaborative_memory_links'`);
+    expect(indexes.rows.some((row)=>/\(organisation_id, project_id, target_memory_id, relation\)/i.test(row.indexdef))).toBe(true);
   });
 
   it('recalls governed organisation-shared memory into an authorised project context', async () => {

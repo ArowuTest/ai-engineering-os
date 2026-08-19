@@ -76,14 +76,19 @@ export function selectCollaborativeContext(
       continue;
     }
 
-    const contentBytes = Buffer.byteLength(record.content, 'utf8');
-    if (items.length >= maxItems || totalBytes + contentBytes > maxBytes) {
+    const item: SelectedMemoryContextItem = {
+      memoryId: record.id,
+      reason: visibility.reason,
+      record,
+    };
+    const itemBytes = Buffer.byteLength(JSON.stringify(item), 'utf8');
+    if (items.length >= maxItems || totalBytes + itemBytes > maxBytes) {
       excluded.push({ memoryId: record.id, reason: 'budget_exceeded' });
       continue;
     }
 
-    items.push({ memoryId: record.id, reason: visibility.reason, record });
-    totalBytes += contentBytes;
+    items.push(item);
+    totalBytes += itemBytes;
   }
 
   return { items, excluded, totalBytes };

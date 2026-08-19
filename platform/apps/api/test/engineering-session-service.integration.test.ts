@@ -52,6 +52,7 @@ async function setupProject() {
     [alice.id, undefined, 'task-revoke-race', 'agent-revoke-race'],
     [bob.id, 'payments', 'task-test', 'agent-test'],
     [bob.id, 'payments', 'task-other', 'agent-other'],
+    [bob.id, 'frontend', 'task-frontend', 'agent-frontend'],
   ] as const) {
     await assignments.grantAssignment({ organisationId: 'org-001', projectId: project.id, userId,
       ...(workstreamId === undefined ? {} : { workstreamId }), taskId, agentId, createdBy: alice.id, now });
@@ -138,7 +139,7 @@ describe('EngineeringSessionService', () => {
     expect(handoff.handoff.targetAgentIds).toEqual(['agent-test']);
     expect(handoff.memory.kind).toBe('handoff');
     expect(handoff.memory.id).toMatch(/^mem_[a-z0-9_-]+$/);
-    expect(handoff.memory.visibility).toBe('workstream_shared');
+    expect(handoff.memory.visibility).toBe('project_shared');
 
     const backendContext = await sessions.getContext({
       organisationId: 'org-001', projectId: project.id, actorUserId: alice.id,
@@ -159,6 +160,41 @@ describe('EngineeringSessionService', () => {
     });
     expect(otherContext.items.map((item) => item.memoryId)).not.toContain(handoff.memory.id);
   });
+  it('delivers an explicitly targeted handoff across workstream boundaries', async () => {
+    const { alice, bob, project } = await setupProject();
+    const sessions = service();
+    const backend = await sessions.startSession({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: alice.id, workstreamId: 'payments', taskId: 'task-backend', agentId: 'agent-backend', harnessId: 'codex', now });
+    const frontend = await sessions.startSession({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: bob.id, workstreamId: 'frontend', taskId: 'task-frontend', agentId: 'agent-frontend',
+      harnessId: 'claude-code', now: new Date(now.getTime() + 1) });
+    const handoff = await sessions.createHandoff({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: alice.id, sourceSessionId: backend.id, targetSessionIds: [frontend.id], targetAgentIds: [],
+      summary: 'Frontend must consume the completed backend contract.', evidenceReferences: [], blockers: [],
+      now: new Date(now.getTime() + 2) });
+    const context = await sessions.getContext({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: bob.id, sessionId: frontend.id, maxItems: 20, maxBytes: 20_000 });
+    expect(context.items.map((item) => item.memoryId)).toContain(handoff.memory.id);
+  });
+
+  it('delivers an agent-only handoff to that agent across workstream boundaries', async () => {
+    const { alice, bob, project } = await setupProject();
+    const sessions = service();
+    const backend = await sessions.startSession({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: alice.id, workstreamId: 'payments', taskId: 'task-backend', agentId: 'agent-backend', harnessId: 'codex', now });
+    const frontend = await sessions.startSession({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: bob.id, workstreamId: 'frontend', taskId: 'task-frontend', agentId: 'agent-frontend',
+      harnessId: 'claude-code', now: new Date(now.getTime() + 1) });
+    const handoff = await sessions.createHandoff({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: alice.id, sourceSessionId: backend.id, targetSessionIds: [], targetAgentIds: ['agent-frontend'],
+      summary: 'Frontend agent must receive the backend contract across workstreams.', evidenceReferences: [], blockers: [],
+      now: new Date(now.getTime() + 2) });
+    const context = await sessions.getContext({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: bob.id, sessionId: frontend.id, maxItems: 20, maxBytes: 20_000 });
+    expect(handoff.memory.visibility).toBe('project_shared');
+    expect(context.items.map((item) => item.memoryId)).toContain(handoff.memory.id);
+  });
+
   it('enforces harness-targeted memory against the current OS session harness', async () => {
     const { alice, project } = await setupProject();
     const sessions = service();
@@ -218,6 +254,19 @@ describe('EngineeringSessionService', () => {
     })).rejects.toThrow('review_context_requires_review_council_authority');
   });
 
+  it('does not let another project member recall session-private memory by supplying the owner session id', async () => {
+    const { alice, bob, project } = await setupProject();
+    const sessions = service();
+    const backend = await sessions.startSession({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: alice.id, workstreamId: 'payments', taskId: 'task-backend', agentId: 'agent-backend', harnessId: 'codex', now });
+    const checkpoint = await sessions.recordCheckpoint({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: alice.id, sessionId: backend.id, title: 'Alice private state', content: 'Alice-only private checkpoint.',
+      now: new Date(now.getTime() + 1) });
+    const spoofed = await new CollaborativeMemoryRepository(pool).listProjectMemoriesForUser(
+      'org-001', project.id, bob.id, { sessionId: backend.id, workstreamId: 'payments', reviewPhase: 'normal', maxCandidates: 20 });
+    expect(spoofed.map((memory) => memory.id)).not.toContain(checkpoint.id);
+  });
+
   it('continues the same OS session after runner/harness/environment replacement without losing private memory', async () => {
     const { alice, project } = await setupProject();
     const sessions = service();
@@ -260,6 +309,83 @@ describe('EngineeringSessionService', () => {
     expect(await new EngineeringSessionRepository(pool).get('org-001', project.id, session.id)).toEqual(continued);
   });
 
+
+  it('rejects execution rebind after the platform engineering assignment is revoked', async () => {
+    const { alice, project } = await setupProject();
+    const sessions = service();
+    const session = await sessions.startSession({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: alice.id, taskId: 'task-rebind-race', agentId: 'agent-rebind-race', harnessId: 'codex', now });
+    await pool.query(
+      `UPDATE engineering_session_assignments SET status='revoked', updated_at=$5
+       WHERE organisation_id=$1 AND project_id=$2 AND user_id=$3 AND task_id=$4 AND agent_id='agent-rebind-race'`,
+      ['org-001', project.id, alice.id, 'task-rebind-race', new Date(now.getTime() + 1)],
+    );
+    await expect(sessions.continueSession({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: alice.id, sessionId: session.id, harnessId: 'claude-code', now: new Date(now.getTime() + 2) }))
+      .rejects.toThrow(/assignment|required|forbidden/i);
+  });
+
+  it('revokes recall, checkpoint and handoff authority when the engineering assignment is revoked', async () => {
+    const { alice, project } = await setupProject();
+    const sessions = service();
+    const session = await sessions.startSession({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: alice.id, workstreamId: 'payments', taskId: 'task-backend',
+      agentId: 'agent-backend', harnessId: 'codex', now });
+    await pool.query(`UPDATE engineering_session_assignments SET status='revoked', updated_at=$5
+      WHERE organisation_id=$1 AND project_id=$2 AND user_id=$3 AND task_id=$4 AND agent_id='agent-backend'`,
+      ['org-001', project.id, alice.id, 'task-backend', new Date(now.getTime() + 1)]);
+    await expect(sessions.getContext({ organisationId:'org-001', projectId:project.id, actorUserId:alice.id,
+      sessionId:session.id, maxItems:20, maxBytes:20_000 })).rejects.toThrow(/assignment|required|forbidden/i);
+    await expect(sessions.recordCheckpoint({ organisationId:'org-001', projectId:project.id, actorUserId:alice.id,
+      sessionId:session.id, title:'Revoked', content:'Must not persist.', now:new Date(now.getTime()+2) }))
+      .rejects.toThrow(/assignment|required|forbidden/i);
+    await expect(sessions.createHandoff({ organisationId:'org-001', projectId:project.id, actorUserId:alice.id,
+      sourceSessionId:session.id, targetSessionIds:[], targetAgentIds:['agent-test'], summary:'Must not hand off.',
+      evidenceReferences:[], blockers:[], now:new Date(now.getTime()+3) })).rejects.toThrow(/assignment|required|forbidden/i);
+  });
+
+  it('rejects execution rebind after the engineering session is no longer active', async () => {
+    const { alice, project } = await setupProject();
+    const sessions = service();
+    const session = await sessions.startSession({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: alice.id, taskId: 'task-backend', agentId: 'agent-backend', harnessId: 'codex', now });
+    await pool.query(`UPDATE engineering_sessions SET status='completed', updated_at=$4
+      WHERE organisation_id=$1 AND project_id=$2 AND id=$3`,
+      ['org-001', project.id, session.id, new Date(now.getTime() + 1)]);
+    await expect(sessions.continueSession({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: alice.id, sessionId: session.id, harnessId: 'claude-code', runnerId: 'runner-late',
+      now: new Date(now.getTime() + 2) })).rejects.toThrow(/active|status/i);
+    const persisted = await new EngineeringSessionRepository(pool).get('org-001', project.id, session.id);
+    expect(persisted).toMatchObject({ status: 'completed', harnessId: 'codex' });
+    expect(persisted?.runnerId).toBeUndefined();
+  });
+
+  it('rejects checkpoints after the source engineering session is no longer active', async () => {
+    const { alice, project } = await setupProject();
+    const sessions = service();
+    const session = await sessions.startSession({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: alice.id, taskId: 'task-backend', agentId: 'agent-backend', harnessId: 'codex', now });
+    await pool.query(`UPDATE engineering_sessions SET status='completed', updated_at=$4
+      WHERE organisation_id=$1 AND project_id=$2 AND id=$3`,
+      ['org-001', project.id, session.id, new Date(now.getTime() + 1)]);
+    await expect(sessions.recordCheckpoint({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: alice.id, sessionId: session.id, title: 'Late checkpoint', content: 'Must not persist.',
+      now: new Date(now.getTime() + 2) })).rejects.toThrow(/active|status/i);
+  });
+
+  it('rejects handoffs after the source engineering session is no longer active', async () => {
+    const { alice, project } = await setupProject();
+    const sessions = service();
+    const session = await sessions.startSession({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: alice.id, taskId: 'task-backend', agentId: 'agent-backend', harnessId: 'codex', now });
+    await pool.query(`UPDATE engineering_sessions SET status='cancelled', updated_at=$4
+      WHERE organisation_id=$1 AND project_id=$2 AND id=$3`,
+      ['org-001', project.id, session.id, new Date(now.getTime() + 1)]);
+    await expect(sessions.createHandoff({ organisationId: 'org-001', projectId: project.id,
+      actorUserId: alice.id, sourceSessionId: session.id, targetSessionIds: [], targetAgentIds: ['agent-test'],
+      summary: 'Late handoff', evidenceReferences: [], blockers: [], now: new Date(now.getTime() + 2) }))
+      .rejects.toThrow(/active|status/i);
+  });
 
   it('serializes checkpoint authority against a concurrent project revocation', async () => {
     const { alice, project } = await setupProject();

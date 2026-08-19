@@ -58,6 +58,8 @@ describe('API runtime composition', () => {
         '008_ai_dispatches.sql',
         '009_collaborative_memory.sql',
         '010_review_council.sql',
+      '011_task8_review_hardening.sql',
+      '012_task8_final_hardening.sql',
       ]);
     } finally {
       await runtime.close();

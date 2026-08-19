@@ -123,6 +123,7 @@ export interface MemoryAccessContext {
   projectId?: string;
   workstreamId?: string;
   sessionId?: string;
+  sessionAuthorized?: boolean;
   userId?: string;
   agentId?: string;
   harnessId?: string;
@@ -136,6 +137,9 @@ export interface MemoryAccessContext {
 const PROJECT_SCOPES = new Set<MemoryScope>(['project', 'workstream', 'agent', 'session', 'review']);
 const MAX_MEMORY_CONTENT_BYTES = 65_536;
 const MAX_MEMORY_TITLE_LENGTH = 512;
+const MAX_MEMORY_TARGET_IDS = 64;
+const MAX_HANDOFF_LIST_ITEMS = 64;
+const MAX_WORKSPACE_REFERENCE_LENGTH = 4096;
 const ECC_MEMORY_IDENTIFIER_PATTERN = /^mem_[a-z0-9][a-z0-9_-]{2,127}$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 function requireEnum<T extends string>(value: unknown, values: readonly T[], field: string): T {
@@ -169,12 +173,15 @@ function requireSha256(value: unknown, field: string): string {
 }
 
 
-function identifierList(value: unknown, field: string): string[] | undefined {
+function identifierList(value: unknown, field: string, maxItems?: number): string[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) throw new DomainValidationError(field, `${field} must be an array`);
   const result = value.map((item, index) => requireStableIdentifier(item, `${field}[${index}]`));
   if (new Set(result).size !== result.length) {
     throw new DomainValidationError(field, `${field} must not contain duplicates`);
+  }
+  if (maxItems !== undefined && result.length > maxItems) {
+    throw new DomainValidationError(field, `${field} must contain at most ${maxItems} items`);
   }
   return result;
 }
@@ -187,10 +194,11 @@ function tagList(value: unknown): string[] | undefined {
   return tags;
 }
 
-function stringList(value: unknown, field: string): string[] {
+function stringList(value: unknown, field: string, maxItems?: number): string[] {
   if (!Array.isArray(value)) throw new DomainValidationError(field, `${field} must be an array`);
   const result = value.map((item, index) => requireNonBlank(item, `${field}[${index}]`));
   if (new Set(result).size !== result.length) throw new DomainValidationError(field, `${field} must not contain duplicates`);
+  if (maxItems !== undefined && result.length > maxItems) throw new DomainValidationError(field, `${field} must contain at most ${maxItems} items`);
   return result;
 }
 function requireSafeText(value: unknown, field: string, maxLength: number, utf8Bytes = false): string {
@@ -200,6 +208,17 @@ function requireSafeText(value: unknown, field: string, maxLength: number, utf8B
     throw new DomainValidationError(field, `${field} is too long`);
   }
   assertMemoryTextSafe(normalized, field);
+  return normalized;
+}
+
+function requireWorkspaceReference(value: unknown): string {
+  const normalized = requireNonBlank(value, 'workspaceReference');
+  if (Array.from(normalized).length > MAX_WORKSPACE_REFERENCE_LENGTH) {
+    throw new DomainValidationError(
+      'workspaceReference',
+      `workspaceReference must be at most ${MAX_WORKSPACE_REFERENCE_LENGTH} characters`,
+    );
+  }
   return normalized;
 }
 
@@ -296,9 +315,9 @@ export function createCollaborativeMemoryRecord(input: CreateCollaborativeMemory
   const tags = tagList(input.tags);
   if (tags !== undefined) record.tags = tags;
   for (const [key, value] of [
-    ['targetAgentIds', identifierList(input.targetAgentIds, 'targetAgentIds')],
-    ['targetSessionIds', identifierList(input.targetSessionIds, 'targetSessionIds')],
-    ['targetHarnessIds', identifierList(input.targetHarnessIds, 'targetHarnessIds')],
+    ['targetAgentIds', identifierList(input.targetAgentIds, 'targetAgentIds', MAX_MEMORY_TARGET_IDS)],
+    ['targetSessionIds', identifierList(input.targetSessionIds, 'targetSessionIds', MAX_MEMORY_TARGET_IDS)],
+    ['targetHarnessIds', identifierList(input.targetHarnessIds, 'targetHarnessIds', MAX_MEMORY_TARGET_IDS)],
   ] as const) {
     if (value !== undefined && value.length > 0) (record as unknown as Record<string, unknown>)[key] = value;
   }
@@ -331,7 +350,7 @@ export function createEngineeringSession(input: CreateEngineeringSessionInput): 
   ] as const) {
     if (value === undefined) continue;
     (session as unknown as Record<string, unknown>)[key] = key === 'workspaceReference'
-      ? requireNonBlank(value, key)
+      ? requireWorkspaceReference(value)
       : requireStableIdentifier(value, key);
   }
   return session;
@@ -352,23 +371,23 @@ export function rebindEngineeringSessionExecution(
   for (const [key, value] of Object.entries(input)) {
     if (key === 'updatedAt' || value === undefined) continue;
     (rebound as unknown as Record<string, unknown>)[key] = key === 'workspaceReference'
-      ? requireNonBlank(value, key)
+      ? requireWorkspaceReference(value)
       : requireStableIdentifier(value, key);
   }
   return rebound;
 }
 export function createAgentHandoff(input: AgentHandoff): AgentHandoff {
   const summary = requireSafeText(input.summary, 'summary', 16_384);
-  const evidenceReferences = stringList(input.evidenceReferences, 'evidenceReferences');
-  const blockers = stringList(input.blockers, 'blockers');
+  const evidenceReferences = stringList(input.evidenceReferences, 'evidenceReferences', MAX_HANDOFF_LIST_ITEMS);
+  const blockers = stringList(input.blockers, 'blockers', MAX_HANDOFF_LIST_ITEMS);
   const handoff: AgentHandoff = {
     id: requireStableIdentifier(input.id, 'id'),
     organisationId: requireStableIdentifier(input.organisationId, 'organisationId'),
     projectId: requireStableIdentifier(input.projectId, 'projectId'),
     sourceSessionId: requireStableIdentifier(input.sourceSessionId, 'sourceSessionId'),
     sourceAgentId: requireStableIdentifier(input.sourceAgentId, 'sourceAgentId'),
-    targetSessionIds: identifierList(input.targetSessionIds, 'targetSessionIds') ?? [],
-    targetAgentIds: identifierList(input.targetAgentIds, 'targetAgentIds') ?? [],
+    targetSessionIds: identifierList(input.targetSessionIds, 'targetSessionIds', MAX_HANDOFF_LIST_ITEMS) ?? [],
+    targetAgentIds: identifierList(input.targetAgentIds, 'targetAgentIds', MAX_HANDOFF_LIST_ITEMS) ?? [],
     summary,
     evidenceReferences,
     blockers,
@@ -380,7 +399,7 @@ export function createAgentHandoff(input: AgentHandoff): AgentHandoff {
   }
   if (input.sourceCommit !== undefined) handoff.sourceCommit = requireNonBlank(input.sourceCommit, 'sourceCommit');
   if (input.workspaceReference !== undefined) {
-    handoff.workspaceReference = requireNonBlank(input.workspaceReference, 'workspaceReference');
+    handoff.workspaceReference = requireWorkspaceReference(input.workspaceReference);
   }
   return handoff;
 }
@@ -402,13 +421,16 @@ export function canRecallCollaborativeMemory(
   context: MemoryAccessContext,
 ): boolean {
   if (record.trust === 'rejected' || record.trust === 'superseded') return false;
+  if (context.reviewPhase === 'blind_collecting'
+    && (record.visibility === 'project_shared' || record.visibility === 'organisation_shared')
+    && record.trust !== 'governed') return false;
   if (!collaborativeMemoryTargetsAllow(record, context)) return false;
   if (record.visibility === 'user_private') return record.ownerUserId === context.userId;
   if (!sameTenantProject(record, context)) return false;
 
   switch (record.visibility) {
     case 'session_private':
-      return context.projectAuthorized && record.sourceSessionId === context.sessionId;
+      return context.projectAuthorized && context.sessionAuthorized === true && record.sourceSessionId === context.sessionId;
     case 'workstream_shared':
       return context.projectAuthorized && record.workstreamId === context.workstreamId;
     case 'project_shared':

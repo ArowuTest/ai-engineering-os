@@ -126,6 +126,7 @@ export class EngineeringSessionService {
     const now = requireDate(input.now);    const sourceSession = await this.requireOwnedSession(
       input.organisationId, input.projectId, input.actorUserId, input.sessionId,
     );
+    if (sourceSession.status !== 'active') throw new Error('engineering session is not active');
     const memory = createCollaborativeMemoryRecord({
       id: newMemoryId(), organisationId: input.organisationId, projectId: input.projectId,
       ...(sourceSession.workstreamId === undefined ? {} : { workstreamId: sourceSession.workstreamId }),
@@ -136,7 +137,7 @@ export class EngineeringSessionService {
       createdAt: now,
     });
 
-    await this.dependencies.unitOfWork.run(async ({ users, memberships, collaborativeMemory, audit }) => {
+    await this.dependencies.unitOfWork.run(async ({ users, memberships, collaborativeMemory, engineeringSessions, audit }) => {
       const user = await users.getByIdForUpdate(input.actorUserId);
       const organisationMembership = await memberships.getOrganisationForUpdate(
         input.organisationId, input.actorUserId,
@@ -146,6 +147,19 @@ export class EngineeringSessionService {
       );
       if (!user || user.status !== 'active' || !organisationMembership || organisationMembership.status !== 'active' ||
           !projectMembership || projectMembership.status !== 'active') throw new Error('forbidden');
+      await engineeringSessions.requireActiveAssignmentForUpdate({
+        organisationId: input.organisationId, projectId: input.projectId, userId: input.actorUserId,
+        ...(sourceSession.workstreamId === undefined ? {} : { workstreamId: sourceSession.workstreamId }),
+        taskId: sourceSession.taskId, agentId: sourceSession.agentId,
+      });
+      const lockedSession = await engineeringSessions.getForUpdate(
+        input.organisationId, input.projectId, sourceSession.id,
+      );
+      if (!lockedSession || lockedSession.createdBy !== input.actorUserId) throw new Error('forbidden');
+      if (lockedSession.status !== 'active') throw new Error('engineering session is not active');
+      if (lockedSession.updatedAt.getTime() !== sourceSession.updatedAt.getTime()) {
+        throw new Error('engineering session changed during checkpoint creation');
+      }
       await collaborativeMemory.createMemory(memory);
       await audit.append(createAuditEvent({
         organisationId: input.organisationId, projectId: input.projectId,
@@ -165,11 +179,14 @@ export class EngineeringSessionService {
     const now = requireDate(input.now);    const sourceSession = await this.requireOwnedSession(
       input.organisationId, input.projectId, input.actorUserId, input.sourceSessionId,
     );
+    if (sourceSession.status !== 'active') throw new Error('engineering session is not active');
+    const targetSessions = [];
     for (const targetSessionId of input.targetSessionIds) {
       const target = await this.dependencies.engineeringSessions.get(
         input.organisationId, input.projectId, targetSessionId,
       );
       if (!target) throw new Error('invalid_handoff_target');
+      targetSessions.push(target);
     }
 
     const handoff = createAgentHandoff({
@@ -180,7 +197,9 @@ export class EngineeringSessionService {
       createdBy: input.actorUserId, createdAt: now,
       ...(sourceSession.workspaceReference === undefined ? {} : { workspaceReference: sourceSession.workspaceReference }),
     });
-    const sharedByWorkstream = sourceSession.workstreamId !== undefined;
+    const sharedByWorkstream = handoff.targetAgentIds.length === 0 && targetSessions.length > 0 &&
+      sourceSession.workstreamId !== undefined &&
+      targetSessions.every((target) => target.workstreamId === sourceSession.workstreamId);
     const memory = createCollaborativeMemoryRecord({
       id: newMemoryId(), organisationId: input.organisationId, projectId: input.projectId,
       ...(sourceSession.workstreamId === undefined ? {} : { workstreamId: sourceSession.workstreamId }),
@@ -193,7 +212,7 @@ export class EngineeringSessionService {
       targetAgentIds: input.targetAgentIds, targetSessionIds: input.targetSessionIds, createdAt: now,
     });
 
-    await this.dependencies.unitOfWork.run(async ({ users, memberships, collaborativeMemory, audit }) => {
+    await this.dependencies.unitOfWork.run(async ({ users, memberships, collaborativeMemory, engineeringSessions, audit }) => {
       const user = await users.getByIdForUpdate(input.actorUserId);
       const organisationMembership = await memberships.getOrganisationForUpdate(
         input.organisationId, input.actorUserId,
@@ -202,6 +221,19 @@ export class EngineeringSessionService {
         input.organisationId, input.projectId, input.actorUserId,
       );      if (!user || user.status !== 'active' || !organisationMembership || organisationMembership.status !== 'active' ||
           !projectMembership || projectMembership.status !== 'active') throw new Error('forbidden');
+      await engineeringSessions.requireActiveAssignmentForUpdate({
+        organisationId: input.organisationId, projectId: input.projectId, userId: input.actorUserId,
+        ...(sourceSession.workstreamId === undefined ? {} : { workstreamId: sourceSession.workstreamId }),
+        taskId: sourceSession.taskId, agentId: sourceSession.agentId,
+      });
+      const lockedSession = await engineeringSessions.getForUpdate(
+        input.organisationId, input.projectId, sourceSession.id,
+      );
+      if (!lockedSession || lockedSession.createdBy !== input.actorUserId) throw new Error('forbidden');
+      if (lockedSession.status !== 'active') throw new Error('engineering session is not active');
+      if (lockedSession.updatedAt.getTime() !== sourceSession.updatedAt.getTime()) {
+        throw new Error('engineering session changed during handoff creation');
+      }
       await collaborativeMemory.createHandoff(handoff);
       await collaborativeMemory.createMemory(memory);
       await audit.append(createAuditEvent({
@@ -219,35 +251,39 @@ export class EngineeringSessionService {
     maxItems: number; maxBytes: number;
     reviewerAssignmentId?: string; reviewPhase?: MemoryAccessContext['reviewPhase']; canAdjudicate?: boolean;
   }) {
-    const session = await this.requireOwnedSession(
-      input.organisationId, input.projectId, input.actorUserId, input.sessionId,
-    );
-    if (
-      input.reviewerAssignmentId !== undefined ||
-      input.reviewPhase !== undefined ||
-      input.canAdjudicate !== undefined
-    ) {
+    if (input.reviewerAssignmentId !== undefined || input.reviewPhase !== undefined || input.canAdjudicate !== undefined) {
       throw new Error('review_context_requires_review_council_authority');
     }
-    const candidates = await this.dependencies.collaborativeMemory.listProjectMemoriesForUser(
-      input.organisationId, input.projectId, input.actorUserId, {
-        sessionId: session.id,
+    return this.dependencies.unitOfWork.run(async ({ users, memberships, collaborativeMemory, engineeringSessions }) => {
+      const user = await users.getByIdForUpdate(input.actorUserId);
+      const organisationMembership = await memberships.getOrganisationForUpdate(input.organisationId, input.actorUserId);
+      const projectMembership = await memberships.getProjectForUpdate(input.organisationId, input.projectId, input.actorUserId);
+      if (!user || user.status !== 'active' || !organisationMembership || organisationMembership.status !== 'active' ||
+          !projectMembership || projectMembership.status !== 'active') throw new Error('forbidden');
+      const session = await engineeringSessions.getForUpdate(input.organisationId, input.projectId, input.sessionId);
+      if (!session || session.createdBy !== input.actorUserId) throw new Error('forbidden');
+      await engineeringSessions.requireActiveAssignmentForUpdate({ organisationId: input.organisationId,
+        projectId: input.projectId, userId: input.actorUserId,
         ...(session.workstreamId === undefined ? {} : { workstreamId: session.workstreamId }),
-        agentId: session.agentId,
+        taskId: session.taskId, agentId: session.agentId });
+      const candidates = await collaborativeMemory.listProjectMemoriesForUser(
+        input.organisationId, input.projectId, input.actorUserId, {
+          sessionId: session.id,
+          ...(session.workstreamId === undefined ? {} : { workstreamId: session.workstreamId }),
+          agentId: session.agentId,
+          ...(session.harnessId === undefined ? {} : { harnessId: session.harnessId }),
+          reviewPhase: 'normal', maxCandidates: input.maxItems,
+        });
+      const access: MemoryAccessContext = {
+        organisationId: input.organisationId, projectId: input.projectId, userId: input.actorUserId,
+        sessionId: session.id, sessionAuthorized: true, agentId: session.agentId,
         ...(session.harnessId === undefined ? {} : { harnessId: session.harnessId }),
-        reviewPhase: 'normal', maxCandidates: input.maxItems,
-      },
-    );
-    const access: MemoryAccessContext = {
-      organisationId: input.organisationId, projectId: input.projectId, userId: input.actorUserId,
-      sessionId: session.id, agentId: session.agentId,
-      ...(session.harnessId === undefined ? {} : { harnessId: session.harnessId }),
-      ...(session.workstreamId === undefined ? {} : { workstreamId: session.workstreamId }),
-      projectAuthorized: true, organisationAuthorized: true,
-      reviewPhase: 'normal',
-    };
-    return selectCollaborativeContext(candidates, access, {
-      maxItems: input.maxItems, maxBytes: input.maxBytes,
+        ...(session.workstreamId === undefined ? {} : { workstreamId: session.workstreamId }),
+        projectAuthorized: true, organisationAuthorized: true, reviewPhase: 'normal',
+      };
+      return selectCollaborativeContext(candidates, access, {
+        maxItems: input.maxItems, maxBytes: input.maxBytes,
+      });
     });
   }
 
@@ -259,6 +295,7 @@ export class EngineeringSessionService {
     const requestedAt = requireDate(input.now);    const current = await this.requireOwnedSession(
       input.organisationId, input.projectId, input.actorUserId, input.sessionId,
     );
+    if (current.status !== 'active') throw new Error('engineering session is not active');
     const updatedAt = new Date(Math.max(requestedAt.getTime(), current.updatedAt.getTime() + 1));
     const rebound = rebindEngineeringSessionExecution(current, {
       ...(input.harnessId === undefined ? {} : { harnessId: input.harnessId }),
@@ -279,6 +316,19 @@ export class EngineeringSessionService {
       );
       if (!user || user.status !== 'active' || !organisationMembership || organisationMembership.status !== 'active' ||
           !projectMembership || projectMembership.status !== 'active') throw new Error('forbidden');
+      await engineeringSessions.requireActiveAssignmentForUpdate({
+        organisationId: input.organisationId, projectId: input.projectId, userId: input.actorUserId,
+        ...(current.workstreamId === undefined ? {} : { workstreamId: current.workstreamId }),
+        taskId: current.taskId, agentId: current.agentId,
+      });
+      const lockedSession = await engineeringSessions.getForUpdate(
+        input.organisationId, input.projectId, current.id,
+      );
+      if (!lockedSession || lockedSession.createdBy !== input.actorUserId) throw new Error('forbidden');
+      if (lockedSession.status !== 'active') throw new Error('engineering session is not active');
+      if (lockedSession.updatedAt.getTime() !== current.updatedAt.getTime()) {
+        throw new Error('engineering session execution conflict');
+      }
       await engineeringSessions.rebindExecution(rebound, current.updatedAt);
       await audit.append(createAuditEvent({
         organisationId: input.organisationId, projectId: input.projectId,

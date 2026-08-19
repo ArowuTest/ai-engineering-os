@@ -45,6 +45,7 @@ export interface ReviewExecutionInput {
   assignment: ReviewerAssignmentRecord;
   packet: BlindReviewPacket;
   memory: ReturnType<typeof selectCollaborativeContext>;
+  signal: AbortSignal;
 }
 
 export interface ReviewCouncilExecutor {
@@ -58,11 +59,14 @@ export interface ReviewCouncilServiceDependencies {
   reviewCouncil: ReviewCouncilRepository;
   collaborativeMemory: CollaborativeMemoryRepository;
   executor: ReviewCouncilExecutor;
+  reviewExecutionTimeoutMs?: number;
 }
 
 const MAX_REVIEW_COUNCIL_SEATS = 16;
 const MAX_REVIEW_EXECUTION_CONCURRENCY = 4;
+const MAX_REVIEW_EXECUTION_WAITERS = MAX_REVIEW_EXECUTION_CONCURRENCY;
 const MAX_REVIEW_FINDINGS_PER_ASSIGNMENT = 32;
+const MAX_REVIEW_EXECUTION_TIMEOUT_MS = 5 * 60 * 1000;
 
 interface ReviewerConfig {
   id: string;
@@ -193,7 +197,111 @@ async function requireAdjudicatingRun(
 }
 
 export class ReviewCouncilService {
-  constructor(private readonly dependencies: ReviewCouncilServiceDependencies) {}
+  private readonly reviewExecutionTimeoutMs: number;
+  private activeReviewExecutions = 0;
+  private readonly reviewExecutionWaiters: Array<() => void> = [];
+  private readonly liveReviewExecutionsByRun = new Map<string, number>();
+
+  constructor(private readonly dependencies: ReviewCouncilServiceDependencies) {
+    const timeout = dependencies.reviewExecutionTimeoutMs ?? MAX_REVIEW_EXECUTION_TIMEOUT_MS;
+    if (!Number.isInteger(timeout) || timeout <= 0 || timeout > MAX_REVIEW_EXECUTION_TIMEOUT_MS) {
+      throw new TypeError(`reviewExecutionTimeoutMs must be an integer between 1 and ${MAX_REVIEW_EXECUTION_TIMEOUT_MS}`);
+    }
+    this.reviewExecutionTimeoutMs = timeout;
+  }
+
+  private reviewRunExecutionKey(organisationId: string, reviewRunId: string): string {
+    return `${organisationId}:${reviewRunId}`;
+  }
+
+  private hasLiveReviewExecution(organisationId: string, reviewRunId: string): boolean {
+    return (this.liveReviewExecutionsByRun.get(this.reviewRunExecutionKey(organisationId, reviewRunId)) ?? 0) > 0;
+  }
+  private trackLiveReviewExecution(organisationId: string, reviewRunId: string, delta: 1 | -1): void {
+    const key = this.reviewRunExecutionKey(organisationId, reviewRunId);
+    const next = (this.liveReviewExecutionsByRun.get(key) ?? 0) + delta;
+    if (next <= 0) this.liveReviewExecutionsByRun.delete(key);
+    else this.liveReviewExecutionsByRun.set(key, next);
+  }
+
+  private makeReviewExecutionRelease(): () => void {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.activeReviewExecutions -= 1;
+      const waiter = this.reviewExecutionWaiters.shift();
+      if (waiter) waiter();
+    };
+  }
+
+  private async acquireReviewExecutionPermit(): Promise<(() => void) | null> {
+    if (this.activeReviewExecutions < MAX_REVIEW_EXECUTION_CONCURRENCY) {
+      this.activeReviewExecutions += 1;
+      return this.makeReviewExecutionRelease();
+    }
+    if (this.reviewExecutionWaiters.length >= MAX_REVIEW_EXECUTION_WAITERS) return null;
+    return new Promise((resolve) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout>;
+      const waiter = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.activeReviewExecutions += 1;
+        resolve(this.makeReviewExecutionRelease());
+      };
+      this.reviewExecutionWaiters.push(waiter);
+      timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        const index = this.reviewExecutionWaiters.indexOf(waiter);
+        if (index >= 0) this.reviewExecutionWaiters.splice(index, 1);
+        resolve(null);
+      }, this.reviewExecutionTimeoutMs);
+      timer.unref?.();
+    });
+  }
+
+  private async executeReviewWithDeadline(
+    input: Omit<ReviewExecutionInput, 'signal'>,
+    beforeProviderStart: () => Promise<void>,
+    releasePermit: () => void,
+  ): Promise<ReviewExecutionResult> {
+    const runKey = input.assignment.reviewRunId;
+    const organisationId = input.assignment.organisationId;
+    this.trackLiveReviewExecution(organisationId, runKey, 1);
+    try {
+      await beforeProviderStart();
+    } catch (error) {
+      this.trackLiveReviewExecution(organisationId, runKey, -1);
+      releasePermit();
+      throw error;
+    }
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const execution = Promise.resolve()
+      .then(() => this.dependencies.executor.review({ ...input, signal: controller.signal }))
+      .then(
+        (result) => ({ kind: 'result' as const, result }),
+        (error) => ({ kind: 'executor_failure' as const, error }),
+      )
+      .finally(() => {
+        this.trackLiveReviewExecution(organisationId, runKey, -1);
+        releasePermit();
+      });
+    const deadline = new Promise<{ kind: 'timeout' }>((resolve) => {
+      timer = setTimeout(() => { controller.abort(); resolve({ kind: 'timeout' }); }, this.reviewExecutionTimeoutMs);
+      timer.unref?.();
+    });
+    const settled = await Promise.race([execution, deadline]);
+    if (timer !== undefined) clearTimeout(timer);
+    if (settled.kind === 'timeout') return { outcome: { kind: 'timeout' }, findings: [] };
+    if (settled.kind === 'executor_failure') {
+      return { outcome: { kind: 'executor_failure', detail: settled.error instanceof Error ? settled.error.message : 'executor_failure' }, findings: [] };
+    }
+    return settled.result;
+  }
 
   private async requireActiveProjectUser(
     organisationId: string,
@@ -261,6 +369,13 @@ export class ReviewCouncilService {
       await requireActiveProjectUser(
         users, memberships, input.organisationId, input.projectId, input.actorUserId, true, ['reviewer', 'product_owner'],
       );
+      const knownInvariantIds = new Set(
+        (await reviewCouncil.listArchitectureInvariants()).map((invariant) => invariant.id),
+      );
+      const missingInvariantIds = packet.invariantIds.filter((invariantId) => !knownInvariantIds.has(invariantId));
+      if (missingInvariantIds.length > 0) {
+        throw new Error(`review architecture invariant not found: ${missingInvariantIds.join(', ')}`);
+      }
       await reviewCouncil.createRun(run, {
         source: input.source, evidence: input.evidence, invariantIds: input.invariantIds,
       });
@@ -289,6 +404,33 @@ export class ReviewCouncilService {
 
     return { run, packet, assignments };
   }
+  async recoverExpiredCollectionClaim(input: {
+    organisationId: string; projectId: string; actorUserId: string; reviewRunId: string; observedAt?: Date;
+  }): Promise<boolean> {
+    const observedAt = validDate(input.observedAt);
+    if (this.hasLiveReviewExecution(input.organisationId, input.reviewRunId)) return false;
+    return this.dependencies.unitOfWork.run(async ({ users, memberships, reviewCouncil, audit }) => {
+      await requireActiveProjectUser(
+        users, memberships, input.organisationId, input.projectId, input.actorUserId, true, ['reviewer', 'product_owner'],
+      );
+      await requireCollectingRun(reviewCouncil, input.organisationId, input.projectId, input.reviewRunId, true);
+      if (this.hasLiveReviewExecution(input.organisationId, input.reviewRunId)) return false;
+      const released = await reviewCouncil.releaseExpiredCollectionClaim(
+        input.organisationId, input.reviewRunId, observedAt,
+      );
+      const recoveredAssignments = released
+        ? await reviewCouncil.recoverExecutingReviewerAssignments(input.organisationId, input.reviewRunId, observedAt)
+        : 0;
+      if (released) await audit.append(createAuditEvent({
+        organisationId: input.organisationId, projectId: input.projectId,
+        eventType: 'review.collection_claim.recovered', actorType: 'user', actorId: input.actorUserId,
+        subjectType: 'review_run', subjectId: input.reviewRunId,
+        metadata: { observedAt: observedAt.toISOString(), recoveredAssignments },
+      }));
+      return released;
+    });
+  }
+
   async collectBlindReviews(input: {
     organisationId: string;
     projectId: string;
@@ -334,7 +476,16 @@ export class ReviewCouncilService {
       input.organisationId,
       input.reviewRunId,
     )).filter((assignment) => assignment.status === 'assigned');
-    const executeAssignment = async (assignment: ReviewerAssignmentRecord) => {
+    const collected: Array<{
+      assignment: ReviewerAssignmentRecord;
+      outcome: ReviewerOutcome;
+      findings: ReviewFinding[];
+    }> = new Array(assignments.length);
+
+    const executeAndPersist = async (assignment: ReviewerAssignmentRecord, index: number): Promise<void> => {
+      await this.dependencies.reviewCouncil.requireCollectionClaim(
+        input.organisationId, input.reviewRunId, collectionClaimToken,
+      );
       const candidates = await this.dependencies.collaborativeMemory.listProjectMemoriesForUser(
         input.organisationId, input.projectId, input.actorUserId, {
           reviewerAssignmentId: assignment.id, reviewPhase: 'blind_collecting',
@@ -350,40 +501,53 @@ export class ReviewCouncilService {
         projectAuthorized: true,
         organisationAuthorized: true,
       }, { maxItems: input.maxMemoryItems, maxBytes: input.maxMemoryBytes });
+      const releasePermit = await this.acquireReviewExecutionPermit();
+      if (!releasePermit) throw new Error('review execution capacity unavailable');
+      const executionStartedAt = new Date();
+      let executingAssignment: ReviewerAssignmentRecord;
       try {
-        return { assignment, memory, result: await this.dependencies.executor.review({ assignment, packet, memory }) };
-      } catch {
-        return { assignment, memory,
-          result: { outcome: { kind: 'malformed', detail: 'executor_failure' }, findings: [] } satisfies ReviewExecutionResult };
+        executingAssignment = await this.dependencies.unitOfWork.run(async ({
+          users, memberships, reviewCouncil, audit,
+        }) => {
+          await requireActiveProjectUser(
+            users, memberships, input.organisationId, input.projectId, input.actorUserId, true,
+            ['reviewer', 'product_owner'],
+          );
+          await requireCollectingRun(reviewCouncil, input.organisationId, input.projectId, input.reviewRunId, true);
+          await reviewCouncil.requireCollectionClaim(input.organisationId, input.reviewRunId, collectionClaimToken);
+          const executing = await reviewCouncil.beginReviewerExecution(
+            input.organisationId, input.reviewRunId, assignment.id, collectionClaimToken, executionStartedAt,
+          );
+          await audit.append(createAuditEvent({
+            organisationId: input.organisationId, projectId: input.projectId,
+            eventType: 'review.assignment.executing', actorType: 'user', actorId: input.actorUserId,
+            subjectType: 'reviewer_assignment', subjectId: assignment.id,
+            metadata: { executionStartedAt: executionStartedAt.toISOString() },
+          }));
+          return executing;
+        });
+      } catch (error) {
+        releasePermit();
+        throw error;
       }
-    };
-    const executions: Array<Awaited<ReturnType<typeof executeAssignment>>> = new Array(assignments.length);
-    let nextAssignmentIndex = 0;
-    const workerCount = Math.min(MAX_REVIEW_EXECUTION_CONCURRENCY, assignments.length);
-    await Promise.all(Array.from({ length: workerCount }, async () => {
-      while (nextAssignmentIndex < assignments.length) {
-        const index = nextAssignmentIndex;
-        nextAssignmentIndex += 1;
-        executions[index] = await executeAssignment(assignments[index]!);
-      }
-    }));
-    const collected: Array<{
-      assignment: ReviewerAssignmentRecord;
-      outcome: ReviewerOutcome;
-      findings: ReviewFinding[];
-    }> = [];
-
-    for (const execution of executions) {
-      const resolvedAt = new Date();
-      const normalized = normalizeReviewerExecutionResult(
-        execution.result, input.reviewRunId, execution.assignment.id, resolvedAt,
-      );
-      const outcome = normalized.outcome;
-      const persisted = await this.dependencies.unitOfWork.run(async ({
-        users, memberships, reviewCouncil, audit,
-      }) => {
+      const result = await this.executeReviewWithDeadline(
+          { assignment: executingAssignment, packet, memory },
+          () => this.dependencies.reviewCouncil.requireCollectionClaim(
+            input.organisationId, input.reviewRunId, collectionClaimToken,
+          ),
+          releasePermit,
+        );
+        const resolvedAt = new Date();
+        const normalized = normalizeReviewerExecutionResult(
+          result, input.reviewRunId, assignment.id, resolvedAt,
+        );
+        const outcome = normalized.outcome;
+        const persisted = await this.dependencies.unitOfWork.run(async ({
+          users, memberships, reviewCouncil, audit,
+        }) => {
         await requireActiveProjectUser(
-          users, memberships, input.organisationId, input.projectId, input.actorUserId, true, ['reviewer', 'product_owner'],
+          users, memberships, input.organisationId, input.projectId, input.actorUserId, true,
+          ['reviewer', 'product_owner'],
         );
         await requireCollectingRun(
           reviewCouncil, input.organisationId, input.projectId, input.reviewRunId, true,
@@ -392,49 +556,47 @@ export class ReviewCouncilService {
           input.organisationId, input.reviewRunId, collectionClaimToken,
         );
         if (outcome.status === 'availability_failure') {
-          const assignment = await reviewCouncil.recordReviewerAvailabilityFailure(
-            input.organisationId,
-            execution.assignment.id,
-            outcome.reason,
-            resolvedAt,
+          const resolved = await reviewCouncil.recordReviewerAvailabilityFailure(
+            input.organisationId, assignment.id, outcome.reason, resolvedAt, collectionClaimToken,
           );
           await audit.append(createAuditEvent({
-            organisationId: input.organisationId,
-            projectId: input.projectId,
-            eventType: 'review.assignment.availability_failure',
-            actorType: 'user',
-            actorId: input.actorUserId,
-            subjectType: 'reviewer_assignment',
-            subjectId: assignment.id,
+            organisationId: input.organisationId, projectId: input.projectId,
+            eventType: 'review.assignment.availability_failure', actorType: 'user', actorId: input.actorUserId,
+            subjectType: 'reviewer_assignment', subjectId: resolved.id,
             metadata: { reason: outcome.reason },
           }));
-          return { assignment, findings: [] as ReviewFinding[] };
+          return { assignment: resolved, findings: [] as ReviewFinding[] };
         }
-
-        const assignment = await reviewCouncil.recordReviewerCompleted(
-          input.organisationId,
-          execution.assignment.id,
-          digestReviewMaterial(outcome.content),
-          resolvedAt,
+        const resolved = await reviewCouncil.recordReviewerCompleted(
+          input.organisationId, assignment.id, digestReviewMaterial(outcome.content),
+          resolvedAt, collectionClaimToken,
         );
         const findings = normalized.findings;
-        for (const finding of findings) {
-          await reviewCouncil.createFinding(input.organisationId, finding);
-        }
+        for (const finding of findings) await reviewCouncil.createFinding(input.organisationId, finding);
         await audit.append(createAuditEvent({
-          organisationId: input.organisationId,
-          projectId: input.projectId,
-          eventType: 'review.assignment.completed',
-          actorType: 'user',
-          actorId: input.actorUserId,
-          subjectType: 'reviewer_assignment',
-          subjectId: assignment.id,
-          metadata: { findingCount: findings.length, contentDigest: assignment.contentDigest ?? null },
+          organisationId: input.organisationId, projectId: input.projectId,
+          eventType: 'review.assignment.completed', actorType: 'user', actorId: input.actorUserId,
+          subjectType: 'reviewer_assignment', subjectId: resolved.id,
+          metadata: { findingCount: findings.length, contentDigest: resolved.contentDigest ?? null },
         }));
-        return { assignment, findings };
+        return { assignment: resolved, findings };
       });
-      collected.push({ assignment: persisted.assignment, outcome, findings: persisted.findings });
-    }
+      collected[index] = { assignment: persisted.assignment, outcome, findings: persisted.findings };
+    };
+
+    let nextAssignmentIndex = 0;
+    const workerCount = Math.min(MAX_REVIEW_EXECUTION_CONCURRENCY, assignments.length);
+    const workerSettlements = await Promise.allSettled(Array.from({ length: workerCount }, async () => {
+      while (nextAssignmentIndex < assignments.length) {
+        const index = nextAssignmentIndex;
+        nextAssignmentIndex += 1;
+        await executeAndPersist(assignments[index]!, index);
+      }
+    }));
+    const failedWorker = workerSettlements.find(
+      (entry): entry is PromiseRejectedResult => entry.status === 'rejected',
+    );
+    if (failedWorker) throw failedWorker.reason;
 
     await this.dependencies.unitOfWork.run(async ({ users, memberships, reviewCouncil, audit }) => {
       await requireActiveProjectUser(
@@ -452,9 +614,20 @@ export class ReviewCouncilService {
     });
     return collected;
     } catch (error) {
-      await this.dependencies.reviewCouncil.releaseCollectionClaim(
-        input.organisationId, input.reviewRunId, collectionClaimToken,
-      );
+      try {
+        await this.dependencies.reviewCouncil.recoverExecutingReviewerAssignments(
+          input.organisationId, input.reviewRunId, new Date(), collectionClaimToken,
+        );
+        await this.dependencies.reviewCouncil.releaseCollectionClaim(
+          input.organisationId, input.reviewRunId, collectionClaimToken,
+        );
+      } catch (cleanupError) {
+        const originalMessage = error instanceof Error ? error.message : String(error);
+        throw new AggregateError(
+          [error, cleanupError],
+          `review collection failed: ${originalMessage}; collection claim release also failed`,
+        );
+      }
       throw error;
     }
   }
@@ -482,6 +655,12 @@ export class ReviewCouncilService {
         input.organisationId, input.reviewRunId, input.findingId,
       );
       if (!finding) throw new Error('review finding not found');
+      const priorAdjudications = (await reviewCouncil.listAdjudications(
+        input.organisationId, input.reviewRunId,
+      )).filter((entry) => entry.findingId === finding.id);
+      if (priorAdjudications.some((entry) => entry.status === 'CONFIRMED' || entry.status === 'PARTIALLY_VALID')) {
+        throw new Error('terminal material adjudication cannot be superseded');
+      }
       const adjudication = createFindingAdjudication({
         id: stableGeneratedId('adjudication'),
         findingId: finding.id,
