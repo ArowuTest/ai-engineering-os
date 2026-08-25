@@ -1,6 +1,7 @@
-import { randomUUID } from 'node:crypto';
+﻿import { createHash, randomUUID } from 'node:crypto';
 import {
   createAuditEvent,
+  createCapabilityRecord,
   isAIConnectionShareMode,
   validateAIConnectionUsagePolicy,
   type AIConnectionCredentialStrategy,
@@ -11,6 +12,7 @@ import {
   type AIConnectionUsagePolicy,
 } from '@engineering-os/domain';
 import type {
+  AIConnectionModelRouteRecord,
   AIConnectionProjectShareRecord,
   AIConnectionRepository,
   AIRunnerRepository,
@@ -20,11 +22,19 @@ import type {
   SessionRepository,
 } from '@engineering-os/database';
 import type { TransactionRepositories } from '@engineering-os/database';
-import type { ModelGateway, ModelRoute } from '@engineering-os/model-gateway';
+import type { ModelAdapter, ModelGateway, ModelRoute, ProviderCapabilities } from '@engineering-os/model-gateway';
+import type {
+  AIConnectionProviderAdapterRegistry,
+  AIConnectionProviderContext,
+} from './ai-connection-provider-adapter.js';
 import type {
   ConnectionFamilyPolicyRegistry,
   TrustedConnectionFamilyPolicy,
 } from './ai-connection-policy.js';
+import {
+  secretIdFromReference, secretReferenceForId,
+  type AesGcmAIConnectionSecretProtector,
+} from './ai-connection-secret-protector.js';
 
 export type AIConnectionServiceErrorCode =
   | 'forbidden'
@@ -33,7 +43,7 @@ export type AIConnectionServiceErrorCode =
   | 'conflict';
 
 export class AIConnectionServiceError extends Error {
-  constructor(readonly code: AIConnectionServiceErrorCode, message = code) {
+  constructor(readonly code: AIConnectionServiceErrorCode, message: string = code) {
     super(message);
     this.name = 'AIConnectionServiceError';
   }
@@ -54,6 +64,60 @@ export interface RunnerAvailabilityResolver {
   }): Promise<readonly BoundRunnerAvailabilitySnapshot[]>;
 }
 
+export interface ModelRouteEligibilityResolver {
+  listEligibleModelRoutesForProject(input: {
+    organisationId: string;
+    projectId: string;
+    actorUserId: string;
+  }): Promise<readonly ModelRoute[]>;
+}
+export interface AIConnectionCredentialResolver {
+  resolve(input: {
+    organisationId: string;
+    connectionId: string;
+    secretRefId: string;
+  }): Promise<{ value: string }>;
+}
+
+export interface DiscoveredAIConnectionModelSummary {
+  routeId: string;
+  capabilityId: string;
+  providerModelId: string;
+  displayName: string;
+  available: boolean;
+  capabilities: ModelRoute['capabilities'];
+}
+
+export interface AIConnectionModelDiscoveryResult {
+  connectionId: string;
+  providerId: string;
+  models: DiscoveredAIConnectionModelSummary[];
+}
+function providerCapabilitiesRecord(value: ProviderCapabilities): Record<string, boolean> {
+  return {
+    chat: value.chat,
+    tools: value.tools,
+    vision: value.vision,
+    files: value.files,
+    mcp: value.mcp,
+    localWorkspace: value.localWorkspace,
+    headless: value.headless,
+    structuredOutput: value.structuredOutput,
+  };
+}
+
+function providerCapabilitiesFromRecord(value: Record<string, boolean>): ProviderCapabilities {
+  return {
+    chat: value.chat === true,
+    tools: value.tools === true,
+    vision: value.vision === true,
+    files: value.files === true,
+    mcp: value.mcp === true,
+    localWorkspace: value.localWorkspace === true,
+    headless: value.headless === true,
+    structuredOutput: value.structuredOutput === true,
+  };
+}
 export interface AIConnectionServiceDependencies {
   unitOfWork: DatabaseUnitOfWork;
   aiConnections: AIConnectionRepository;
@@ -62,7 +126,11 @@ export interface AIConnectionServiceDependencies {
   sessions: SessionRepository;
   policy: ConnectionFamilyPolicyRegistry;
   modelGateway: ModelGateway;
+  modelRouteEligibility?: ModelRouteEligibilityResolver;
   runnerAvailability?: RunnerAvailabilityResolver;
+  providerAdapters?: AIConnectionProviderAdapterRegistry;
+  credentialResolver?: AIConnectionCredentialResolver;
+  credentialProtector?: AesGcmAIConnectionSecretProtector;
 }
 
 export type ProjectExecutionPoolTier = 'requester' | 'project_pool' | 'organisation';
@@ -152,18 +220,60 @@ function toSummary(record: AIConnectionRecord): AIConnectionSummary {
   return summary;
 }
 
-const PERSONAL_ALLOWED_STRATEGIES: readonly AIConnectionCredentialStrategy[] = [
+function connectionModelIdentity(input: {
+  organisationId: string;
+  connectionId: string;
+  providerId: string;
+  providerModelId: string;
+}): { routeId: string; capabilityId: string } {
+  const digest = createHash('sha256')
+    .update(`${input.organisationId}\0${input.connectionId}\0${input.providerId}\0${input.providerModelId}`)
+    .digest('hex')
+    .slice(0, 40);
+  return {
+    routeId: `connection-route.${digest}`,
+    capabilityId: `model-route.${digest}`,
+  };
+}
+
+function toProviderContextConnection(record: AIConnectionRecord): AIConnectionProviderContext['connection'] {
+  const safe: AIConnectionProviderContext['connection'] = {
+    id: record.id,
+    organisationId: record.organisationId,
+    ownership: record.ownership,
+    providerId: record.providerId,
+    connectionFamilyId: record.connectionFamilyId,
+  };
+  if (record.ownerUserId !== undefined) safe.ownerUserId = record.ownerUserId;
+  return safe;
+}
+
+function canManageConnectionDiscovery(
+  role: 'owner' | 'admin' | 'member',
+  actorUserId: string,
+  connection: AIConnectionRecord,
+): boolean {
+  return connection.ownership === 'personal'
+    ? connection.ownerUserId === actorUserId
+    : role === 'owner' || role === 'admin';
+}
+const PERSONAL_ALLOWED_NON_SECRET_STRATEGIES: readonly AIConnectionCredentialStrategy[] = [
   'runner_managed',
   'none',
 ];
 
 function pickPersonalStrategy(
   policy: TrustedConnectionFamilyPolicy,
+  hasSecretRef: boolean,
 ): AIConnectionCredentialStrategy | null {
-  for (const candidate of PERSONAL_ALLOWED_STRATEGIES) {
-    if (policy.credentialStrategies.includes(candidate)) return candidate;
+  if (hasSecretRef) {
+    return policy.credentialStrategies.includes('external_secret_ref')
+      ? 'external_secret_ref'
+      : null;
   }
-  return null;
+  const allowed = PERSONAL_ALLOWED_NON_SECRET_STRATEGIES.filter((strategy) =>
+    policy.credentialStrategies.includes(strategy));
+  return allowed.length === 1 ? allowed[0] ?? null : null;
 }
 
 function pickOrganisationStrategy(
@@ -240,55 +350,63 @@ export class AIConnectionService {
     organisationId: string;
     actorUserId: string;
     connectionFamilyId: string;
+    secretRefId?: string;
+    credentialValue?: string;
     now?: Date;
   }): Promise<AIConnectionSummary> {
     const now = input.now ?? new Date();
     const policy = this.dependencies.policy.get(input.connectionFamilyId);
-    if (!policy) throw new AIConnectionServiceError('policy_blocked');
-    if (!policy.allowedOwnership.includes('personal')) {
+    if (!policy || !policy.allowedOwnership.includes('personal')) {
       throw new AIConnectionServiceError('policy_blocked');
     }
-    const strategy = pickPersonalStrategy(policy);
+    const secretRef = typeof input.secretRefId === 'string' ? input.secretRefId.trim() : '';
+    const credentialValue = typeof input.credentialValue === 'string' ? input.credentialValue.trim() : '';
+    if (secretRef && credentialValue) throw new AIConnectionServiceError('policy_blocked');
+    const hasCredential = Boolean(secretRef || credentialValue);
+    const strategy = pickPersonalStrategy(policy, hasCredential);
     if (!strategy) throw new AIConnectionServiceError('policy_blocked');
+    if (credentialValue && !this.dependencies.credentialProtector) {
+      throw new AIConnectionServiceError('policy_blocked', 'managed credential storage unavailable');
+    }
 
     const record: AIConnectionRecord = {
-      id: randomUUID(),
-      organisationId: input.organisationId,
-      ownership: 'personal',
-      ownerUserId: input.actorUserId,
-      providerId: policy.providerId,
-      connectionFamilyId: policy.id,
-      credentialStrategy: strategy,
-      status: 'configured',
-      createdBy: input.actorUserId,
-      createdAt: now,
-      updatedAt: now,
+      id: randomUUID(), organisationId: input.organisationId, ownership: 'personal',
+      ownerUserId: input.actorUserId, providerId: policy.providerId,
+      connectionFamilyId: policy.id, credentialStrategy: strategy, status: 'configured',
+      createdBy: input.actorUserId, createdAt: now, updatedAt: now,
     };
+    if (strategy === 'external_secret_ref' && secretRef) record.secretRefId = secretRef;
 
-    await this.dependencies.unitOfWork.run(async ({ memberships, aiConnections, audit }) => {
+    await this.dependencies.unitOfWork.run(async ({
+      memberships, aiConnections, aiConnectionSecrets, audit,
+    }) => {
       const membership = await memberships.getOrganisation(input.organisationId, input.actorUserId);
       if (!membership || membership.status !== 'active') {
         throw new AIConnectionServiceError('forbidden');
       }
+      let encryptedSecret: ReturnType<AesGcmAIConnectionSecretProtector['encrypt']> | undefined;
+      if (credentialValue) {
+        encryptedSecret = this.dependencies.credentialProtector!.encrypt({
+          organisationId: input.organisationId, connectionId: record.id,
+          value: credentialValue, createdBy: input.actorUserId, createdAt: now,
+        });
+        record.secretRefId = secretReferenceForId(encryptedSecret.id);
+      }
       await aiConnections.createConnection(record);
+      if (encryptedSecret) await aiConnectionSecrets.create(encryptedSecret);
       await audit.append(createAuditEvent({
         organisationId: input.organisationId,
-        eventType: 'ai.connection.personal.registered',
-        actorType: 'user',
-        actorId: input.actorUserId,
-        subjectType: 'ai_connection',
-        subjectId: record.id,
+        eventType: 'ai.connection.personal.registered', actorType: 'user',
+        actorId: input.actorUserId, subjectType: 'ai_connection', subjectId: record.id,
         metadata: {
-          ownership: record.ownership,
-          connectionFamilyId: record.connectionFamilyId,
-          providerId: record.providerId,
-          credentialStrategy: record.credentialStrategy,
-          status: record.status,
-          ownerUserId: record.ownerUserId,
+          ownership: record.ownership, connectionFamilyId: record.connectionFamilyId,
+          providerId: record.providerId, credentialStrategy: record.credentialStrategy,
+          credentialConfigured: hasCredential,
+          credentialStorage: credentialValue ? 'managed_encrypted' : secretRef ? 'external_reference' : 'none',
+          status: record.status, ownerUserId: record.ownerUserId,
         },
       }));
     });
-
     return toSummary(record);
   }
 
@@ -297,66 +415,66 @@ export class AIConnectionService {
     actorUserId: string;
     connectionFamilyId: string;
     secretRefId?: string;
+    credentialValue?: string;
     now?: Date;
   }): Promise<AIConnectionSummary> {
     const now = input.now ?? new Date();
     const policy = this.dependencies.policy.get(input.connectionFamilyId);
-    if (!policy) throw new AIConnectionServiceError('policy_blocked');
-    if (!policy.allowedOwnership.includes('organisation')) {
+    if (!policy || !policy.allowedOwnership.includes('organisation')) {
       throw new AIConnectionServiceError('policy_blocked');
     }
-    const trimmedSecret =
-      typeof input.secretRefId === 'string' ? input.secretRefId.trim() : '';
-    const hasSecretRef = trimmedSecret.length > 0;
-    const strategy = pickOrganisationStrategy(policy, hasSecretRef);
+    const secretRef = typeof input.secretRefId === 'string' ? input.secretRefId.trim() : '';
+    const credentialValue = typeof input.credentialValue === 'string' ? input.credentialValue.trim() : '';
+    if (secretRef && credentialValue) throw new AIConnectionServiceError('policy_blocked');
+    const hasCredential = Boolean(secretRef || credentialValue);
+    const strategy = pickOrganisationStrategy(policy, hasCredential);
     if (!strategy) throw new AIConnectionServiceError('policy_blocked');
-    if (strategy === 'external_secret_ref' && !hasSecretRef) {
+    if (strategy === 'external_secret_ref' && !hasCredential) {
+      throw new AIConnectionServiceError('policy_blocked');
+    }
+    if (credentialValue && !this.dependencies.credentialProtector) {
       throw new AIConnectionServiceError('policy_blocked');
     }
 
     const record: AIConnectionRecord = {
-      id: randomUUID(),
-      organisationId: input.organisationId,
-      ownership: 'organisation',
-      providerId: policy.providerId,
-      connectionFamilyId: policy.id,
-      credentialStrategy: strategy,
-      status: 'configured',
-      createdBy: input.actorUserId,
-      createdAt: now,
-      updatedAt: now,
+      id: randomUUID(), organisationId: input.organisationId, ownership: 'organisation',
+      providerId: policy.providerId, connectionFamilyId: policy.id,
+      credentialStrategy: strategy, status: 'configured',
+      createdBy: input.actorUserId, createdAt: now, updatedAt: now,
     };
-    if (strategy === 'external_secret_ref') {
-      record.secretRefId = trimmedSecret;
-    }
+    if (strategy === 'external_secret_ref' && secretRef) record.secretRefId = secretRef;
 
-    await this.dependencies.unitOfWork.run(async ({ memberships, aiConnections, audit }) => {
+    await this.dependencies.unitOfWork.run(async ({
+      memberships, aiConnections, aiConnectionSecrets, audit,
+    }) => {
       const membership = await memberships.getOrganisation(input.organisationId, input.actorUserId);
-      if (!membership || membership.status !== 'active') {
+      if (!membership || membership.status !== 'active'
+        || (membership.role !== 'owner' && membership.role !== 'admin')) {
         throw new AIConnectionServiceError('forbidden');
       }
-      if (membership.role !== 'owner' && membership.role !== 'admin') {
-        throw new AIConnectionServiceError('forbidden');
+      let encryptedSecret: ReturnType<AesGcmAIConnectionSecretProtector['encrypt']> | undefined;
+      if (credentialValue) {
+        encryptedSecret = this.dependencies.credentialProtector!.encrypt({
+          organisationId: input.organisationId, connectionId: record.id,
+          value: credentialValue, createdBy: input.actorUserId, createdAt: now,
+        });
+        record.secretRefId = secretReferenceForId(encryptedSecret.id);
       }
       await aiConnections.createConnection(record);
+      if (encryptedSecret) await aiConnectionSecrets.create(encryptedSecret);
       await audit.append(createAuditEvent({
         organisationId: input.organisationId,
-        eventType: 'ai.connection.organisation.registered',
-        actorType: 'user',
-        actorId: input.actorUserId,
-        subjectType: 'ai_connection',
-        subjectId: record.id,
+        eventType: 'ai.connection.organisation.registered', actorType: 'user',
+        actorId: input.actorUserId, subjectType: 'ai_connection', subjectId: record.id,
         metadata: {
-          ownership: record.ownership,
-          connectionFamilyId: record.connectionFamilyId,
-          providerId: record.providerId,
-          credentialStrategy: record.credentialStrategy,
+          ownership: record.ownership, connectionFamilyId: record.connectionFamilyId,
+          providerId: record.providerId, credentialStrategy: record.credentialStrategy,
+          credentialConfigured: hasCredential,
+          credentialStorage: credentialValue ? 'managed_encrypted' : secretRef ? 'external_reference' : 'none',
           status: record.status,
-          credentialConfigured: hasSecretRef,
         },
       }));
     });
-
     return toSummary(record);
   }
 
@@ -377,6 +495,221 @@ export class AIConnectionService {
     return [...personal, ...organisation].map(toSummary);
   }
 
+  async discoverConnectionModels(input: {
+    organisationId: string;
+    actorUserId: string;
+    connectionId: string;
+    now?: Date;
+  }): Promise<AIConnectionModelDiscoveryResult> {
+    const now = input.now ?? new Date();
+    const membership = await this.dependencies.memberships.getOrganisation(
+      input.organisationId, input.actorUserId,
+    );
+    if (!membership || membership.status !== 'active') {
+      throw new AIConnectionServiceError('forbidden');
+    }
+    const connection = await this.dependencies.aiConnections.getConnection(
+      input.organisationId, input.connectionId,
+    );
+    if (!connection) throw new AIConnectionServiceError('not_found');
+    if (!canManageConnectionDiscovery(membership.role, input.actorUserId, connection)) {
+      throw new AIConnectionServiceError('forbidden');
+    }
+    if (connection.status === 'revoked') throw new AIConnectionServiceError('conflict');
+
+    const family = this.dependencies.policy.get(connection.connectionFamilyId);
+    const adapterId = family?.providerAdapterId;
+    const adapters = this.dependencies.providerAdapters;
+    if (!family || family.providerId !== connection.providerId || !adapterId || !adapters?.get(adapterId)) {
+      throw new AIConnectionServiceError('policy_blocked');
+    }
+
+    const context: AIConnectionProviderContext = {
+      connection: toProviderContextConnection(connection),
+    };
+    if (connection.credentialStrategy === 'external_secret_ref') {
+      const resolver = this.dependencies.credentialResolver;
+      if (!resolver || !connection.secretRefId) throw new AIConnectionServiceError('conflict');
+      let resolved: { value: string };
+      try {
+        resolved = await resolver.resolve({
+          organisationId: input.organisationId,
+          connectionId: connection.id,
+          secretRefId: connection.secretRefId,
+        });
+      } catch {
+        throw new AIConnectionServiceError('conflict', 'connection credential unavailable');
+      }
+      if (typeof resolved.value !== 'string' || resolved.value.trim() === '') {
+        throw new AIConnectionServiceError('conflict', 'connection credential unavailable');
+      }
+      context.credential = { value: resolved.value };
+    }
+
+    let validation: Awaited<ReturnType<AIConnectionProviderAdapterRegistry['validateConnection']>>;
+    let discovered: Awaited<ReturnType<AIConnectionProviderAdapterRegistry['discoverModels']>>;
+    try {
+      validation = await adapters.validateConnection(adapterId, context);
+      if (validation.status !== 'available') {
+        await this.dependencies.unitOfWork.run(async ({ memberships, aiConnections, audit }) => {
+          const currentMembership = await memberships.getOrganisation(input.organisationId, input.actorUserId);
+          const current = await aiConnections.getConnection(input.organisationId, input.connectionId);
+          if (!currentMembership || currentMembership.status !== 'active' || !current
+            || !canManageConnectionDiscovery(currentMembership.role, input.actorUserId, current)) {
+            throw new AIConnectionServiceError('forbidden');
+          }
+          if (current.status === 'revoked') throw new AIConnectionServiceError('conflict');
+          await aiConnections.setConnectionStatus(input.organisationId, current.id, validation.status, now);
+          await audit.append(createAuditEvent({
+            organisationId: input.organisationId,
+            eventType: 'ai.connection.validation.changed', actorType: 'user', actorId: input.actorUserId,
+            subjectType: 'ai_connection', subjectId: current.id,
+            metadata: { providerId: current.providerId, connectionFamilyId: current.connectionFamilyId,
+              previousStatus: current.status, status: validation.status },
+          }));
+        });
+        throw new AIConnectionServiceError('conflict', `connection ${validation.status}`);
+      }
+      discovered = await adapters.discoverModels(adapterId, context);
+    } catch (error) {
+      if (error instanceof AIConnectionServiceError) throw error;
+      throw new AIConnectionServiceError('conflict', 'provider model discovery failed');
+    }
+
+    const records = await this.dependencies.unitOfWork.run(async ({
+      memberships, aiConnections, capabilityEstate, audit,
+    }) => {
+      const currentMembership = await memberships.getOrganisation(input.organisationId, input.actorUserId);
+      const current = await aiConnections.getConnection(input.organisationId, input.connectionId);
+      if (!currentMembership || currentMembership.status !== 'active' || !current) {
+        throw new AIConnectionServiceError('forbidden');
+      }
+      if (!canManageConnectionDiscovery(currentMembership.role, input.actorUserId, current)) {
+        throw new AIConnectionServiceError('forbidden');
+      }
+      if (current.status === 'revoked') throw new AIConnectionServiceError('conflict');
+      const currentFamily = this.dependencies.policy.get(current.connectionFamilyId);
+      if (!currentFamily || currentFamily.providerAdapterId !== adapterId
+        || currentFamily.providerId !== current.providerId) {
+        throw new AIConnectionServiceError('policy_blocked');
+      }
+
+      const reconciled: AIConnectionModelRouteRecord[] = [];
+      for (const model of [...discovered].sort((a, b) => a.providerModelId.localeCompare(b.providerModelId))) {
+        const identity = connectionModelIdentity({
+          organisationId: input.organisationId, connectionId: current.id,
+          providerId: current.providerId, providerModelId: model.providerModelId,
+        });
+        const capability = await capabilityEstate.reconcileDiscoveredCapability(createCapabilityRecord({
+          id: identity.capabilityId, kind: 'model_route', source: 'ai_connection',
+          sourceRef: identity.routeId,
+          displayName: model.displayName ?? model.providerModelId,
+          maturity: 'discovered', governanceState: 'discovered', executionVerification: 'unverified',
+          createdBy: input.actorUserId, createdAt: now,
+        }));
+        const route = await aiConnections.reconcileModelRoute({
+          organisationId: input.organisationId, connectionId: current.id,
+          routeId: identity.routeId, capabilityId: capability.id, providerId: current.providerId,
+          providerModelId: model.providerModelId, displayName: model.displayName ?? model.providerModelId,
+          availability: model.available ? 'available' : 'unavailable',
+          capabilities: providerCapabilitiesRecord(model.capabilities), seenAt: now,
+        });
+        reconciled.push(route);
+      }
+      await aiConnections.markUnseenModelRoutesUnavailable({
+        organisationId: input.organisationId, connectionId: current.id,
+        seenRouteIds: reconciled.map((route) => route.routeId), seenAt: now,
+      });
+      if (current.status !== 'available') {
+        await aiConnections.setConnectionStatus(input.organisationId, current.id, 'available', now);
+      }
+      await audit.append(createAuditEvent({
+        organisationId: input.organisationId,
+        eventType: 'ai.connection.models.discovered', actorType: 'user', actorId: input.actorUserId,
+        subjectType: 'ai_connection', subjectId: current.id,
+        metadata: { providerId: current.providerId, connectionFamilyId: current.connectionFamilyId,
+          providerAdapterId: adapterId, discoveredModelCount: reconciled.length,
+          previousStatus: current.status, status: 'available' },
+      }));
+      return reconciled;
+    });
+
+    return {
+      connectionId: connection.id,
+      providerId: connection.providerId,
+      models: records.map((record) => ({
+        routeId: record.routeId,
+        capabilityId: record.capabilityId,
+        providerModelId: record.providerModelId,
+        displayName: record.displayName,
+        available: record.availability === 'available',
+        capabilities: providerCapabilitiesFromRecord(record.capabilities),
+      })).sort((a, b) => a.routeId.localeCompare(b.routeId)),
+    };
+  }
+
+  async resolveConnectionModelAdapter(routeId: string): Promise<ModelAdapter | null> {
+    const stored = await this.dependencies.aiConnections.getModelRoute(routeId);
+    if (!stored || stored.availability !== 'available') return null;
+    const connection = await this.dependencies.aiConnections.getConnection(
+      stored.organisationId, stored.connectionId,
+    );
+    if (!connection || connection.status !== 'available') return null;
+    if (connection.providerId !== stored.providerId) return null;
+    const family = this.dependencies.policy.get(connection.connectionFamilyId);
+    const adapterId = family?.providerAdapterId;
+    const adapters = this.dependencies.providerAdapters;
+    if (!family || family.providerId !== stored.providerId || !adapterId || !adapters) return null;
+    const providerAdapter = adapters.get(adapterId);
+    if (!providerAdapter?.createModelAdapter) return null;
+    const context: AIConnectionProviderContext = {
+      connection: toProviderContextConnection(connection),
+    };
+    if (connection.credentialStrategy === 'external_secret_ref') {
+      const resolver = this.dependencies.credentialResolver;
+      if (!resolver || !connection.secretRefId) return null;
+      try {
+        const resolved = await resolver.resolve({
+          organisationId: stored.organisationId,
+          connectionId: connection.id,
+          secretRefId: connection.secretRefId,
+        });
+        if (typeof resolved.value !== 'string' || resolved.value.trim() === '') return null;
+        context.credential = { value: resolved.value };
+      } catch {
+        return null;
+      }
+    }
+    const connectionAuthority = connection.ownership === 'personal'
+      ? (connection.ownerUserId
+          ? { id: connection.id, ownerType: 'user' as const, ownerId: connection.ownerUserId }
+          : null)
+      : { id: connection.id, ownerType: 'organisation' as const, ownerId: stored.organisationId };
+    if (!connectionAuthority) return null;
+    const route: ModelRoute = {
+      id: stored.routeId,
+      provider: stored.providerId,
+      model: stored.providerModelId,
+      connection: connectionAuthority,
+      executionMode: family.executionMode,
+      costType: family.executionMode === 'api'
+        ? 'metered_api'
+        : family.executionMode === 'subscription' ? 'included_subscription' : 'manual',
+      available: true,
+      priority: 50,
+      capabilities: providerCapabilitiesFromRecord(stored.capabilities),
+    };
+    try {
+      const modelAdapter = await providerAdapter.createModelAdapter({ context, route });
+      if (modelAdapter.route.id !== route.id
+        || modelAdapter.route.provider !== route.provider
+        || modelAdapter.route.model !== route.model
+        || modelAdapter.route.connection?.id !== connection.id) return null;
+      return modelAdapter;
+    } catch {
+      return null;
+    }
+  }
   async revokeConnection(input: {
     organisationId: string;
     actorUserId: string;
@@ -384,7 +717,7 @@ export class AIConnectionService {
     now?: Date;
   }): Promise<void> {
     const now = input.now ?? new Date();
-    await this.dependencies.unitOfWork.run(async ({ memberships, aiConnections, audit }) => {
+    await this.dependencies.unitOfWork.run(async ({ memberships, aiConnections, aiConnectionSecrets, audit }) => {
       const membership = await memberships.getOrganisation(input.organisationId, input.actorUserId);
       if (!membership || membership.status !== 'active') {
         throw new AIConnectionServiceError('forbidden');
@@ -426,6 +759,11 @@ export class AIConnectionService {
             reason: 'connection_revoked',
           },
         }));
+      }
+
+      const managedSecretId = record.secretRefId ? secretIdFromReference(record.secretRefId) : null;
+      if (managedSecretId) {
+        await aiConnectionSecrets.revoke(input.organisationId, record.id, managedSecretId, now);
       }
 
       await aiConnections.setConnectionStatus(input.organisationId, record.id, 'revoked', now);
@@ -965,8 +1303,14 @@ export class AIConnectionService {
     entries.push(...orgEntries);
 
     // ----- API fallback routes -----
-    const apiFallbackRoutes: ProjectExecutionPoolApiRoute[] = modelGateway
-      .listRoutes()
+    const visibleModelRoutes = this.dependencies.modelRouteEligibility
+      ? await this.dependencies.modelRouteEligibility.listEligibleModelRoutesForProject({
+          organisationId: input.organisationId,
+          projectId: input.projectId,
+          actorUserId: input.requesterUserId,
+        })
+      : modelGateway.listRoutes();
+    const apiFallbackRoutes: ProjectExecutionPoolApiRoute[] = visibleModelRoutes
       .filter((r) => r.executionMode === 'api')
       .map((r) => ({
         routeId: r.id,

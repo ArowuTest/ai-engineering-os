@@ -5,10 +5,13 @@ import {
   createOpenAIAdapter,
   createOpenRouterAdapter,
 } from '@engineering-os/model-gateway';
+import { createOpenAIStudioArtifactSemanticNormalizer } from './openai-studio-artifact-normalizer.js';
+import type { StudioArtifactSemanticNormalizer } from './studio-artifact-context.js';
 
 export interface ModelRuntimeEnvironment {
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;
+  OPENAI_TRANSCRIPTION_MODEL?: string;
   ANTHROPIC_API_KEY?: string;
   ANTHROPIC_MODEL?: string;
   GEMINI_API_KEY?: string;
@@ -20,6 +23,20 @@ export interface ModelRuntimeEnvironment {
 function value(environment: ModelRuntimeEnvironment, key: keyof ModelRuntimeEnvironment) {
   const raw = environment[key];
   return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
+}
+
+export function createConfiguredStudioArtifactSemanticNormalizer(
+  environment: ModelRuntimeEnvironment,
+): StudioArtifactSemanticNormalizer | undefined {
+  const apiKey = value(environment, 'OPENAI_API_KEY');
+  if (!apiKey) return undefined;
+  const model = value(environment, 'OPENAI_MODEL');
+  const transcriptionModel = value(environment, 'OPENAI_TRANSCRIPTION_MODEL');
+  return createOpenAIStudioArtifactSemanticNormalizer({
+    apiKey,
+    ...(model === undefined ? {} : { model }),
+    ...(transcriptionModel === undefined ? {} : { transcriptionModel }),
+  });
 }
 
 function configuredOpenRouterModels(environment: ModelRuntimeEnvironment): string[] {

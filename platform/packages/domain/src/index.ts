@@ -10,3 +10,6 @@ export * from './project.js';
 export * from './review-council.js';
 export * from './collaborative-memory.js';
 export * from './validation.js';
+export * from './capability-estate.js';
+export * from './studio-interaction-artifact.js';
+export * from './assurance.js';

@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
-import { DomainValidationError, requireNonBlank, requireStableIdentifier } from './validation.js';
+import {
+  assertSensitiveTextSafe,
+  DomainValidationError,
+  requireNonBlank,
+  requireStableIdentifier,
+} from './validation.js';
 
 export const MEMORY_SCOPES = [
   'project', 'workstream', 'agent', 'session', 'review', 'user', 'organisation',
@@ -207,7 +212,7 @@ function requireSafeText(value: unknown, field: string, maxLength: number, utf8B
   if (measuredLength > maxLength) {
     throw new DomainValidationError(field, `${field} is too long`);
   }
-  assertMemoryTextSafe(normalized, field);
+  assertSensitiveTextSafe(normalized, field);
   return normalized;
 }
 
@@ -220,15 +225,6 @@ function requireWorkspaceReference(value: unknown): string {
     );
   }
   return normalized;
-}
-
-function assertMemoryTextSafe(value: string, field: string): void {
-  const privateKey = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/i;
-  const bearer = /\b(?:authorization\s*:\s*)?bearer\s+\S{16,}/i;
-  const assignedSecret = /\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|private[_-]?key)\s*[:=]\s*\S{8,}/i;
-  if (privateKey.test(value) || bearer.test(value) || assignedSecret.test(value)) {
-    throw new DomainValidationError(field, `${field} contains secret or credential-like content`);
-  }
 }
 
 export function digestMemoryContent(value: string | Uint8Array): string {

@@ -80,6 +80,7 @@ export interface AIDispatchExecutionEvidenceRecord extends AIDispatchTerminalEvi
   dispatchId: string;
   projectId: string;
   taskId: string;
+  requesterUserId: string;
   runnerId: string;
   connectionId: string;
   harnessId: string;
@@ -130,6 +131,7 @@ interface AIDispatchEvidenceRow {
   dispatch_id: string;
   project_id: string;
   task_id: string;
+  requester_user_id: string;
   runner_id: string;
   connection_id: string;
   harness_id: string;
@@ -298,6 +300,7 @@ function mapEvidence(row: AIDispatchEvidenceRow): AIDispatchExecutionEvidenceRec
     dispatchId: row.dispatch_id,
     projectId: row.project_id,
     taskId: row.task_id,
+    requesterUserId: row.requester_user_id,
     runnerId: row.runner_id,
     connectionId: row.connection_id,
     harnessId: row.harness_id,
@@ -799,7 +802,7 @@ export class AIDispatchRepository {
   ): Promise<AIDispatchExecutionEvidenceRecord[]> {
     const result = await this.database.query<AIDispatchEvidenceRow>(
       `SELECT e.id, e.organisation_id, e.dispatch_id, d.project_id, d.task_id,
-              d.runner_id, d.connection_id, d.harness_id, d.route_id,
+              d.requester_user_id, d.runner_id, d.connection_id, d.harness_id, d.route_id,
               e.attempt, e.outcome, e.metadata, e.artifact_references,
               e.session_reference, e.created_at
        FROM ai_dispatch_execution_evidence e

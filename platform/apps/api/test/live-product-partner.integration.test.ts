@@ -13,6 +13,7 @@ import {
   type ModelAdapter,
   type ModelProvider,
   type ModelRequest,
+  type ModelRoute,
 } from '@engineering-os/model-gateway';
 import { buildApp } from '../src/app.js';
 import {
@@ -127,6 +128,55 @@ describe('live Product Partner turn', () => {
       'knowledge_extraction_run.received',
       'knowledge_extraction_run.succeeded',
     ]);
+    await app.close();
+  });
+
+  it('preserves connection ownership provenance in Product Partner execution and audit evidence', async () => {
+    const gateway = new ModelGateway();
+    const connectionRoute: ModelRoute = {
+      id: 'openrouter-user-route',
+      provider: 'openrouter',
+      model: 'vendor/model-a',
+      connection: { id: 'connection-user-001', ownerType: 'user', ownerId: 'user-001' },
+      executionMode: 'api',
+      costType: 'metered_api',
+      available: true,
+      priority: 1,
+      capabilities: {
+        chat: true, tools: false, vision: false, files: false,
+        mcp: false, localWorkspace: false, headless: true, structuredOutput: true,
+      },
+    };
+    gateway.register({
+      route: connectionRoute,
+      async execute() {
+        return { content: envelope('Connection-scoped response.'), usage: { inputTokens: 7, outputTokens: 3 } };
+      },
+    });
+    const app = testApp(gateway);
+    const project = await createProject(app, 'openrouter');
+    const response = await app.inject({
+      method: 'POST', url: `/projects/${project.id}/product-partner-turn`, headers,
+      payload: { content: 'Use the governed connection.' },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      execution: {
+        provider: 'openrouter',
+        model: 'vendor/model-a',
+        routeId: connectionRoute.id,
+        connection: { id: 'connection-user-001', ownerType: 'user', ownerId: 'user-001' },
+      },
+    });
+    const events = await audit.listByProject('org-001', project.id);
+    const assistant = events.find((event) => event.eventType === 'product_partner.assistant_message.created');
+    expect(assistant?.metadata).toMatchObject({
+      provider: 'openrouter',
+      model: 'vendor/model-a',
+      routeId: connectionRoute.id,
+      connection: { id: 'connection-user-001', ownerType: 'user', ownerId: 'user-001' },
+    });
     await app.close();
   });
 

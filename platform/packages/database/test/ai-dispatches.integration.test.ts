@@ -503,6 +503,7 @@ describe('AIDispatchRepository', () => {
     expect(storedEvidence).toHaveLength(1);
     expect(storedEvidence[0]).toMatchObject({
       id: evidence.id,
+      requesterUserId: context.userId,
       outcome: 'succeeded',
       metadata: { zeta: 'last', alpha: 'first', exitCode: 0, inputTokens: 42 },
       artifactReferences: ['artifact:test-report'],

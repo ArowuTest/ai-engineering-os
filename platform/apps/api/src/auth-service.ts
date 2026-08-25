@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   calculateInvitationExpiry,
   createAuditEvent,
+  createPlatformAuditEvent,
   generateOpaqueToken,
   hashOpaqueToken,
   hashPassword,
@@ -17,6 +18,7 @@ import type {
   DatabaseUnitOfWork,
   InvitationRepository,
   MembershipRepository,
+  PlatformMembershipRepository,
   SessionRepository,
   UserRepository,
 } from '@engineering-os/database';
@@ -40,6 +42,7 @@ export interface AuthServiceDependencies {
   unitOfWork: DatabaseUnitOfWork;
   users: UserRepository;
   memberships: MembershipRepository;
+  platformMemberships?: PlatformMembershipRepository;
   invitations: InvitationRepository;
   sessions: SessionRepository;
   audit: AuditRepository;
@@ -54,6 +57,7 @@ export interface SessionIdentity {
   accountId: string;
   userId: string;
   organisations: Array<{ organisationId: string; role: OrganisationRole }>;
+  platformRole?: 'admin';
 }
 
 export interface ProjectIdentity extends SessionIdentity {
@@ -246,8 +250,12 @@ export class AuthService {
     }
     if (user.status === 'suspended') throw new AuthServiceError('account_suspended');
 
-    const organisations = await this.dependencies.memberships.listActiveOrganisations(user.id);
-    if (organisations.length === 0) throw new AuthServiceError('invalid_credentials');
+    const [organisations, platformMembership] = await Promise.all([
+      this.dependencies.memberships.listActiveOrganisations(user.id),
+      this.dependencies.platformMemberships?.get(user.id) ?? Promise.resolve(null),
+    ]);
+    const platformAdmin = platformMembership?.status === 'active' && platformMembership.role === 'admin';
+    if (organisations.length === 0 && !platformAdmin) throw new AuthServiceError('invalid_credentials');
 
     const token = generateOpaqueToken();
     const tokenHash = hashOpaqueToken(token);
@@ -265,6 +273,13 @@ export class AuthService {
           metadata: { expiresAt: expiresAt.toISOString() },
         }));
       }
+      if (platformAdmin) {
+        await audit.append(createPlatformAuditEvent({
+          eventType: 'auth.login.succeeded', actorType: 'user', actorId: user.id,
+          subjectType: 'auth_session', subjectId: sessionId,
+          metadata: { expiresAt: expiresAt.toISOString(), platformRole: 'admin' },
+        }));
+      }
     });
     return { sessionId, token, expiresAt, userId: user.userId };
   }
@@ -274,9 +289,13 @@ export class AuthService {
     if (!session) return null;
     const user = await this.dependencies.users.getById(session.userId);
     if (!user || user.status !== 'active') return null;
-    const memberships = await this.dependencies.memberships.listActiveOrganisations(user.id);
-    if (memberships.length === 0) return null;
-    return {
+    const [memberships, platformMembership] = await Promise.all([
+      this.dependencies.memberships.listActiveOrganisations(user.id),
+      this.dependencies.platformMemberships?.get(user.id) ?? Promise.resolve(null),
+    ]);
+    const platformAdmin = platformMembership?.status === 'active' && platformMembership.role === 'admin';
+    if (memberships.length === 0 && !platformAdmin) return null;
+    const identity: SessionIdentity = {
       sessionId: session.id,
       accountId: user.id,
       userId: user.userId,
@@ -285,6 +304,8 @@ export class AuthService {
         role: membership.role,
       })),
     };
+    if (platformAdmin) identity.platformRole = 'admin';
+    return identity;
   }
 
   async logout(token: string, now = new Date()): Promise<void> {

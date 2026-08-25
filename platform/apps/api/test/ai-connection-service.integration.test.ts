@@ -75,6 +75,18 @@ const TEST_POLICIES: readonly TrustedConnectionFamilyPolicy[] = [
     persistentSupported: false,
   },
   {
+    id: 'test-personal-api',
+    providerId: 'test',
+    providerAdapterId: 'test-provider-adapter',
+    displayName: 'Test Personal API',
+    executionMode: 'api',
+    allowedOwnership: ['personal'],
+    credentialStrategies: ['external_secret_ref'],
+    delegatable: false,
+    requiresRunner: false,
+    persistentSupported: false,
+  },
+  {
     id: 'test-org-none',
     providerId: 'test',
     displayName: 'Test Organisation No Creds',
@@ -192,6 +204,25 @@ describe('AIConnectionService', () => {
       [summary.id],
     );
     expect(shares.rowCount).toBe(0);
+  });
+
+  it('registers a personal API connection using only an external secret reference', async () => {
+    const actor = await seedUser('personal.api.actor');
+    await seedMember('org-001', actor.id, 'member');
+    const service = makeService();
+    const summary = await service.registerPersonalConnection({
+      organisationId: 'org-001', actorUserId: actor.id,
+      connectionFamilyId: 'test-personal-api',
+      secretRefId: 'vault:test/personal-api',
+    });
+    expect(summary).toMatchObject({
+      ownership: 'personal', ownerUserId: actor.id,
+      credentialStrategy: 'external_secret_ref', credentialConfigured: true,
+      status: 'configured',
+    });
+    const persisted = await new AIConnectionRepository(pool).getConnection('org-001', summary.id);
+    expect(persisted?.secretRefId).toBe('vault:test/personal-api');
+    expect(JSON.stringify(summary)).not.toContain('vault:test/personal-api');
   });
 
   it('rejects registration by a non-member and by a revoked member', async () => {

@@ -76,6 +76,16 @@ export class ProjectRepository {
     return result.rows.map(mapProject);
   }
 
+  async updateStage(project: Project): Promise<void> {
+    const result = await this.database.query(
+      `UPDATE projects
+       SET stage = $3, updated_at = $4
+       WHERE organisation_id = $1 AND id = $2`,
+      [project.organisationId, project.id, project.stage, project.updatedAt],
+    );
+    if (result.rowCount !== 1) throw new Error('project not found for stage update');
+  }
+
   async updateProductPartner(project: Project): Promise<void> {
     const result = await this.database.query(
       `UPDATE projects

@@ -1,34 +1,45 @@
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+﻿import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import type {
   ConversationRepository,
   DatabaseUnitOfWork,
   KnowledgeCandidateRepository,
   KnowledgeRepository,
   ProjectRepository,
+  StudioInteractionArtifactRepository,
 } from '@engineering-os/database';
 import {
   AI_RUNNER_OWNERSHIPS,
   AI_RUNNER_TRUST_STATES,
   calculateProductCompleteness,
   changeProjectProductPartner,
+  changeProjectStage,
   createAuditEvent,
   createConversation,
   createConversationMessage,
   createKnowledgeRecord,
   createProject,
+  createStudioInteractionArtifact,
   DomainValidationError,
   parseAIConnectionDateTime,
+  validateStudioArtifactDeclaration,
   reviseKnowledgeRecord,
   validateAIRunnerCapabilities,
   requireOrganisationRole,
   requireProjectRole,
+  requireProjectStage,
+  projectStageRequiresRequirementsReadiness,
   type CreateKnowledgeInput,
   type CreateProjectInput,
   type KnowledgeStatus,
   type ProductPartner,
   type ProjectRole,
+  type StudioArtifactKind,
+  type StudioArtifactRetentionPolicy,
+  type StudioArtifactSource,
+  type StudioArtifactVisibility,
 } from '@engineering-os/domain';
 import { NoEligibleRouteError, ProviderExecutionError, type ModelGateway } from '@engineering-os/model-gateway';
+import type { ObjectStorageProvider } from '@engineering-os/object-storage';
 import { AuthService, AuthServiceError } from './auth-service.js';
 import { executeProductPartnerTurn } from './product-partner-turn-service.js';
 import {
@@ -41,6 +52,19 @@ import { AIConnectionService, AIConnectionServiceError } from './ai-connection-s
 import { AIRunnerService } from './ai-runner-service.js';
 import { AIDispatchService, AIDispatchServiceError } from './ai-dispatch-service.js';
 import type { ConnectionFamilyPolicyRegistry } from './ai-connection-policy.js';
+import {
+  CapabilityEstateService,
+  CapabilityEstateServiceError,
+  type CatalogueCapabilityInput,
+  type EligibilityCapabilityInput,
+  type ReleaseCapabilityInput,
+} from './capability-estate-service.js';
+import type { RequirementsAssuranceService } from './requirements-assurance-service.js';
+import {
+  StudioArtifactContextError,
+  materializeStudioArtifactContext,
+  type StudioArtifactSemanticNormalizer,
+} from './studio-artifact-context.js';
 
 export interface AppDependencies {
   projects: ProjectRepository;
@@ -50,6 +74,11 @@ export interface AppDependencies {
   unitOfWork: DatabaseUnitOfWork;
   modelGateway: ModelGateway;
   authService?: AuthService;
+  capabilityEstateService?: CapabilityEstateService;
+  requirementsAssuranceService?: RequirementsAssuranceService;
+  studioInteractionArtifacts?: StudioInteractionArtifactRepository;
+  objectStorage?: ObjectStorageProvider;
+  studioArtifactSemanticNormalizer?: StudioArtifactSemanticNormalizer;
   aiConnectionService?: AIConnectionService;
   aiRunnerService?: AIRunnerService;
   aiDispatchService?: AIDispatchService;
@@ -66,6 +95,30 @@ function bodyObject(body: unknown): JsonObject {
 function stringField(body: JsonObject, field: string): string {
   const value = body[field];
   return typeof value === 'string' ? value : '';
+}
+
+const STUDIO_TURN_MAX_ARTIFACTS = 16;
+const STUDIO_ARTIFACT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function headerString(request: FastifyRequest, name: string): string {
+  const value = request.headers[name];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function artifactIdsField(body: JsonObject): string[] {
+  if (body.artifactIds === undefined) return [];
+  if (!Array.isArray(body.artifactIds) || body.artifactIds.length > STUDIO_TURN_MAX_ARTIFACTS) {
+    throw new DomainValidationError('artifactIds');
+  }
+  const ids = body.artifactIds.map((value) => {
+    if (typeof value !== 'string' || !UUID_PATTERN.test(value)) {
+      throw new DomainValidationError('artifactIds');
+    }
+    return value;
+  });
+  if (new Set(ids).size !== ids.length) throw new DomainValidationError('artifactIds');
+  return ids;
 }
 
 class RequestAuthError extends Error {
@@ -153,6 +206,16 @@ async function resolveIdentity(
   return { organisationId, userId: userId.trim(), authenticated: false };
 }
 
+async function resolveSessionIdentity(
+  request: FastifyRequest,
+  dependencies: AppDependencies,
+) {
+  const token = bearerToken(request);
+  if (!token) throw new RequestAuthError(401, 'Authentication required');
+  const identity = await requireAuthService(dependencies).resolveSession(token);
+  if (!identity) throw new RequestAuthError(401, 'Invalid or expired session');
+  return identity;
+}
 function requireProductContributor(identity: RequestIdentity): void {
   if (!identity.authenticated) return;
   if (identity.projectRole !== 'product_owner' && identity.projectRole !== 'contributor') {
@@ -227,6 +290,22 @@ async function projectOrNull(
   return dependencies.projects.getById(organisationId, projectId);
 }
 
+function requireCapabilityEstateService(dependencies: AppDependencies): CapabilityEstateService {
+  if (!dependencies.capabilityEstateService) {
+    throw new Error('Capability governance is not configured');
+  }
+  return dependencies.capabilityEstateService;
+}
+
+function requireRequirementsAssuranceService(
+  dependencies: AppDependencies,
+): RequirementsAssuranceService {
+  if (!dependencies.requirementsAssuranceService) {
+    throw new CapabilityEstateServiceError('conflict');
+  }
+  return dependencies.requirementsAssuranceService;
+}
+
 function requireAuthService(dependencies: AppDependencies): AuthService {
   if (!dependencies.authService) {
     throw new RequestAuthError(401, 'Authentication is not configured');
@@ -236,6 +315,11 @@ function requireAuthService(dependencies: AppDependencies): AuthService {
 
 export function buildApp(dependencies: AppDependencies): FastifyInstance {
   const app = Fastify({ logger: false });
+  app.addContentTypeParser(
+    'application/octet-stream',
+    { parseAs: 'buffer', bodyLimit: STUDIO_ARTIFACT_MAX_UPLOAD_BYTES },
+    (_request, body, done) => done(null, body),
+  );
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof RequestAuthError) {
@@ -266,6 +350,17 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
         : 400;
       return reply.code(status).send({ error: error.code });
     }
+    if (error instanceof CapabilityEstateServiceError) {
+      const status = error.code === 'forbidden' ? 403
+        : error.code === 'not_found' ? 404 : 409;
+      return reply.code(status).send({ error: error.code });
+    }
+    if (error instanceof StudioArtifactContextError) {
+      const status = error.code === 'normalizer_unavailable' ? 503
+        : error.code === 'normalization_failed' ? 502
+        : 400;
+      return reply.code(status).send({ error: error.code });
+    }
     if (error instanceof DomainValidationError) {
       return reply.code(400).send({ error: error.message, field: error.field });
     }
@@ -282,8 +377,195 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     status: 'ok',
     modelRoutes: dependencies.modelGateway.listRoutes().length,
   }));
-  app.get('/model-routes', async () => dependencies.modelGateway.listRoutes());
+  app.get('/model-routes', async (request, reply) => {
+    const identity = await resolveSessionIdentity(request, dependencies);
+    const routes = await requireCapabilityEstateService(dependencies).listRawModelRoutes({
+      actorUserId: identity.accountId,
+    });
+    return reply.send(routes);
+  });
 
+  app.get('/admin/capability-estate', async (request, reply) => {
+    const identity = await resolveSessionIdentity(request, dependencies);
+    const result = await requireCapabilityEstateService(dependencies).getAdministrationSnapshot({
+      actorUserId: identity.accountId,
+    });
+    return reply.send(result);
+  });
+  app.get('/admin/capabilities', async (request, reply) => {
+    const identity = await resolveSessionIdentity(request, dependencies);
+    const query = request.query as { kind?: unknown };
+    const kind = typeof query.kind === 'string' ? query.kind as CatalogueCapabilityInput['kind'] : undefined;
+    const result = await requireCapabilityEstateService(dependencies).listInventory({
+      actorUserId: identity.accountId,
+      ...(kind === undefined ? {} : { kind }),
+    });
+    return reply.send(result);
+  });
+
+  app.post('/admin/capabilities/refresh/ecc', async (request, reply) => {
+    const identity = await resolveSessionIdentity(request, dependencies);
+    const result = await requireCapabilityEstateService(dependencies).refreshEccInventory({
+      actorUserId: identity.accountId,
+    });
+    return reply.send(result);
+  });
+  app.post('/admin/capabilities', async (request, reply) => {
+    const identity = await resolveSessionIdentity(request, dependencies);
+    const body = bodyObject(request.body);
+    const capability: CatalogueCapabilityInput = {
+      id: stringField(body, 'id'),
+      kind: stringField(body, 'kind') as CatalogueCapabilityInput['kind'],
+      source: stringField(body, 'source'), sourceRef: stringField(body, 'sourceRef'),
+      displayName: stringField(body, 'displayName'),
+      maturity: stringField(body, 'maturity') as CatalogueCapabilityInput['maturity'],
+      governanceState: stringField(body, 'governanceState') as CatalogueCapabilityInput['governanceState'],
+      executionVerification: stringField(body, 'executionVerification') as CatalogueCapabilityInput['executionVerification'],
+    };
+    const created = await requireCapabilityEstateService(dependencies).catalogueCapability({
+      actorUserId: identity.accountId, capability,
+    });
+    return reply.code(201).send(created);
+  });
+  app.post('/admin/capabilities/:capabilityId/eligibility', async (request, reply) => {
+    const identity = await resolveSessionIdentity(request, dependencies);
+    const organisationId = requireOrganisationId(request);
+    const body = bodyObject(request.body);
+    const params = request.params as { capabilityId?: unknown };
+    const capabilityId = typeof params.capabilityId === 'string' ? params.capabilityId : '';
+    const policy = await requireCapabilityEstateService(dependencies).createEligibilityPolicy({
+      organisationId,
+      actorUserId: identity.accountId,
+      capabilityId,
+      scope: stringField(body, 'scope') as EligibilityCapabilityInput['scope'],
+      decision: stringField(body, 'decision') as EligibilityCapabilityInput['decision'],
+      ...(typeof body.projectId === 'string' ? { projectId: body.projectId } : {}),
+      ...(typeof body.projectRole === 'string' ? { projectRole: body.projectRole } : {}),
+      ...(typeof body.teamId === 'string' ? { teamId: body.teamId } : {}),
+      ...(typeof body.cohortId === 'string' ? { cohortId: body.cohortId } : {}),
+      ...(typeof body.userId === 'string' ? { userId: body.userId } : {}),
+    });
+    return reply.code(201).send(policy);
+  });
+
+  app.delete('/admin/capabilities/:capabilityId/eligibility/:policyId', async (request, reply) => {
+    const identity = await resolveSessionIdentity(request, dependencies);
+    const organisationId = requireOrganisationId(request);
+    const params = request.params as { capabilityId?: unknown; policyId?: unknown };
+    await requireCapabilityEstateService(dependencies).revokeEligibilityPolicy({
+      organisationId,
+      actorUserId: identity.accountId,
+      capabilityId: typeof params.capabilityId === 'string' ? params.capabilityId : '',
+      policyId: typeof params.policyId === 'string' ? params.policyId : '',
+    });
+    return reply.code(204).send();
+  });
+  app.patch('/admin/capabilities/:capabilityId', async (request, reply) => {
+    const identity = await resolveSessionIdentity(request, dependencies);
+    const params = request.params as { capabilityId?: unknown };
+    const capabilityId = typeof params.capabilityId === 'string' ? params.capabilityId : '';
+    const governanceState = stringField(bodyObject(request.body), 'governanceState') as CatalogueCapabilityInput['governanceState'];
+    const updated = await requireCapabilityEstateService(dependencies).changeGovernanceState({
+      actorUserId: identity.accountId,
+      capabilityId,
+      governanceState,
+    });
+    return reply.send(updated);
+  });
+  app.post('/admin/capabilities/:capabilityId/releases', async (request, reply) => {
+    const identity = await resolveSessionIdentity(request, dependencies);
+    const body = bodyObject(request.body);
+    const params = request.params as { capabilityId?: unknown };
+    const capabilityId = typeof params.capabilityId === 'string' ? params.capabilityId : '';
+    const scope = stringField(body, 'scope') as ReleaseCapabilityInput['scope'];
+    const rawOrganisationId = request.headers['x-organisation-id'];
+    const organisationId = typeof rawOrganisationId === 'string' && rawOrganisationId.trim()
+      ? rawOrganisationId.trim() : undefined;
+    const released = await requireCapabilityEstateService(dependencies).releaseCapability({
+      actorUserId: identity.accountId, capabilityId, scope,
+      ...(organisationId === undefined ? {} : { organisationId }),
+      ...(typeof body.projectId === 'string' ? { projectId: body.projectId } : {}),
+      ...(typeof body.projectRole === 'string' ? { projectRole: body.projectRole } : {}),
+      ...(typeof body.teamId === 'string' ? { teamId: body.teamId } : {}),
+      ...(typeof body.cohortId === 'string' ? { cohortId: body.cohortId } : {}),
+      ...(typeof body.userId === 'string' ? { userId: body.userId } : {}),
+    });
+    return reply.code(201).send(released);
+  });
+
+  app.delete('/admin/capabilities/:capabilityId/releases/:releaseId', async (request, reply) => {
+    const identity = await resolveSessionIdentity(request, dependencies);
+    const params = request.params as { capabilityId?: unknown; releaseId?: unknown };
+    const rawOrganisationId = request.headers['x-organisation-id'];
+    const organisationId = typeof rawOrganisationId === 'string' && rawOrganisationId.trim()
+      ? rawOrganisationId.trim() : undefined;
+    await requireCapabilityEstateService(dependencies).revokeCapabilityRelease({
+      actorUserId: identity.accountId,
+      ...(organisationId === undefined ? {} : { organisationId }),
+      capabilityId: typeof params.capabilityId === 'string' ? params.capabilityId : '',
+      releaseId: typeof params.releaseId === 'string' ? params.releaseId : '',
+    });
+    return reply.code(204).send();
+  });
+  app.put('/admin/capability-populations/:kind/:populationId/members/:userId', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const params = request.params as { kind?: unknown; populationId?: unknown; userId?: unknown };
+    await requireCapabilityEstateService(dependencies).grantPopulationMembership({
+      organisationId: identity.organisationId,
+      actorUserId: identity.userId,
+      kind: (typeof params.kind === 'string' ? params.kind : '') as 'team' | 'cohort',
+      populationId: typeof params.populationId === 'string' ? params.populationId : '',
+      userId: typeof params.userId === 'string' ? params.userId : '',
+    });
+    return reply.code(204).send();
+  });
+
+  app.delete('/admin/capability-populations/:kind/:populationId/members/:userId', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const params = request.params as { kind?: unknown; populationId?: unknown; userId?: unknown };
+    await requireCapabilityEstateService(dependencies).revokePopulationMembership({
+      organisationId: identity.organisationId,
+      actorUserId: identity.userId,
+      kind: (typeof params.kind === 'string' ? params.kind : '') as 'team' | 'cohort',
+      populationId: typeof params.populationId === 'string' ? params.populationId : '',
+      userId: typeof params.userId === 'string' ? params.userId : '',
+    });
+    return reply.code(204).send();
+  });
+  app.get('/projects/:id/capabilities/auto', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const query = request.query as { kind?: unknown };
+    if (typeof query.kind !== 'string' || query.kind.trim() === '') {
+      throw new DomainValidationError('kind');
+    }
+    const capability = await requireCapabilityEstateService(dependencies).resolveAutoForProject({
+      organisationId: identity.organisationId,
+      projectId: routeId(request),
+      actorUserId: identity.userId,
+      kind: query.kind as CatalogueCapabilityInput['kind'],
+    });
+    return reply.send(capability);
+  });
+  app.get('/projects/:id/capabilities', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const query = request.query as { kind?: unknown };
+    const kind = typeof query.kind === 'string' ? query.kind as CatalogueCapabilityInput['kind'] : undefined;
+    const result = await requireCapabilityEstateService(dependencies).listEligibleForProject({
+      organisationId: identity.organisationId, projectId: routeId(request), actorUserId: identity.userId,
+      ...(kind === undefined ? {} : { kind }),
+    });
+    return reply.send(result);
+  });
+
+  app.get('/projects/:id/model-routes', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const routes = await requireCapabilityEstateService(dependencies).listEligibleModelRoutesForProject({
+      organisationId: identity.organisationId,
+      projectId: routeId(request),
+      actorUserId: identity.userId,
+    });
+    return reply.send(routes);
+  });
   app.post('/auth/login', async (request, reply) => {
     const body = bodyObject(request.body);
     const result = await requireAuthService(dependencies).login({
@@ -512,6 +794,51 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     return reply.send(summaries);
   });
 
+  app.patch('/projects/:id/stage', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    requireProductOwner(identity);
+    const projectId = routeId(request);
+    const current = await projectOrNull(dependencies, identity.organisationId, projectId);
+    if (!current) return reply.code(404).send({ error: 'Project not found' });
+    const stage = requireProjectStage(bodyObject(request.body).stage);
+
+    let readinessStatus: 'ready' | 'not_ready' | 'insufficient_evidence' | undefined;
+    if (projectStageRequiresRequirementsReadiness(stage)) {
+      const assurance = await requireRequirementsAssuranceService(dependencies)
+        .getCurrentProductRequirementsAssurance({
+          organisationId: identity.organisationId,
+          projectId,
+          actorUserId: identity.userId,
+        });
+      readinessStatus = assurance.readiness.status;
+      if (readinessStatus !== 'ready') {
+        throw new CapabilityEstateServiceError(
+          'conflict',
+          `Requirements must be ready before entering ${stage}; current readiness is ${readinessStatus}`,
+        );
+      }
+    }
+
+    const changed = changeProjectStage(current, stage);
+    await dependencies.unitOfWork.run(async ({ projects, audit }) => {
+      await projects.updateStage(changed);
+      await audit.append(createAuditEvent({
+        organisationId: identity.organisationId,
+        projectId,
+        eventType: 'project.stage.changed',
+        actorType: 'user',
+        actorId: identity.userId,
+        subjectType: 'project',
+        subjectId: projectId,
+        metadata: {
+          previousStage: current.stage,
+          stage,
+          ...(readinessStatus === undefined ? {} : { requirementsReadiness: readinessStatus }),
+        },
+      }));
+    });
+    return reply.send(changed);
+  });
   app.get('/projects/:id', async (request, reply) => {
     const identity = await resolveIdentity(request, dependencies);
     const project = await projectOrNull(dependencies, identity.organisationId, routeId(request));
@@ -551,6 +878,121 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
       viewerProjectRole,
       latestFailedExtractionRun,
     });
+  });
+
+  app.post('/projects/:id/requirements-assurance', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    requireProductContributor(identity);
+    const body = bodyObject(request.body);
+    const reviewerRouteId = typeof body.reviewerRouteId === 'string'
+      ? body.reviewerRouteId : undefined;
+    const result = await requireRequirementsAssuranceService(dependencies).runProductRequirementsReview({
+      organisationId: identity.organisationId,
+      projectId: routeId(request),
+      actorUserId: identity.userId,
+      ...(reviewerRouteId === undefined ? {} : { reviewerRouteId }),
+    });
+    return reply.code(201).send(result);
+  });
+
+  app.get('/projects/:id/requirements-assurance', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    const result = await requireRequirementsAssuranceService(dependencies)
+      .getCurrentProductRequirementsAssurance({
+        organisationId: identity.organisationId,
+        projectId: routeId(request),
+        actorUserId: identity.userId,
+      });
+    return reply.send(result);
+  });
+
+  app.post('/projects/:id/requirements-assurance/findings/:findingId/close', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    requireProductOwner(identity);
+    const body = bodyObject(request.body);
+    const status = stringField(body, 'status');
+    if (status !== 'resolved' && status !== 'dismissed') {
+      throw new DomainValidationError('status', 'status must be resolved or dismissed');
+    }
+    const params = request.params as { findingId?: unknown };
+    const findingId = typeof params.findingId === 'string' ? params.findingId : '';
+    const result = await requireRequirementsAssuranceService(dependencies)
+      .closeCurrentProductRequirementsFinding({
+        organisationId: identity.organisationId,
+        projectId: routeId(request),
+        actorUserId: identity.userId,
+        findingId,
+        status,
+        resolutionNote: stringField(body, 'resolutionNote'),
+      });
+    return reply.send(result);
+  });
+
+  app.post('/projects/:id/interaction-artifacts', {
+    bodyLimit: STUDIO_ARTIFACT_MAX_UPLOAD_BYTES,
+  }, async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    requireProductContributor(identity);
+    const projectId = routeId(request);
+    const project = await projectOrNull(dependencies, identity.organisationId, projectId);
+    if (!project) return reply.code(404).send({ error: 'Project not found' });
+    if (!dependencies.objectStorage || !dependencies.studioInteractionArtifacts) {
+      return reply.code(409).send({ error: 'Studio interaction artifact storage is not configured' });
+    }
+    if (!Buffer.isBuffer(request.body)) {
+      return reply.code(415).send({ error: 'Interaction artifact upload must be application/octet-stream' });
+    }
+
+    const declaration = validateStudioArtifactDeclaration({
+      kind: headerString(request, 'x-studio-artifact-kind'),
+      source: headerString(request, 'x-studio-artifact-source'),
+      mediaType: headerString(request, 'x-studio-artifact-media-type'),
+    });
+    const contextText = await materializeStudioArtifactContext({
+      ...declaration,
+      data: request.body,
+      ...(dependencies.studioArtifactSemanticNormalizer === undefined
+        ? {} : { normalizer: dependencies.studioArtifactSemanticNormalizer }),
+    });
+    const stored = await dependencies.objectStorage.put({
+      organisationId: identity.organisationId,
+      projectId,
+      data: request.body,
+    });
+    try {
+      const record = createStudioInteractionArtifact({
+        organisationId: identity.organisationId,
+        projectId,
+        ...declaration,
+        storageReference: stored.reference,
+        digestSha256: stored.digestSha256,
+        byteSize: stored.byteSize,
+        contextText,
+        visibility: 'project',
+        retentionPolicy: 'project_default',
+        createdBy: identity.userId,
+      });
+      const event = createAuditEvent({
+        organisationId: identity.organisationId, projectId,
+        eventType: 'studio.interaction_artifact.created', actorType: 'user', actorId: identity.userId,
+        subjectType: 'studio_interaction_artifact', subjectId: record.id,
+        metadata: { kind: record.kind, source: record.source, mediaType: record.mediaType,
+          byteSize: record.byteSize, digestSha256: record.digestSha256,
+          visibility: record.visibility, retentionPolicy: record.retentionPolicy },
+      });
+      await dependencies.unitOfWork.run(async ({ studioInteractionArtifacts, audit }) => {
+        await studioInteractionArtifacts.create(record);
+        await audit.append(event);
+      });
+      return reply.code(201).send(record);
+    } catch (error) {
+      try {
+        await dependencies.objectStorage.delete(stored.reference);
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'Artifact persistence and storage cleanup failed');
+      }
+      throw error;
+    }
   });
 
   app.patch('/projects/:id/product-partner', async (request, reply) => {
@@ -607,18 +1049,72 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
       conversation.id,
     );
     const records = await dependencies.knowledge.listByProject(identity.organisationId, projectId);
+    const body = bodyObject(request.body);
+    const artifactIds = artifactIdsField(body);
+    if (artifactIds.length > 0 && !dependencies.studioInteractionArtifacts) {
+      return reply.code(409).send({ error: 'Studio interaction artifacts are not configured' });
+    }
+    const interactionArtifacts = artifactIds.length === 0
+      ? []
+      : await dependencies.studioInteractionArtifacts!.listByIds(
+        identity.organisationId, projectId, artifactIds,
+      );
+    if (interactionArtifacts.length !== artifactIds.length) {
+      return reply.code(404).send({ error: 'Interaction artifact not found' });
+    }
+    const selector = (field: 'agentId' | 'harnessId' | 'modelRouteId') =>
+      typeof body[field] === 'string' ? body[field] as string : undefined;
+    const hasExplicitSelection = ['agentId', 'harnessId', 'modelRouteId']
+      .some((field) => typeof body[field] === 'string');
+    if (hasExplicitSelection && !dependencies.capabilityEstateService) {
+      throw new CapabilityEstateServiceError('conflict');
+    }
+    const agentId = selector('agentId');
+    const harnessId = selector('harnessId');
+    const modelRouteId = selector('modelRouteId');
+    const selection = dependencies.capabilityEstateService
+      ? await dependencies.capabilityEstateService.resolveStudioSelectionForProject({
+        organisationId: identity.organisationId,
+        projectId,
+        actorUserId: identity.userId,
+        ...(agentId === undefined ? {} : { agentId }),
+        ...(harnessId === undefined ? {} : { harnessId }),
+        ...(modelRouteId === undefined ? {} : { modelRouteId }),
+      })
+      : undefined;
+
+    const requirementsAssurance = dependencies.requirementsAssuranceService
+      ? await dependencies.requirementsAssuranceService.getCurrentProductRequirementsAssurance({
+        organisationId: identity.organisationId,
+        projectId,
+        actorUserId: identity.userId,
+      })
+      : undefined;
+    const requirementsAssuranceFindings = requirementsAssurance?.run?.status === 'completed'
+      ? requirementsAssurance.findings.filter((finding) =>
+        finding.status === 'open'
+        && (finding.severity === 'critical' || finding.severity === 'important'))
+      : [];
 
     const result = await executeProductPartnerTurn({
       organisationId: identity.organisationId,
       projectId,
       userId: identity.userId,
-      userContent: stringField(bodyObject(request.body), 'content'),
+      userContent: stringField(body, 'content'),
       project,
       conversation,
       history,
       knowledge: records,
       modelGateway: dependencies.modelGateway,
       unitOfWork: dependencies.unitOfWork,
+      ...(selection === undefined ? {} : { selection }),
+      ...(selection === undefined || !dependencies.aiConnectionService ? {} : {
+        dynamicAdapterResolver: (routeId: string) =>
+          dependencies.aiConnectionService!.resolveConnectionModelAdapter(routeId),
+      }),
+      ...(interactionArtifacts.length === 0 ? {} : { interactionArtifacts }),
+      ...(requirementsAssuranceFindings.length === 0
+        ? {} : { requirementsAssuranceFindings }),
     });
 
     return reply.code(201).send(result);
@@ -1197,21 +1693,35 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
   app.post('/ai-connections/personal', async (request, reply) => {
     const identity = await resolveIdentity(request, dependencies);
     const body = bodyObject(request.body);
-    assertAllowedFields(body, ['connectionFamilyId']);
+    assertAllowedFields(body, ['connectionFamilyId', 'secretRefId', 'apiKey']);
     const connectionFamilyId = stringField(body, 'connectionFamilyId');
     if (connectionFamilyId.trim() === '') throw new DomainValidationError('connectionFamilyId');
-    const summary = await requireAIConnectionService().registerPersonalConnection({
+    const input: Parameters<AIConnectionService['registerPersonalConnection']>[0] = {
       organisationId: identity.organisationId,
       actorUserId: identity.userId,
       connectionFamilyId,
-    });
+    };
+    if (typeof body.secretRefId === 'string') input.secretRefId = body.secretRefId;
+    if (typeof body.apiKey === 'string') input.credentialValue = body.apiKey;
+    const summary = await requireAIConnectionService().registerPersonalConnection(input);
     return reply.code(201).send(summary);
+  });
+
+  app.post('/ai-connections/:connectionId/models/discover', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    assertAllowedFields(bodyObject(request.body), []);
+    const result = await requireAIConnectionService().discoverConnectionModels({
+      organisationId: identity.organisationId,
+      actorUserId: identity.userId,
+      connectionId: connectionParam(request),
+    });
+    return reply.send(result);
   });
 
   app.post('/admin/ai-connections', async (request, reply) => {
     const identity = await resolveIdentity(request, dependencies);
     const body = bodyObject(request.body);
-    assertAllowedFields(body, ['connectionFamilyId', 'secretRefId']);
+    assertAllowedFields(body, ['connectionFamilyId', 'secretRefId', 'apiKey']);
     const connectionFamilyId = stringField(body, 'connectionFamilyId');
     if (connectionFamilyId.trim() === '') throw new DomainValidationError('connectionFamilyId');
     const input: Parameters<AIConnectionService['registerOrganisationConnection']>[0] = {
@@ -1220,6 +1730,7 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
       connectionFamilyId,
     };
     if (typeof body.secretRefId === 'string') input.secretRefId = body.secretRefId;
+    if (typeof body.apiKey === 'string') input.credentialValue = body.apiKey;
     const summary = await requireAIConnectionService().registerOrganisationConnection(input);
     return reply.code(201).send(summary);
   });

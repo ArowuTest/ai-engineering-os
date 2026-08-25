@@ -31,10 +31,27 @@ function validateRoute(route: ModelRoute): void {
   if (route.model.trim().length === 0) {
     throw new Error('model must be a non-blank string');
   }
+  if (route.connection !== undefined) {
+    requireStableIdentifier(route.connection.id, 'connection id');
+    if (!['platform', 'organisation', 'team', 'user'].includes(route.connection.ownerType)) {
+      throw new Error('connection ownerType must be platform, organisation, team, or user');
+    }
+    if (route.connection.ownerType === 'platform') {
+      if (route.connection.ownerId !== undefined) {
+        throw new Error('platform connection ownership must not include ownerId');
+      }
+    } else {
+      if (route.connection.ownerId === undefined) {
+        throw new Error('non-platform connection ownership requires ownerId');
+      }
+      requireStableIdentifier(route.connection.ownerId, 'connection owner id');
+    }
+  }
 }
 
 function isEligible(route: ModelRoute, request: ModelRequest): boolean {
   if (!route.available) return false;
+  if (request.routing.preferredRouteId && route.id !== request.routing.preferredRouteId) return false;
   if (!request.routing.allowMeteredApi && route.costType === 'metered_api') return false;
   return request.requiredCapabilities.every((capability) => route.capabilities[capability]);
 }
@@ -56,6 +73,10 @@ function compareRoutes(a: ModelRoute, b: ModelRoute, policy: RoutingPolicy): num
   return a.id.localeCompare(b.id);
 }
 
+export interface ModelGatewayExecutionOptions {
+  dynamicAdapterResolver?: (routeId: string) => Promise<ModelAdapter | null>;
+}
+
 export class ModelGateway {
   private readonly adapters = new Map<string, ModelAdapter>();
 
@@ -73,8 +94,24 @@ export class ModelGateway {
       .filter((route) => provider === undefined || route.provider === provider);
   }
 
-  async execute(request: ModelRequest): Promise<ModelResponse> {
-    const adapter = [...this.adapters.values()]
+  async execute(
+    request: ModelRequest,
+    options: ModelGatewayExecutionOptions = {},
+  ): Promise<ModelResponse> {
+    const candidates = [...this.adapters.values()];
+    const preferredRouteId = request.routing.preferredRouteId;
+    if (
+      preferredRouteId !== undefined
+      && !this.adapters.has(preferredRouteId)
+      && options.dynamicAdapterResolver !== undefined
+    ) {
+      const resolved = await options.dynamicAdapterResolver(preferredRouteId);
+      if (resolved !== null && resolved.route.id === preferredRouteId) {
+        validateRoute(resolved.route);
+        candidates.push(resolved);
+      }
+    }
+    const adapter = candidates
       .filter((candidate) => isEligible(candidate.route, request))
       .sort((left, right) => compareRoutes(left.route, right.route, request.routing))[0];
 
@@ -86,6 +123,9 @@ export class ModelGateway {
       provider: adapter.route.provider,
       routeId: adapter.route.id,
       model: adapter.route.model,
+      ...(adapter.route.connection === undefined
+        ? {}
+        : { connection: { ...adapter.route.connection } }),
       executionMode: adapter.route.executionMode,
       costType: adapter.route.costType,
     };

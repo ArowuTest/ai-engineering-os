@@ -37,6 +37,33 @@ interface AIConnectionRow {
   revoked_at: Date | null;
 }
 
+export interface AIConnectionModelRouteRecord {
+  organisationId: string;
+  connectionId: string;
+  routeId: string;
+  capabilityId: string;
+  providerId: string;
+  providerModelId: string;
+  displayName: string;
+  availability: 'available' | 'unavailable';
+  capabilities: Record<string, boolean>;
+  firstDiscoveredAt: Date;
+  lastSeenAt: Date;
+}
+
+interface AIConnectionModelRouteRow {
+  organisation_id: string;
+  connection_id: string;
+  route_id: string;
+  capability_id: string;
+  provider_id: string;
+  provider_model_id: string;
+  display_name: string;
+  availability: 'available' | 'unavailable';
+  capabilities: Record<string, boolean>;
+  first_discovered_at: Date;
+  last_seen_at: Date;
+}
 interface AIConnectionShareRow {
   id: string;
   organisation_id: string;
@@ -59,6 +86,11 @@ const CONNECTION_COLUMNS = `
 const SHARE_COLUMNS = `
   id, organisation_id, project_id, connection_id, mode,
   available_from, available_until, created_by, created_at, updated_at, revoked_at`;
+
+const MODEL_ROUTE_COLUMNS = `
+  organisation_id, connection_id, route_id, capability_id, provider_id,
+  provider_model_id, display_name, availability, capabilities,
+  first_discovered_at, last_seen_at`;
 
 function mapConnection(row: AIConnectionRow): AIConnectionRecord {
   const record: AIConnectionRecord = {
@@ -96,6 +128,21 @@ function mapShare(row: AIConnectionShareRow): AIConnectionProjectShareRecord {
   return record;
 }
 
+function mapModelRoute(row: AIConnectionModelRouteRow): AIConnectionModelRouteRecord {
+  return {
+    organisationId: row.organisation_id,
+    connectionId: row.connection_id,
+    routeId: row.route_id,
+    capabilityId: row.capability_id,
+    providerId: row.provider_id,
+    providerModelId: row.provider_model_id,
+    displayName: row.display_name,
+    availability: row.availability,
+    capabilities: { ...row.capabilities },
+    firstDiscoveredAt: new Date(row.first_discovered_at),
+    lastSeenAt: new Date(row.last_seen_at),
+  };
+}
 export class AIConnectionRepository {
   constructor(private readonly database: DatabaseQueryable) {}
 
@@ -249,6 +296,83 @@ export class AIConnectionRepository {
     return result.rows.map(mapShare);
   }
 
+  async reconcileModelRoute(input: {
+    organisationId: string;
+    connectionId: string;
+    routeId: string;
+    capabilityId: string;
+    providerId: string;
+    providerModelId: string;
+    displayName: string;
+    availability: 'available' | 'unavailable';
+    capabilities: Record<string, boolean>;
+    seenAt: Date;
+  }): Promise<AIConnectionModelRouteRecord> {
+    const result = await this.database.query<AIConnectionModelRouteRow>(
+      `INSERT INTO ai_connection_model_routes
+       (organisation_id, connection_id, route_id, capability_id, provider_id,
+        provider_model_id, display_name, availability, capabilities,
+        first_discovered_at, last_seen_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$10)
+       ON CONFLICT (route_id) DO UPDATE SET
+         display_name=EXCLUDED.display_name,
+         availability=EXCLUDED.availability,
+         capabilities=EXCLUDED.capabilities,
+         last_seen_at=GREATEST(ai_connection_model_routes.last_seen_at, EXCLUDED.last_seen_at)
+       WHERE ai_connection_model_routes.organisation_id=EXCLUDED.organisation_id
+         AND ai_connection_model_routes.connection_id=EXCLUDED.connection_id
+         AND ai_connection_model_routes.capability_id=EXCLUDED.capability_id
+         AND ai_connection_model_routes.provider_id=EXCLUDED.provider_id
+         AND ai_connection_model_routes.provider_model_id=EXCLUDED.provider_model_id
+       RETURNING ${MODEL_ROUTE_COLUMNS}`,
+      [input.organisationId, input.connectionId, input.routeId, input.capabilityId,
+       input.providerId, input.providerModelId, input.displayName, input.availability,
+       JSON.stringify(input.capabilities), input.seenAt],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error('connection model route identity collision');
+    return mapModelRoute(row);
+  }
+
+  async getModelRoute(routeId: string): Promise<AIConnectionModelRouteRecord | null> {
+    const result = await this.database.query<AIConnectionModelRouteRow>(
+      `SELECT ${MODEL_ROUTE_COLUMNS} FROM ai_connection_model_routes WHERE route_id=$1`,
+      [routeId],
+    );
+    const row = result.rows[0];
+    return row ? mapModelRoute(row) : null;
+  }
+
+  async listModelRoutes(
+    organisationId: string,
+    connectionId: string,
+  ): Promise<AIConnectionModelRouteRecord[]> {
+    const result = await this.database.query<AIConnectionModelRouteRow>(
+      `SELECT ${MODEL_ROUTE_COLUMNS} FROM ai_connection_model_routes
+       WHERE organisation_id=$1 AND connection_id=$2
+       ORDER BY route_id ASC`,
+      [organisationId, connectionId],
+    );
+    return result.rows.map(mapModelRoute);
+  }
+  async markUnseenModelRoutesUnavailable(input: {
+    organisationId: string;
+    connectionId: string;
+    seenRouteIds: readonly string[];
+    seenAt: Date;
+  }): Promise<AIConnectionModelRouteRecord[]> {
+    const result = await this.database.query<AIConnectionModelRouteRow>(
+      `UPDATE ai_connection_model_routes
+       SET availability='unavailable',
+           last_seen_at=GREATEST(last_seen_at, $3)
+       WHERE organisation_id=$1 AND connection_id=$2
+         AND NOT (route_id = ANY($4::text[]))
+         AND availability <> 'unavailable'
+       RETURNING ${MODEL_ROUTE_COLUMNS}`,
+      [input.organisationId, input.connectionId, input.seenAt, [...input.seenRouteIds]],
+    );
+    return result.rows.map(mapModelRoute);
+  }
   async revokeProjectShare(organisationId: string, id: string, when: Date): Promise<void> {
     const result = await this.database.query(
       `UPDATE ai_connection_project_shares

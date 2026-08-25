@@ -1,6 +1,7 @@
 import {
   KNOWLEDGE_CANDIDATE_BASES,
   KNOWLEDGE_CANDIDATE_CATEGORIES,
+  type AssuranceFinding,
   type ConversationMessage,
   type ProductKnowledge,
   type Project,
@@ -17,6 +18,7 @@ export interface BuildProductPartnerRequestInput {
   knowledge: ProductKnowledge[];
   messages: ConversationMessage[];
   newUserContent: string;
+  assuranceFindings?: AssuranceFinding[];
 }
 
 const PRODUCT_PARTNER_RESPONSE_CONTRACT: JsonSchemaResponseContract = {
@@ -64,7 +66,26 @@ function canonicalKnowledge(records: ProductKnowledge[]) {
   }));
 }
 
-function systemInstruction(project: Project, knowledge: ProductKnowledge[]): string {
+function assuranceChallengeData(findings: AssuranceFinding[]) {
+  return findings.map((finding) => ({
+    id: finding.id,
+    severity: finding.severity,
+    kind: finding.kind,
+    category: finding.category,
+    summary: finding.summary,
+    rationale: finding.rationale,
+    proposedQuestion: finding.proposedQuestion ?? null,
+    suggestedDirection: finding.suggestedDirection ?? null,
+    basis: finding.basis,
+    evidenceReferences: finding.evidenceReferences,
+  }));
+}
+
+function systemInstruction(
+  project: Project,
+  knowledge: ProductKnowledge[],
+  assuranceFindings: AssuranceFinding[] = [],
+): string {
   const projectData = {
     id: project.id,
     name: project.name,
@@ -85,6 +106,10 @@ function systemInstruction(project: Project, knowledge: ProductKnowledge[]): str
     'Prefer concrete product language over implementation jargon unless architecture is directly relevant.',
     `Project context (data): ${JSON.stringify(projectData)}`,
     `Canonical Product Knowledge (data): ${JSON.stringify(canonicalKnowledge(knowledge))}`,
+    ...(assuranceFindings.length === 0 ? [] : [
+      'Requirements Assurance review findings are non-canonical challenge evidence. Use them to ask focused questions or offer clearly labelled recommendations; never promote them to approved requirements or candidates unless independently supported by the user/project evidence.',
+      `Requirements Assurance findings (data): ${JSON.stringify(assuranceChallengeData(assuranceFindings))}`,
+    ]),
   ].join('\n\n');
 }
 
@@ -184,7 +209,10 @@ export function buildProductPartnerRequest(input: BuildProductPartnerRequestInpu
     taskId: `product-partner:${input.project.id}:${input.messages.length + 1}`,
     role: 'product_partner',
     messages: [
-      { role: 'system', content: systemInstruction(input.project, input.knowledge) },
+      {
+        role: 'system',
+        content: systemInstruction(input.project, input.knowledge, input.assuranceFindings),
+      },
       ...durableHistory(input.messages),
       { role: 'user', content: input.newUserContent },
     ],

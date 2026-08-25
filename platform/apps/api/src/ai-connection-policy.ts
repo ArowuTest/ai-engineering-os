@@ -6,6 +6,7 @@ import type {
 export interface TrustedConnectionFamilyPolicy {
   id: string;
   providerId: string;
+  providerAdapterId?: string;
   displayName: string;
   executionMode: 'subscription' | 'api' | 'manual';
   harnessId?: string;
@@ -60,9 +61,10 @@ const PRODUCTION_POLICIES: readonly TrustedConnectionFamilyPolicy[] = [
   {
     id: 'openai-api',
     providerId: 'openai',
+    providerAdapterId: 'openai-native',
     displayName: 'OpenAI API',
     executionMode: 'api',
-    allowedOwnership: ['organisation'],
+    allowedOwnership: ['personal', 'organisation'],
     credentialStrategies: ['external_secret_ref'],
     delegatable: false,
     requiresRunner: false,
@@ -71,9 +73,10 @@ const PRODUCTION_POLICIES: readonly TrustedConnectionFamilyPolicy[] = [
   {
     id: 'anthropic-api',
     providerId: 'anthropic',
+    providerAdapterId: 'anthropic-native',
     displayName: 'Anthropic API',
     executionMode: 'api',
-    allowedOwnership: ['organisation'],
+    allowedOwnership: ['personal', 'organisation'],
     credentialStrategies: ['external_secret_ref'],
     delegatable: false,
     requiresRunner: false,
@@ -82,9 +85,22 @@ const PRODUCTION_POLICIES: readonly TrustedConnectionFamilyPolicy[] = [
   {
     id: 'google-api',
     providerId: 'google',
+    providerAdapterId: 'google-native',
     displayName: 'Google Generative AI API',
     executionMode: 'api',
-    allowedOwnership: ['organisation'],
+    allowedOwnership: ['personal', 'organisation'],
+    credentialStrategies: ['external_secret_ref'],
+    delegatable: false,
+    requiresRunner: false,
+    persistentSupported: false,
+  },
+  {
+    id: 'openrouter-api',
+    providerId: 'openrouter',
+    providerAdapterId: 'openrouter-compatible',
+    displayName: 'OpenRouter API',
+    executionMode: 'api',
+    allowedOwnership: ['personal', 'organisation'],
     credentialStrategies: ['external_secret_ref'],
     delegatable: false,
     requiresRunner: false,

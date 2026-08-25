@@ -565,7 +565,7 @@ describe('SessionRepository.hasActiveForUser', () => {
 
 describe('migration ordering', () => {
 
-  it('applies exactly migrations 001..010 in order', async () => {
+  it('applies the complete forward migration chain in order', async () => {
     await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
     const { runMigrations } = await import('../src/index.js');
     const applied = await runMigrations(pool);
@@ -582,6 +582,102 @@ describe('migration ordering', () => {
       '010_review_council.sql',
       '011_task8_review_hardening.sql',
       '012_task8_final_hardening.sql',
+      '013_governed_capability_estate.sql',
+      '014_studio_interaction_artifacts.sql',
+      '015_assurance.sql',
+      '016_ai_connection_model_routes.sql',
+      '017_ai_connection_secrets.sql',
     ]);
+  });
+});
+
+describe('connection-scoped discovered model routes', () => {
+  beforeEach(async () => resetDatabase());
+
+  it('persists tenant/connection-scoped model provenance without credential-shaped columns', async () => {
+    const tables = await pool.query<{ name: string | null }>(
+      `SELECT to_regclass('public.ai_connection_model_routes')::text AS name`,
+    );
+    expect(tables.rows[0]?.name).toBe('ai_connection_model_routes');
+    const columns = await pool.query<{ column_name: string }>(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='ai_connection_model_routes'`,
+    );
+    const names = columns.rows.map((row) => row.column_name);
+    expect(names).toEqual(expect.arrayContaining([
+      'organisation_id', 'connection_id', 'route_id', 'capability_id',
+      'provider_id', 'provider_model_id', 'availability', 'capabilities',
+    ]));
+    expect(names).not.toEqual(expect.arrayContaining([
+      'secret_ref_id', 'api_key', 'token', 'credential', 'password',
+    ]));
+  });
+
+  it('reconciles discovery idempotently and scopes route reads to the owning organisation/connection', async () => {
+    const owner = await seedUser('discovery.owner');
+    await seedOrgMembership('org-001', owner.id);
+    const repo = new AIConnectionRepository(pool);
+    const connectionId = randomUUID();
+    await repo.createConnection({
+      id: connectionId, organisationId: 'org-001', ownership: 'personal', ownerUserId: owner.id,
+      providerId: 'openrouter', connectionFamilyId: 'openrouter-api',
+      credentialStrategy: 'external_secret_ref', secretRefId: 'vault:openrouter/personal',
+      status: 'available', createdBy: owner.id, createdAt: new Date(), updatedAt: new Date(),
+    });
+    await pool.query(`INSERT INTO capability_catalogue
+      (id,kind,source,source_ref,display_name,maturity,governance_state,
+       execution_verification,created_by,created_at,updated_at)
+      VALUES ('model.connection.route1','model_route','ai_connection','route1','DeepSeek V4',
+       'discovered','discovered','unverified','test',now(),now())`);
+    const first = await repo.reconcileModelRoute({
+      organisationId: 'org-001', connectionId, routeId: 'route.connection.001',
+      capabilityId: 'model.connection.route1', providerId: 'openrouter',
+      providerModelId: 'deepseek/deepseek-v4', displayName: 'DeepSeek V4',
+      availability: 'available', capabilities: { chat: true, structuredOutput: true },
+      seenAt: new Date('2026-08-20T18:00:00.000Z'),
+    });
+    const second = await repo.reconcileModelRoute({
+      ...first, displayName: 'DeepSeek V4 updated', availability: 'unavailable',
+      capabilities: { chat: true, structuredOutput: true, tools: true },
+      seenAt: new Date('2026-08-20T18:05:00.000Z'),
+    });
+    expect(second).toMatchObject({
+      organisationId: 'org-001', connectionId, routeId: 'route.connection.001',
+      providerId: 'openrouter', providerModelId: 'deepseek/deepseek-v4',
+      displayName: 'DeepSeek V4 updated', availability: 'unavailable',
+    });
+    expect(await repo.listModelRoutes('org-001', connectionId)).toEqual([second]);
+    expect(await repo.listModelRoutes('org-002', connectionId)).toEqual([]);
+  });
+
+  it('rejects cross-connection capability reuse', async () => {
+    const owner = await seedUser('route.owner');
+    await seedOrgMembership('org-001', owner.id);
+    const repo = new AIConnectionRepository(pool);
+    const firstConnection = randomUUID();
+    const secondConnection = randomUUID();
+    for (const connectionId of [firstConnection, secondConnection]) {
+      await repo.createConnection({
+        id: connectionId, organisationId: 'org-001', ownership: 'personal', ownerUserId: owner.id,
+        providerId: 'openrouter', connectionFamilyId: 'openrouter-api',
+        credentialStrategy: 'external_secret_ref', secretRefId: `vault:${connectionId}`,
+        status: 'available', createdBy: owner.id, createdAt: new Date(), updatedAt: new Date(),
+      });
+    }
+    await pool.query(`INSERT INTO capability_catalogue
+      (id,kind,source,source_ref,display_name,maturity,governance_state,
+       execution_verification,created_by,created_at,updated_at)
+      VALUES ('model.connection.shared','model_route','ai_connection','shared','Shared',
+       'discovered','discovered','unverified','test',now(),now())`);
+    const base = {
+      organisationId: 'org-001', routeId: 'route.connection.shared',
+      capabilityId: 'model.connection.shared', providerId: 'openrouter',
+      providerModelId: 'model/shared', displayName: 'Shared Model', availability: 'available',
+      capabilities: { chat: true }, seenAt: new Date('2026-08-20T18:10:00.000Z'),
+    } as const;
+    await repo.reconcileModelRoute({ ...base, connectionId: firstConnection });
+    await expect(repo.reconcileModelRoute({
+      ...base, connectionId: secondConnection,
+    })).rejects.toThrow();
   });
 });

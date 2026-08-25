@@ -7,8 +7,10 @@ import {
 } from '@engineering-os/database';
 import { ModelGateway } from '@engineering-os/model-gateway';
 import { buildApp } from '../src/app.js';
+import { createRuntimeApp, prepareRuntimeDatabase } from '../src/server.js';
 import {
   closeDatabase,
+  databaseUrl,
   pool,
   resetDatabase,
 } from '../../../packages/database/test/database-test-harness.js';
@@ -129,9 +131,52 @@ describe('platform API', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json().error).toContain('name');
   });
-  it('exposes safe configured model route metadata', async () => {
-    const response = await app.inject({ method: 'GET', url: '/model-routes' });
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual([]);
+  it('does not expose raw configured model route metadata to dev/user identity', async () => {
+    const response = await app.inject({
+      method: 'GET', url: '/model-routes', headers: identityHeaders,
+    });
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('composes Requirements Assurance in the real runtime', async () => {
+    const environment = {
+      DATABASE_URL: databaseUrl,
+      BOOTSTRAP_ORGANISATION_ID: 'org-001',
+      BOOTSTRAP_OWNER_USER_ID: 'runtime.assurance.owner',
+      BOOTSTRAP_OWNER_PASSWORD: 'Runtime-assurance-owner-2026!',
+    };
+    const runtime = createRuntimeApp(environment);
+    try {
+      await prepareRuntimeDatabase(runtime.pool, environment);
+      const login = await runtime.app.inject({
+        method: 'POST', url: '/auth/login',
+        payload: {
+          userId: 'runtime.assurance.owner',
+          password: 'Runtime-assurance-owner-2026!',
+        },
+      });
+      expect(login.statusCode).toBe(200);
+      const token = (login.json() as { token: string }).token;
+      const headers = {
+        authorization: `Bearer ${token}`,
+        'x-organisation-id': 'org-001',
+      };
+      const created = await runtime.app.inject({
+        method: 'POST', url: '/projects', headers,
+        payload: { name: 'Runtime Assurance Project' },
+      });
+      expect(created.statusCode).toBe(201);
+      const project = created.json() as { id: string };
+      const response = await runtime.app.inject({
+        method: 'POST',
+        url: `/projects/${project.id}/requirements-assurance`,
+        headers,
+        payload: {},
+      });
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toEqual({ error: 'not_found' });
+    } finally {
+      await runtime.close();
+    }
   });
 });

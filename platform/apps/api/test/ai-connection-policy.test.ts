@@ -89,12 +89,13 @@ describe('ConnectionFamilyPolicyRegistry (custom fixture)', () => {
 describe('productionConnectionFamilyPolicyRegistry', () => {
   const registry = productionConnectionFamilyPolicyRegistry;
 
-  it('registers known API families as organisation-owned metadata', () => {
-    for (const id of ['openai-api', 'anthropic-api', 'google-api']) {
+  it('registers API families for user-owned and organisation-owned credentials', () => {
+    for (const id of ['openai-api', 'anthropic-api', 'google-api', 'openrouter-api']) {
       const p = registry.get(id);
       expect(p, `expected ${id} to be present`).not.toBeNull();
       expect(p!.executionMode).toBe('api');
-      expect(p!.allowedOwnership).toContain('organisation');
+      expect(p!.allowedOwnership).toEqual(['personal', 'organisation']);
+      expect(p!.credentialStrategies).toEqual(['external_secret_ref']);
       expect(p!.delegatable).toBe(false);
     }
   });
@@ -126,5 +127,22 @@ describe('productionConnectionFamilyPolicyRegistry', () => {
     for (const entry of registry.listSafe()) {
       expect(Object.prototype.hasOwnProperty.call(entry, 'credentialStrategies')).toBe(false);
     }
+  });
+});
+
+describe('provider adapter policy binding', () => {
+  it('binds production API families to provider-neutral adapter identities', () => {
+    const registry = productionConnectionFamilyPolicyRegistry;
+    expect(registry.get('openai-api')?.providerAdapterId).toBe('openai-native');
+    expect(registry.get('anthropic-api')?.providerAdapterId).toBe('anthropic-native');
+    expect(registry.get('google-api')?.providerAdapterId).toBe('google-native');
+    expect(registry.get('openrouter-api')?.providerAdapterId).toBe('openrouter-compatible');
+  });
+
+  it('does not invent provider adapters for subscription harness families', () => {
+    const registry = productionConnectionFamilyPolicyRegistry;
+    expect(registry.get('codex-subscription')?.providerAdapterId).toBeUndefined();
+    expect(registry.get('claude-code-subscription')?.providerAdapterId).toBeUndefined();
+    expect(registry.get('antigravity-subscription')?.providerAdapterId).toBeUndefined();
   });
 });

@@ -19,10 +19,19 @@ export interface ProviderCapabilities {
 
 export type CapabilityName = keyof ProviderCapabilities;
 
+export type ModelRouteConnectionOwnerType = 'platform' | 'organisation' | 'team' | 'user';
+
+export interface ModelRouteConnection {
+  id: string;
+  ownerType: ModelRouteConnectionOwnerType;
+  ownerId?: string;
+}
+
 export interface ModelRoute {
   id: string;
   provider: ModelProvider;
   model: string;
+  connection?: ModelRouteConnection;
   executionMode: ExecutionMode;
   costType: CostType;
   available: boolean;
@@ -32,6 +41,7 @@ export interface ModelRoute {
 
 export type AgentRole =
   | 'product_partner'
+  | 'requirements_reviewer'
   | 'engineer'
   | 'reviewer'
   | 'security_reviewer'
@@ -46,12 +56,21 @@ export interface RoutingPolicy {
   subscriptionFirst: boolean;
   allowMeteredApi: boolean;
   preferredProvider?: ModelProvider;
+  preferredRouteId?: string;
 }
 
 export interface JsonSchemaResponseContract {
   type: 'json_schema';
   name: string;
   schema: Record<string, unknown>;
+}
+
+export interface ModelInputArtifactReference {
+  artifactId: string;
+  kind: 'document' | 'image' | 'audio' | 'video';
+  mediaType: string;
+  digestSha256: string;
+  contextText?: string;
 }
 
 export interface ModelRequest {
@@ -61,6 +80,7 @@ export interface ModelRequest {
   requiredCapabilities: CapabilityName[];
   routing: RoutingPolicy;
   responseContract?: JsonSchemaResponseContract;
+  inputArtifacts?: ModelInputArtifactReference[];
 }
 
 export interface ModelUsage {
@@ -82,6 +102,7 @@ export interface ModelResponse extends AdapterExecutionResult {
   provider: ModelProvider;
   routeId: string;
   model: string;
+  connection?: ModelRouteConnection;
   executionMode: ExecutionMode;
   costType: CostType;
 }

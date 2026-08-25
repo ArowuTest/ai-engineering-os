@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { createConfiguredModelGateway } from '../src/model-runtime.js';
+import {
+  createConfiguredModelGateway,
+  createConfiguredStudioArtifactSemanticNormalizer,
+} from '../src/model-runtime.js';
 
 describe('configured model runtime', () => {
   it('registers no live routes when no provider credentials are present', () => {
@@ -66,5 +69,23 @@ describe('configured OpenRouter runtime', () => {
       OPENROUTER_API_KEY: 'x',
       OPENROUTER_MODELS: 'qwen/qwen3.5, qwen/qwen3.5',
     })).toThrow('Duplicate OpenRouter model slug');
+  });
+});
+
+describe('configured Studio artifact normalization runtime', () => {
+  it('keeps semantic normalization disabled when no OpenAI credential is configured', () => {
+    expect(createConfiguredStudioArtifactSemanticNormalizer({})).toBeUndefined();
+    expect(createConfiguredStudioArtifactSemanticNormalizer({ OPENAI_API_KEY: '   ' })).toBeUndefined();
+  });
+
+  it('creates a semantic normalizer from the existing OpenAI connection configuration', () => {
+    const normalizer = createConfiguredStudioArtifactSemanticNormalizer({
+      OPENAI_API_KEY: 'test-openai-key',
+      OPENAI_MODEL: 'gpt-custom',
+      OPENAI_TRANSCRIPTION_MODEL: 'gpt-4o-transcribe',
+    });
+    expect(normalizer).toBeDefined();
+    expect(normalizer?.normalize).toBeTypeOf('function');
+    expect(JSON.stringify(normalizer)).not.toContain('test-openai-key');
   });
 });

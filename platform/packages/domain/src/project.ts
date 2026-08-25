@@ -22,6 +22,17 @@ export const PROJECT_STAGES = [
 ] as const;
 export type ProjectStage = (typeof PROJECT_STAGES)[number];
 
+export function requireProjectStage(value: unknown): ProjectStage {
+  if (typeof value !== 'string' || !PROJECT_STAGES.includes(value as ProjectStage)) {
+    throw new DomainValidationError('stage', 'stage must be a supported project lifecycle stage');
+  }
+  return value as ProjectStage;
+}
+
+export function projectStageRequiresRequirementsReadiness(stage: ProjectStage): boolean {
+  return PROJECT_STAGES.indexOf(stage) >= PROJECT_STAGES.indexOf('engineering_planning');
+}
+
 export interface Project {
   id: string;
   organisationId: string;
@@ -72,6 +83,18 @@ export function createProject(input: CreateProjectInput): Project {
 
   if (input.description?.trim()) project.description = input.description.trim();
   return project;
+}
+
+export function changeProjectStage(
+  project: Project,
+  stage: ProjectStage,
+  now: Date = new Date(),
+): Project {
+  return {
+    ...project,
+    stage: requireProjectStage(stage),
+    updatedAt: now,
+  };
 }
 
 export function changeProjectProductPartner(

@@ -1,4 +1,4 @@
-import {
+﻿import {
   createAuditEvent,
   createConversationMessage,
   createKnowledgeExtractionRun,
@@ -7,18 +7,23 @@ import {
   fingerprintKnowledgeCandidate,
   parseKnowledgeCandidateProposals,
   parseProductPartnerEnvelope,
+  type AssuranceFinding,
   type ConversationMessage,
   type ProductConversation,
   type ProductKnowledge,
   type Project,
+  type StudioInteractionArtifact,
 } from '@engineering-os/domain';
 import {
   ProviderExecutionError,
+  type ModelAdapter,
   type ModelGateway,
   type ModelResponse,
+  type ModelRouteConnection,
 } from '@engineering-os/model-gateway';
 import type { DatabaseUnitOfWork } from '@engineering-os/database';
 import { buildProductPartnerRequest } from './product-partner-context.js';
+import { buildStudioArtifactModelContext } from './studio-artifact-model-context.js';
 
 const RESPONSE_CONTRACT_VERSION = 'product_partner_knowledge_v1';
 
@@ -26,6 +31,7 @@ export interface TurnExecution {
   provider: string;
   model: string;
   routeId: string;
+  connection?: ModelRouteConnection;
   executionMode: string;
   costType: string;
   inputTokens?: number;
@@ -38,11 +44,18 @@ export interface TurnExtraction {
   candidateCount: number;
 }
 
+export interface TurnSelection {
+  agent: { mode: 'auto' | 'explicit'; capabilityId: string };
+  harness: { mode: 'auto' | 'explicit'; capabilityId: string };
+  modelRoute: { mode: 'auto' | 'explicit'; routeId: string };
+}
+
 export interface TurnResult {
   userMessage: ConversationMessage;
   assistantMessage: ConversationMessage;
   execution: TurnExecution;
   extraction: TurnExtraction;
+  selection?: TurnSelection;
 }
 
 export interface ExecuteTurnInput {
@@ -56,21 +69,51 @@ export interface ExecuteTurnInput {
   knowledge: ProductKnowledge[];
   modelGateway: ModelGateway;
   unitOfWork: DatabaseUnitOfWork;
+  selection?: TurnSelection;
+  interactionArtifacts?: StudioInteractionArtifact[];
+  requirementsAssuranceFindings?: AssuranceFinding[];
+  dynamicAdapterResolver?: (routeId: string) => Promise<ModelAdapter | null>;
 }
 
 export async function executeProductPartnerTurn(input: ExecuteTurnInput): Promise<TurnResult> {
   const {
     organisationId, projectId, userId, userContent,
     project, conversation, history, knowledge,
-    modelGateway, unitOfWork,
+    modelGateway, unitOfWork, selection, interactionArtifacts,
+    requirementsAssuranceFindings, dynamicAdapterResolver,
   } = input;
 
   const structuredRequest = buildProductPartnerRequest({
     project, knowledge, messages: history, newUserContent: userContent,
+    ...(requirementsAssuranceFindings === undefined
+      ? {} : { assuranceFindings: requirementsAssuranceFindings }),
   });
+  if (selection !== undefined) {
+    structuredRequest.routing.preferredRouteId = selection.modelRoute.routeId;
+  }
+  if (interactionArtifacts !== undefined && interactionArtifacts.length > 0) {
+    structuredRequest.inputArtifacts = interactionArtifacts.map((artifact) => ({
+      artifactId: artifact.id,
+      kind: artifact.kind,
+      mediaType: artifact.mediaType,
+      digestSha256: artifact.digestSha256,
+      ...(artifact.contextText === undefined ? {} : { contextText: artifact.contextText }),
+    }));
+    const artifactContextMessages = buildStudioArtifactModelContext(interactionArtifacts);
+    if (artifactContextMessages.length > 0) {
+      structuredRequest.messages = [
+        ...structuredRequest.messages.slice(0, -1),
+        ...artifactContextMessages,
+        ...structuredRequest.messages.slice(-1),
+      ];
+    }
+  }
 
-  // Step 1: structured call — gateway errors (NoEligibleRouteError, ProviderExecutionError) propagate
-  const structuredResponse = await modelGateway.execute(structuredRequest);
+  // Step 1: structured call â€” gateway errors (NoEligibleRouteError, ProviderExecutionError) propagate
+  const structuredResponse = await modelGateway.execute(
+    structuredRequest,
+    dynamicAdapterResolver ? { dynamicAdapterResolver } : {},
+  );
 
   let modelResponse: ModelResponse = structuredResponse;
   let answer: string | null = null;
@@ -84,7 +127,7 @@ export async function executeProductPartnerTurn(input: ExecuteTurnInput): Promis
       answer = envelope.answer;
       candidatesRaw = envelope.candidates;
     } catch {
-      // Envelope parse failed — fall through to recovery
+      // Envelope parse failed â€” fall through to recovery
     }
   }
 
@@ -96,7 +139,9 @@ export async function executeProductPartnerTurn(input: ExecuteTurnInput): Promis
       messages: structuredRequest.messages,
       requiredCapabilities: ['chat'],
       routing: structuredRequest.routing,
-    });
+      ...(structuredRequest.inputArtifacts === undefined
+        ? {} : { inputArtifacts: structuredRequest.inputArtifacts }),
+    }, dynamicAdapterResolver ? { dynamicAdapterResolver } : {});
     const recoveryContent = recoveryResponse.content.trim();
     if (!recoveryContent) {
       throw new ProviderExecutionError(recoveryResponse.provider);
@@ -159,9 +204,13 @@ export async function executeProductPartnerTurn(input: ExecuteTurnInput): Promis
       provider: modelResponse.provider,
       model: modelResponse.model,
       routeId: modelResponse.routeId,
+      ...(modelResponse.connection === undefined ? {} : { connection: modelResponse.connection }),
       executionMode: modelResponse.executionMode,
       costType: modelResponse.costType,
       usage: modelResponse.usage ?? null,
+      ...(selection === undefined ? {} : { selection }),
+      ...(interactionArtifacts === undefined || interactionArtifacts.length === 0
+        ? {} : { interactionArtifactIds: interactionArtifacts.map((artifact) => artifact.id) }),
     },
   });
 
@@ -196,6 +245,7 @@ export async function executeProductPartnerTurn(input: ExecuteTurnInput): Promis
     provider: modelResponse.provider,
     model: modelResponse.model,
     routeId: modelResponse.routeId,
+    ...(modelResponse.connection === undefined ? {} : { connection: modelResponse.connection }),
     executionMode: modelResponse.executionMode,
     costType: modelResponse.costType,
   };
@@ -205,13 +255,15 @@ export async function executeProductPartnerTurn(input: ExecuteTurnInput): Promis
   if (modelResponse.usage?.outputTokens !== undefined) {
     execution.outputTokens = modelResponse.usage.outputTokens;
   }
+  const selectionResult: Pick<TurnResult, 'selection'> = selection === undefined ? {} : { selection };
 
-  // Recovery path: no structured output available — mark run failed
+  // Recovery path: no structured output available â€” mark run failed
   if (usedRecovery) {
     await markRunFailedSafely(unitOfWork, organisationId, projectId, extractionRun.id, 'structured_output_unavailable');
     return {
       userMessage, assistantMessage, execution,
       extraction: { runId: extractionRun.id, status: 'failed', candidateCount: 0 },
+      ...selectionResult,
     };
   }
 
@@ -224,6 +276,7 @@ export async function executeProductPartnerTurn(input: ExecuteTurnInput): Promis
     return {
       userMessage, assistantMessage, execution,
       extraction: { runId: extractionRun.id, status: 'failed', candidateCount: 0 },
+      ...selectionResult,
     };
   }
 
@@ -283,12 +336,14 @@ export async function executeProductPartnerTurn(input: ExecuteTurnInput): Promis
     return {
       userMessage, assistantMessage, execution,
       extraction: { runId: extractionRun.id, status: 'failed', candidateCount: 0 },
+      ...selectionResult,
     };
   }
 
   return {
     userMessage, assistantMessage, execution,
     extraction: { runId: extractionRun.id, status: 'succeeded', candidateCount: candidates.length },
+    ...selectionResult,
   };
 }
 

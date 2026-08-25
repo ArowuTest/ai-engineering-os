@@ -268,6 +268,63 @@ describe('ModelGateway', () => {
     ).rejects.toBeInstanceOf(NoEligibleRouteError);
   });
 
+  it('honours an explicit eligible route instead of silently re-ranking to another model', async () => {
+    const gateway = new ModelGateway();
+    gateway.register(adapter(route({ id: 'subscription-priority', priority: 1 }), 'priority'));
+    gateway.register(adapter(route({ id: 'subscription-explicit', priority: 50 }), 'explicit'));
+
+    const response = await gateway.execute(request({
+      routing: {
+        subscriptionFirst: true,
+        allowMeteredApi: true,
+        preferredRouteId: 'subscription-explicit',
+      },
+    }));
+    expect(response.routeId).toBe('subscription-explicit');
+    expect(response.content).toBe('explicit');
+  });
+
+  it('fails closed when an explicit route is unavailable instead of falling back', async () => {
+    const gateway = new ModelGateway();
+    gateway.register(adapter(route({ id: 'subscription-fallback', priority: 1 }), 'fallback'));
+    gateway.register(adapter(route({ id: 'subscription-explicit', available: false }), 'unavailable'));
+
+    await expect(gateway.execute(request({
+      routing: {
+        subscriptionFirst: true,
+        allowMeteredApi: true,
+        preferredRouteId: 'subscription-explicit',
+      },
+    }))).rejects.toBeInstanceOf(NoEligibleRouteError);
+  });
+  it('preserves connection provenance when the same model is available through distinct routes', async () => {
+    const gateway = new ModelGateway();
+    gateway.register(adapter(route({
+      id: 'openrouter-deepseek', provider: 'openrouter', model: 'deepseek-v4',
+      connection: { id: 'connection-openrouter', ownerType: 'user', ownerId: 'user-001' },
+    }), 'openrouter'));
+    gateway.register(adapter(route({
+      id: 'together-deepseek', provider: 'together', model: 'deepseek-v4',
+      connection: { id: 'connection-together', ownerType: 'organisation', ownerId: 'org-001' },
+    }), 'together'));
+
+    const response = await gateway.execute(request({ routing: {
+      subscriptionFirst: false, allowMeteredApi: true, preferredRouteId: 'together-deepseek',
+    } }));
+    expect(response.routeId).toBe('together-deepseek');
+    expect(response.connection).toEqual({
+      id: 'connection-together', ownerType: 'organisation', ownerId: 'org-001',
+    });
+  });
+
+  it('rejects malformed connection provenance on route registration', () => {
+    const gateway = new ModelGateway();
+    expect(() => gateway.register(adapter(route({
+      id: 'bad-connection-route',
+      connection: { id: 'Bad Connection', ownerType: 'user', ownerId: 'user-001' },
+    })))).toThrow(/connection id/i);
+  });
+
   it('uses priority to choose between equally eligible routes', async () => {
     const gateway = new ModelGateway();
     gateway.register(adapter(route({ id: 'subscription-slow', priority: 20 }), 'slow'));
@@ -276,5 +333,46 @@ describe('ModelGateway', () => {
     const response = await gateway.execute(request());
     expect(response.routeId).toBe('subscription-preferred');
     expect(response.usage).toEqual({ inputTokens: 12, outputTokens: 7 });
+  });
+});
+
+describe('ModelGateway dynamic exact-route resolution', () => {
+  it('resolves an unregistered preferred route only through the execution-scoped resolver', async () => {
+    const gateway = new ModelGateway();
+    const calls: string[] = [];
+    const resolver = async (routeId: string) => {
+      calls.push(routeId);
+      return routeId === 'connection-route.dynamic'
+        ? adapter(route({ id: routeId, provider: 'future-provider', model: 'future/model' }), 'dynamic')
+        : null;
+    };
+    const response = await gateway.execute(request({ routing: {
+      subscriptionFirst: false, allowMeteredApi: true, preferredRouteId: 'connection-route.dynamic',
+    } }), { dynamicAdapterResolver: resolver });
+    expect(calls).toEqual(['connection-route.dynamic']);
+    expect(response.routeId).toBe('connection-route.dynamic');
+    await expect(gateway.execute(request({ routing: {
+      subscriptionFirst: false, allowMeteredApi: true, preferredRouteId: 'connection-route.dynamic',
+    } }))).rejects.toBeInstanceOf(NoEligibleRouteError);
+  });
+
+  it('does not let an execution-scoped resolver substitute a different route identity', async () => {
+    const gateway = new ModelGateway();
+    await expect(gateway.execute(request({ routing: {
+      subscriptionFirst: false, allowMeteredApi: true, preferredRouteId: 'connection-route.requested',
+    } }), { dynamicAdapterResolver: async () =>
+      adapter(route({ id: 'connection-route.other', provider: 'future-provider' }), 'wrong')
+    })).rejects.toBeInstanceOf(NoEligibleRouteError);
+  });
+
+  it('does not consult dynamic routes for an unpinned Auto request', async () => {
+    const gateway = new ModelGateway();
+    let calls = 0;
+    gateway.register(adapter(route({ id: 'static-route' }), 'static'));
+    const response = await gateway.execute(request(), {
+      dynamicAdapterResolver: async () => { calls += 1; return null; },
+    });
+    expect(response.routeId).toBe('static-route');
+    expect(calls).toBe(0);
   });
 });

@@ -26,3 +26,12 @@ export function requireStableIdentifier(value: unknown, field: string): string {
   }
   return value;
 }
+
+export function assertSensitiveTextSafe(value: string, field: string): void {
+  const privateKey = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/i;
+  const bearer = /\b(?:authorization\s*:\s*)?bearer\s+\S{16,}/i;
+  const assignedSecret = /\b(api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|private[_-]?key)\s*[:=]\s*\S{8,}/i;
+  if (privateKey.test(value) || bearer.test(value) || assignedSecret.test(value)) {
+    throw new DomainValidationError(field, `${field} contains secret or credential-like content`);
+  }
+}
