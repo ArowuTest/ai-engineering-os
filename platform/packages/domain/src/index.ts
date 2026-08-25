@@ -13,3 +13,4 @@ export * from './validation.js';
 export * from './capability-estate.js';
 export * from './studio-interaction-artifact.js';
 export * from './assurance.js';
+export * from './domain-pack.js';
