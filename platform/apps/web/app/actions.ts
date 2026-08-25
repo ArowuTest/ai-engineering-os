@@ -8,10 +8,19 @@ import {
   addKnowledge,
   appendMessage,
   cancelInvitation,
+  changeCapabilityGovernanceState,
   changeProductPartner,
+  closeRequirementsAssuranceFinding,
+  createCapabilityEligibility,
+  createCapabilityRelease,
   createInvitation,
   createProject,
   getCurrentIdentityWithToken,
+  grantCapabilityPopulationMembership,
+  refreshCapabilityEstateFromEcc,
+  revokeCapabilityEligibility,
+  revokeCapabilityPopulationMembership,
+  revokeCapabilityRelease,
   INVITATION_FLASH_COOKIE,
   grantProjectAccess,
   loginUser,
@@ -23,6 +32,7 @@ import {
   rejectKnowledgeCandidate,
   retryKnowledgeExtraction,
   reviseKnowledge,
+  runRequirementsAssurance,
   revokeAIConnection,
   revokeAIConnectionProjectShare,
   revokeOrganisationAccess,
@@ -34,6 +44,7 @@ import {
   setUserStatus,
   shareAIConnectionWithProject,
   updateAIConnectionShareWindow,
+  uploadStudioInteractionArtifact,
   type AIConnectionShareMode,
   type KnowledgeStatus,
   type OrganisationRole,
@@ -41,6 +52,13 @@ import {
   type ProjectRole,
 } from '../lib/api';
 import { parseAIConnectionDateTime } from '../lib/ai-connection-datetime';
+import {
+  assertStudioArtifactBytes,
+  assertStudioArtifactCount,
+  assertStudioArtifactSourceKind,
+  normalizeStudioSelectionValue,
+  studioArtifactKindForMediaType,
+} from '../lib/studio-composer';
 
 
 function required(formData: FormData, key: string): string {
@@ -51,17 +69,19 @@ function required(formData: FormData, key: string): string {
   return value.trim();
 }
 
+function studioFiles(formData: FormData, key: string): File[] {
+  return formData.getAll(key).filter(
+    (value): value is File => value instanceof File && value.size > 0 && value.name.trim() !== '',
+  );
+}
+
 function requiredNumber(formData: FormData, key: string): number {
   const value = Number(required(formData, key));
   if (!Number.isInteger(value) || value <= 0) throw new Error(`${key} must be a positive integer`);
   return value;
 }
 
-async function setAuthenticatedSession(
-  token: string,
-  expiresAt: string,
-  organisationId: string,
-): Promise<void> {
+async function setPlatformSession(token: string, expiresAt: string): Promise<void> {
   const cookieStore = await cookies();
   const secure = process.env.NODE_ENV === 'production';
   cookieStore.set(SESSION_COOKIE, token, {
@@ -71,10 +91,19 @@ async function setAuthenticatedSession(
     path: '/',
     expires: new Date(expiresAt),
   });
+}
+
+async function setAuthenticatedSession(
+  token: string,
+  expiresAt: string,
+  organisationId: string,
+): Promise<void> {
+  await setPlatformSession(token, expiresAt);
+  const cookieStore = await cookies();
   cookieStore.set(ORGANISATION_COOKIE, organisationId, {
     httpOnly: true,
     sameSite: 'lax',
-    secure,
+    secure: process.env.NODE_ENV === 'production',
     path: '/',
     expires: new Date(expiresAt),
   });
@@ -86,6 +115,10 @@ export async function loginAction(formData: FormData) {
   const login = await loginUser(userId, password);
   const identity = await getCurrentIdentityWithToken(login.token);
   const organisation = identity.organisations[0];
+  if (!organisation && identity.platformRole === 'admin') {
+    await setPlatformSession(login.token, login.expiresAt);
+    redirect('/admin/capabilities');
+  }
   if (!organisation) throw new Error('This account has no active organisation access');
   await setAuthenticatedSession(login.token, login.expiresAt, organisation.organisationId);
   redirect('/');
@@ -124,11 +157,73 @@ export async function createProductAction(formData: FormData) {
 
 export async function sendProductPartnerTurnAction(formData: FormData) {
   const projectId = required(formData, 'projectId');
-  await sendProductPartnerTurn(projectId, required(formData, 'content'));
+  const uploadedFiles = studioFiles(formData, 'artifacts');
+  const screenshotFiles = studioFiles(formData, 'screenshots');
+  const voiceValue = formData.get('voice');
+  const voiceFile = voiceValue instanceof File && voiceValue.size > 0 && voiceValue.name.trim() !== ''
+    ? voiceValue : null;
+  const prepared = [
+    ...uploadedFiles.map((file) => ({
+      file, kind: studioArtifactKindForMediaType(file.type), source: 'upload' as const,
+    })),
+    ...screenshotFiles.map((file) => ({
+      file, kind: studioArtifactKindForMediaType(file.type), source: 'screenshot' as const,
+    })),
+    ...(voiceFile === null ? [] : [{
+      file: voiceFile,
+      kind: studioArtifactKindForMediaType(voiceFile.type),
+      source: 'microphone' as const,
+    }]),
+  ];
+  assertStudioArtifactCount(prepared.length);
+  assertStudioArtifactBytes(prepared.reduce((total, item) => total + item.file.size, 0));
+  for (const item of prepared) assertStudioArtifactSourceKind(item.source, item.kind);
+
+  const artifactIds: string[] = [];
+  for (const item of prepared) {
+    const artifact = await uploadStudioInteractionArtifact(projectId, {
+      data: await item.file.arrayBuffer(),
+      kind: item.kind,
+      source: item.source,
+      mediaType: item.file.type.toLowerCase(),
+    });
+    artifactIds.push(artifact.id);
+  }
+
+  const agentId = normalizeStudioSelectionValue(formData.get('agentId'));
+  const harnessId = normalizeStudioSelectionValue(formData.get('harnessId'));
+  const modelRouteId = normalizeStudioSelectionValue(formData.get('modelRouteId'));
+  await sendProductPartnerTurn(projectId, required(formData, 'content'), {
+    ...(agentId === undefined ? {} : { agentId }),
+    ...(harnessId === undefined ? {} : { harnessId }),
+    ...(modelRouteId === undefined ? {} : { modelRouteId }),
+    ...(artifactIds.length === 0 ? {} : { artifactIds }),
+  });
   revalidatePath('/');
   revalidatePath(`/projects/${projectId}`);
   // Failed extraction state is reconstructible from durable studio.latestFailedExtractionRun
   // on the next render — no redirect-only query params.
+}
+
+export async function runRequirementsAssuranceAction(formData: FormData) {
+  const projectId = required(formData, 'projectId');
+  const reviewerRouteId = normalizeStudioSelectionValue(formData.get('reviewerRouteId'));
+  await runRequirementsAssurance(projectId, reviewerRouteId);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function closeRequirementsAssuranceFindingAction(formData: FormData) {
+  const projectId = required(formData, 'projectId');
+  const findingId = required(formData, 'findingId');
+  const status = required(formData, 'status');
+  if (status !== 'resolved' && status !== 'dismissed') {
+    throw new Error('status must be resolved or dismissed');
+  }
+  await closeRequirementsAssuranceFinding(projectId, findingId, {
+    status,
+    resolutionNote: required(formData, 'resolutionNote'),
+  });
+  revalidatePath(`/projects/${projectId}`);
 }
 
 export async function acceptKnowledgeCandidateAction(formData: FormData) {
@@ -361,4 +456,83 @@ export async function revokeAIConnectionShareAction(formData: FormData) {
   await revokeAIConnectionProjectShare({ projectId, connectionId });
   revalidatePath('/ai-connections');
   revalidatePath(`/projects/${projectId}`);
+}
+
+export async function refreshCapabilityEstateAction() {
+  await refreshCapabilityEstateFromEcc();
+  revalidatePath('/admin/capabilities');
+}
+
+export async function changeCapabilityGovernanceStateAction(formData: FormData) {
+  await changeCapabilityGovernanceState(
+    required(formData, 'capabilityId'),
+    required(formData, 'governanceState'),
+  );
+  revalidatePath('/admin/capabilities');
+}
+export async function createCapabilityReleaseAction(formData: FormData) {
+  const capabilityId = required(formData, 'capabilityId');
+  const input: Record<string, string> = { scope: required(formData, 'scope') };
+  const organisationId = String(formData.get('organisationId') ?? '').trim();
+  if (organisationId) input.organisationId = organisationId;
+  for (const key of ['projectId', 'projectRole', 'teamId', 'cohortId', 'userId']) {
+    const value = String(formData.get(key) ?? '').trim();
+    if (value) input[key] = value;
+  }
+  await createCapabilityRelease(capabilityId, input);
+  revalidatePath('/admin/capabilities');
+}
+
+export async function revokeCapabilityReleaseAction(formData: FormData) {
+  const organisationId = String(formData.get('organisationId') ?? '').trim();
+  await revokeCapabilityRelease(
+    required(formData, 'capabilityId'),
+    required(formData, 'releaseId'),
+    required(formData, 'platformScoped') === 'true',
+    organisationId || undefined,
+  );
+  revalidatePath('/admin/capabilities');
+}
+export async function createCapabilityEligibilityAction(formData: FormData) {
+  const capabilityId = required(formData, 'capabilityId');
+  const input: Record<string, string> = {
+    organisationId: required(formData, 'organisationId'),
+    scope: required(formData, 'scope'),
+    decision: required(formData, 'decision'),
+  };
+  for (const key of ['projectId', 'projectRole', 'teamId', 'cohortId', 'userId']) {
+    const value = String(formData.get(key) ?? '').trim();
+    if (value) input[key] = value;
+  }
+  await createCapabilityEligibility(capabilityId, input);
+  revalidatePath('/admin/capabilities');
+}
+
+export async function revokeCapabilityEligibilityAction(formData: FormData) {
+  await revokeCapabilityEligibility(
+    required(formData, 'capabilityId'),
+    required(formData, 'policyId'),
+    required(formData, 'organisationId'),
+  );
+  revalidatePath('/admin/capabilities');
+}
+
+export async function grantCapabilityPopulationMembershipAction(formData: FormData) {
+  await grantCapabilityPopulationMembership({
+    organisationId: required(formData, 'organisationId'),
+    kind: required(formData, 'kind') as 'team' | 'cohort',
+    populationId: required(formData, 'populationId'),
+    userId: required(formData, 'userId'),
+  });
+  revalidatePath('/admin/capabilities');
+}
+
+export async function revokeCapabilityPopulationMembershipAction(formData: FormData) {
+  await revokeCapabilityPopulationMembership({
+    organisationId: required(formData, 'organisationId'),
+    kind: required(formData, 'kind') as 'team' | 'cohort',
+    populationId: required(formData, 'populationId'),
+    userId: required(formData, 'userId'),
+  });
+  revalidatePath('/admin/capabilities');
 }

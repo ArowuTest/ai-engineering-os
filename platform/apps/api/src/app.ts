@@ -1,4 +1,4 @@
-﻿import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import type {
   ConversationRepository,
   DatabaseUnitOfWork,
@@ -508,11 +508,12 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     return reply.code(204).send();
   });
   app.put('/admin/capability-populations/:kind/:populationId/members/:userId', async (request, reply) => {
-    const identity = await resolveIdentity(request, dependencies);
+    const identity = await resolveSessionIdentity(request, dependencies);
+    const organisationId = requireOrganisationId(request);
     const params = request.params as { kind?: unknown; populationId?: unknown; userId?: unknown };
     await requireCapabilityEstateService(dependencies).grantPopulationMembership({
-      organisationId: identity.organisationId,
-      actorUserId: identity.userId,
+      organisationId,
+      actorUserId: identity.accountId,
       kind: (typeof params.kind === 'string' ? params.kind : '') as 'team' | 'cohort',
       populationId: typeof params.populationId === 'string' ? params.populationId : '',
       userId: typeof params.userId === 'string' ? params.userId : '',
@@ -521,11 +522,12 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
   });
 
   app.delete('/admin/capability-populations/:kind/:populationId/members/:userId', async (request, reply) => {
-    const identity = await resolveIdentity(request, dependencies);
+    const identity = await resolveSessionIdentity(request, dependencies);
+    const organisationId = requireOrganisationId(request);
     const params = request.params as { kind?: unknown; populationId?: unknown; userId?: unknown };
     await requireCapabilityEstateService(dependencies).revokePopulationMembership({
-      organisationId: identity.organisationId,
-      actorUserId: identity.userId,
+      organisationId,
+      actorUserId: identity.accountId,
       kind: (typeof params.kind === 'string' ? params.kind : '') as 'team' | 'cohort',
       populationId: typeof params.populationId === 'string' ? params.populationId : '',
       userId: typeof params.userId === 'string' ? params.userId : '',

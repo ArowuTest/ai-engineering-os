@@ -111,4 +111,47 @@ describe('Platform Admin tenant-scoped capability policy authority', () => {
 
     await instance.close();
   }, 90_000);
+
+  it('allows a platform-only admin to manage tenant capability populations while denying an ordinary member', async () => {
+    const platformAdminId = await createUser('platform.population.admin', 'Platform-population-2026!');
+    const memberId = await createUser('tenant.population.member', 'Tenant-population-2026!');
+    const targetUserId = await createUser('tenant.population.target', 'Tenant-population-target-2026!');
+    const now = new Date();
+    await new PlatformMembershipRepository(pool).grantAdmin({
+      userId: platformAdminId,
+      createdBy: 'bootstrap',
+      now,
+    });
+    for (const userId of [memberId, targetUserId]) {
+      await new MembershipRepository(pool).grantOrganisation({
+        organisationId: 'org-001', userId, role: 'member', createdBy: 'test', now,
+      });
+    }
+
+    const instance = runtime();
+    const platformToken = await login(instance.app, 'platform.population.admin', 'Platform-population-2026!');
+    const memberToken = await login(instance.app, 'tenant.population.member', 'Tenant-population-2026!');
+    const platformHeaders = { authorization: `Bearer ${platformToken}`, 'x-organisation-id': 'org-001' };
+    const memberHeaders = { authorization: `Bearer ${memberToken}`, 'x-organisation-id': 'org-001' };
+    const url = `/admin/capability-populations/team/team-alpha/members/${targetUserId}`;
+
+    expect((await instance.app.inject({ method: 'PUT', url, headers: memberHeaders })).statusCode).toBe(403);
+    expect((await instance.app.inject({ method: 'PUT', url, headers: platformHeaders })).statusCode).toBe(204);
+
+    const active = await pool.query<{ population_id: string; status: string }>(
+      `SELECT population_id, status FROM capability_population_memberships
+       WHERE organisation_id=$1 AND user_id=$2`,
+      ['org-001', targetUserId],
+    );
+    expect(active.rows).toEqual([{ population_id: 'team-alpha', status: 'active' }]);
+
+    expect((await instance.app.inject({ method: 'DELETE', url, headers: platformHeaders })).statusCode).toBe(204);
+    const revoked = await pool.query<{ status: string }>(
+      `SELECT status FROM capability_population_memberships
+       WHERE organisation_id=$1 AND user_id=$2 AND population_id=$3`,
+      ['org-001', targetUserId, 'team-alpha'],
+    );
+    expect(revoked.rows).toEqual([{ status: 'revoked' }]);
+    await instance.close();
+  }, 90_000);
 });

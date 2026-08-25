@@ -391,8 +391,11 @@ export class CapabilityEstateService {
     const populationId = requireStableIdentifier(input.populationId, 'populationId');
     const userId = requireStableIdentifier(input.userId, 'userId');
     const now = input.now ?? new Date();
-    await this.dependencies.unitOfWork.run(async ({ memberships, capabilityEstate, audit }) => {
-      await requireAdministrator(memberships, input.organisationId, input.actorUserId);
+    await this.dependencies.unitOfWork.run(async ({ memberships, platformMemberships, capabilityEstate, audit }) => {
+      await requirePolicyAdministrator({
+        memberships, platformMemberships, organisationId: input.organisationId,
+        actorUserId: input.actorUserId, scope: input.kind,
+      });
       const target = await memberships.getOrganisation(input.organisationId, userId);
       if (!target || target.status !== 'active') throw new CapabilityEstateServiceError('not_found');
       await capabilityEstate.grantPopulationMembership({
@@ -417,8 +420,11 @@ export class CapabilityEstateService {
     const populationId = requireStableIdentifier(input.populationId, 'populationId');
     const userId = requireStableIdentifier(input.userId, 'userId');
     const now = input.now ?? new Date();
-    await this.dependencies.unitOfWork.run(async ({ memberships, capabilityEstate, audit }) => {
-      await requireAdministrator(memberships, input.organisationId, input.actorUserId);
+    await this.dependencies.unitOfWork.run(async ({ memberships, platformMemberships, capabilityEstate, audit }) => {
+      await requirePolicyAdministrator({
+        memberships, platformMemberships, organisationId: input.organisationId,
+        actorUserId: input.actorUserId, scope: input.kind,
+      });
       const active = await capabilityEstate.listActivePopulationIds(input.organisationId, userId);
       const ids = input.kind === 'team' ? active.teamIds : active.cohortIds;
       if (!ids.includes(populationId)) return;

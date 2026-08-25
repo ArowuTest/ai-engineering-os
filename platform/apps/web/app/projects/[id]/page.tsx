@@ -4,19 +4,24 @@ import {
   addKnowledgeAction,
   appendMessageAction,
   changePartnerAction,
+  closeRequirementsAssuranceFindingAction,
   rejectKnowledgeCandidateAction,
   retryKnowledgeExtractionAction,
   reviseKnowledgeStatusAction,
+  runRequirementsAssuranceAction,
   sendProductPartnerTurnAction,
 } from '../../actions';
 import {
+  getRequirementsAssurance,
   getStudio,
   listKnowledgeCandidates,
   listModelRoutes,
+  listProjectCapabilities,
   type KnowledgeCandidateSummary,
   type KnowledgeStatus,
   type ProductPartner,
 } from '../../../lib/api';
+import { groupStudioModelRoutes } from '../../../lib/studio-composer';
 
 export const dynamic = 'force-dynamic';
 
@@ -69,9 +74,12 @@ export default async function ProductStudioPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [studio, modelRoutes, candidates] = await Promise.all([
+  const [studio, requirementsAssurance, modelRoutes, agents, harnesses, candidates] = await Promise.all([
     getStudio(id),
-    listModelRoutes(),
+    getRequirementsAssurance(id),
+    listModelRoutes(id),
+    listProjectCapabilities(id, 'agent'),
+    listProjectCapabilities(id, 'harness'),
     listKnowledgeCandidates(id).catch(() => [] as KnowledgeCandidateSummary[]),
   ]);
   // Effective role is the exact viewerProjectRole resolved server-side by resolveIdentity;
@@ -85,11 +93,23 @@ export default async function ProductStudioPage({
   const liveCapableRoutes = availableRoutes.filter(
     (route) => route.capabilities.chat && route.capabilities.structuredOutput,
   );
+  const modelRouteGroups = groupStudioModelRoutes(liveCapableRoutes);
   const selectedPartner = studio.project.preferredProductPartner;
-  const liveAvailable = selectedPartner === 'auto'
-    ? liveCapableRoutes.length > 0
-    : liveCapableRoutes.some((route) => route.provider === selectedPartner);
+  const liveAvailable = liveCapableRoutes.length > 0 && agents.length > 0 && harnesses.length > 0;
   const selectedPartnerLabel = formatProviderLabel(selectedPartner);
+  const materialAssuranceFindings = requirementsAssurance.findings.filter((finding) =>
+    finding.status === 'open'
+    && (finding.severity === 'critical' || finding.severity === 'important'));
+  const requirementsReviewerAvailable = agents.some(
+    (agent) => agent.id === 'agent.requirements_reviewer',
+  ) && liveCapableRoutes.length > 0;
+  const canRunRequirementsReview = requirementsReviewerAvailable
+    && (viewerProjectRole === 'product_owner' || viewerProjectRole === 'contributor');
+  const readinessLabel = requirementsAssurance.readiness.status === 'ready'
+    ? 'Ready for engineering planning'
+    : requirementsAssurance.readiness.status === 'not_ready'
+      ? 'Material questions remain'
+      : 'Independent review required';
 
   return (
     <main className="studio-shell">
@@ -171,6 +191,57 @@ export default async function ProductStudioPage({
 
         <form action={sendProductPartnerTurnAction} className="composer">
           <input name="projectId" type="hidden" value={id} />
+          <details className="composer-advanced">
+            <summary>Advanced controls</summary>
+            <div className="composer-governance" aria-label="Governed execution selection">
+              <label>Agent
+                <select className="select" name="agentId" defaultValue="auto">
+                  <option value="auto">Auto</option>
+                  {agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>{agent.displayName}</option>
+                  ))}
+                </select>
+              </label>
+              <label>Model
+                <select className="select" name="modelRouteId" defaultValue="auto">
+                  <option value="auto">Auto</option>
+                  {modelRouteGroups.map((group) => (
+                    <optgroup key={group.key} label={group.label}>
+                      {group.routes.map((route) => (
+                        <option key={route.id} value={route.id}>
+                          {formatProviderLabel(route.provider)} / {route.model}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </label>
+              <label>Harness
+                <select className="select" name="harnessId" defaultValue="auto">
+                  <option value="auto">Auto</option>
+                  {harnesses.map((harness) => (
+                    <option key={harness.id} value={harness.id}>{harness.displayName}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </details>
+          <div className="composer-artifacts" aria-label="Studio multimodal inputs">
+            <label>Files &amp; images
+              <input
+                name="artifacts"
+                type="file"
+                multiple
+                accept="text/*,application/pdf,application/json,image/*,audio/*,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+              />
+            </label>
+            <label>Screenshots
+              <input name="screenshots" type="file" multiple accept="image/*" />
+            </label>
+            <label>Voice / microphone
+              <input name="voice" type="file" accept="audio/*" capture="user" />
+            </label>
+          </div>
           <div className="composer-row">
             <textarea
               className="textarea"
@@ -222,6 +293,106 @@ export default async function ProductStudioPage({
             </div>
           </div>
         </div>
+
+        <section className="requirements-assurance" aria-label="Requirements Assurance">
+          <div className="review-queue-header">
+            <span className="eyebrow">Independent challenge</span>
+            <h3>Requirements Readiness</h3>
+            <p className="review-queue-status">
+              {readinessLabel} ({requirementsAssurance.readiness.status})
+            </p>
+            <p>
+              Requirements Assurance findings are non-canonical review evidence. They identify gaps,
+              edge cases and questions for the Product Partner and user; they do not become approved
+              Product Knowledge unless separately resolved through the governed knowledge flow.
+            </p>
+            {requirementsAssurance.run ? (
+              <small>
+                Latest review <code>{requirementsAssurance.run.id}</code> via route{' '}
+                <code>{requirementsAssurance.run.reviewerRouteId}</code> / status{' '}
+                <code>{requirementsAssurance.run.status}</code>
+              </small>
+            ) : null}
+          </div>
+
+          <form action={runRequirementsAssuranceAction} className="partner-form">
+            <input name="projectId" type="hidden" value={id} />
+            <label>Reviewer model
+              <select className="select" name="reviewerRouteId" defaultValue="auto">
+                <option value="auto">Auto</option>
+                {liveCapableRoutes.map((route) => (
+                  <option key={route.id} value={route.id}>
+                    {formatProviderLabel(route.provider)} / {route.model}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button className="button-small" disabled={!canRunRequirementsReview} type="submit">
+              Run Requirements Review
+            </button>
+          </form>
+
+          {!requirementsReviewerAvailable ? (
+            <p className="review-queue-readonly">
+              No governed Requirements Reviewer agent/model route is currently eligible for this project.
+            </p>
+          ) : null}
+
+          <div className="review-queue-list">
+            {materialAssuranceFindings.length === 0 ? (
+              <p className="review-queue-status">
+                {requirementsAssurance.readiness.status === 'ready'
+                  ? 'No open material reviewer findings on the current exact requirements state.'
+                  : 'No current material findings are available; run a fresh independent review.'}
+              </p>
+            ) : null}
+            {materialAssuranceFindings.map((finding) => (
+              <article className="review-card" key={finding.id}>
+                <div className="review-card-top">
+                  <div>
+                    <span className="knowledge-category">{label(finding.category)}</span>
+                    <h4>{finding.summary}</h4>
+                  </div>
+                  <span className="status-pill">{finding.severity}</span>
+                </div>
+                <p>{finding.rationale}</p>
+                {finding.proposedQuestion ? (
+                  <p><strong>Question to resolve:</strong> {finding.proposedQuestion}</p>
+                ) : null}
+                {finding.suggestedDirection ? (
+                  <p><strong>Reviewer suggestion:</strong> {finding.suggestedDirection}</p>
+                ) : null}
+                <small>
+                  Basis: {label(finding.basis)} / {label(finding.kind)} / finding <code>{finding.id}</code>
+                </small>
+                {canReview ? (
+                  <form action={closeRequirementsAssuranceFindingAction} className="review-reject-form">
+                    <input name="projectId" type="hidden" value={id} />
+                    <input name="findingId" type="hidden" value={finding.id} />
+                    <label>
+                      Resolution note
+                      <input
+                        aria-label={`Resolution note for ${finding.summary}`}
+                        className="input"
+                        name="resolutionNote"
+                        placeholder="Explain how this was resolved or why it does not apply"
+                        required
+                      />
+                    </label>
+                    <div className="review-card-actions">
+                      <button className="button-small" name="status" type="submit" value="resolved">
+                        Mark resolved
+                      </button>
+                      <button className="button-small" name="status" type="submit" value="dismissed">
+                        Not applicable
+                      </button>
+                    </div>
+                  </form>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        </section>
 
         <section className="review-queue" aria-label="Product Knowledge Review Queue">
           <div className="review-queue-header">

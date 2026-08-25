@@ -77,6 +77,11 @@ export interface ModelRouteSummary {
   id: string;
   provider: string;
   model: string;
+  connection?: {
+    id: string;
+    ownerType: 'platform' | 'organisation' | 'team' | 'user';
+    ownerId?: string;
+  };
   executionMode: string;
   costType: string;
   available: boolean;
@@ -90,6 +95,98 @@ export interface ModelRouteSummary {
     headless: boolean;
     structuredOutput: boolean;
   };
+}
+
+export interface CapabilitySummary {
+  id: string;
+  kind: string;
+  source: string;
+  sourceRef: string;
+  displayName: string;
+}
+
+export interface CapabilityEstateCapability extends CapabilitySummary {
+  maturity: string;
+  governanceState: string;
+  executionVerification: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CapabilityEstateRelease {
+  id: string; capabilityId: string; scope: string; status: 'active' | 'revoked';
+  organisationId?: string; projectId?: string; projectRole?: string;
+  teamId?: string; cohortId?: string; userId?: string;
+}
+
+export interface CapabilityEstateEligibility {
+  id: string; capabilityId: string; scope: string; decision: 'allow' | 'deny';
+  status: 'active' | 'revoked'; organisationId: string;
+  projectId?: string; projectRole?: string; teamId?: string; cohortId?: string; userId?: string;
+}
+
+export interface CapabilityEstateSnapshot {
+  capabilities: CapabilityEstateCapability[];
+  releases: CapabilityEstateRelease[];
+  eligibilityPolicies: CapabilityEstateEligibility[];
+}
+
+export type StudioArtifactKind = 'document' | 'image' | 'audio' | 'video';
+export type StudioArtifactSource = 'upload' | 'microphone' | 'screenshot' | 'screen_recording';
+
+export interface StudioTurnSelection {
+  agentId?: string;
+  harnessId?: string;
+  modelRouteId?: string;
+  artifactIds?: string[];
+}
+
+export interface StudioInteractionArtifactSummary {
+  id: string;
+  kind: StudioArtifactKind;
+  source: StudioArtifactSource;
+  digestSha256: string;
+  mediaType: string;
+  byteSize: number;
+}
+
+export type RequirementsAssuranceReadinessStatus =
+  | 'ready'
+  | 'not_ready'
+  | 'insufficient_evidence';
+
+export interface RequirementsAssuranceFindingSummary {
+  id: string;
+  severity: 'critical' | 'important' | 'minor' | 'observation';
+  kind: string;
+  category: string;
+  summary: string;
+  rationale: string;
+  proposedQuestion?: string;
+  suggestedDirection?: string;
+  basis: 'project_evidence' | 'trained_knowledge' | 'external_research';
+  evidenceReferences: string[];
+  status: 'open' | 'resolved' | 'dismissed';
+}
+
+export interface RequirementsAssuranceState {
+  run: null | {
+    id: string;
+    profileId: string;
+    targetDigest: string;
+    reviewerAgentCapabilityId: string;
+    reviewerRouteId: string;
+    status: 'collecting' | 'completed' | 'availability_failure' | 'invalidated';
+    availabilityReason?: string;
+  };
+  findings: RequirementsAssuranceFindingSummary[];
+  readiness: {
+    status: RequirementsAssuranceReadinessStatus;
+    blockingFindingIds: string[];
+  };
+  targetDigest?: string;
+  execution?: { provider: string; model: string; routeId: string };
 }
 
 export interface ProductPartnerTurnResult {
@@ -109,6 +206,11 @@ export interface ProductPartnerTurnResult {
     status: 'succeeded' | 'failed';
     candidateCount: number;
   };
+  selection?: {
+    agent: { mode: 'auto' | 'explicit'; capabilityId: string };
+    harness: { mode: 'auto' | 'explicit'; capabilityId: string };
+    modelRoute: { mode: 'auto' | 'explicit'; routeId: string };
+  };
 }
 
 export interface CurrentIdentity {
@@ -116,6 +218,7 @@ export interface CurrentIdentity {
   accountId: string;
   userId: string;
   organisations: Array<{ organisationId: string; role: OrganisationRole }>;
+  platformRole?: 'admin';
 }
 
 export type KnowledgeCandidateStatus = 'pending' | 'accepted' | 'rejected';
@@ -236,6 +339,35 @@ async function authenticatedHeaders(init: RequestInit = {}): Promise<Headers> {
   return headers;
 }
 
+async function platformHeaders(init: RequestInit = {}): Promise<Headers> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(SESSION_COOKIE)?.value;
+  if (!token) redirect('/login');
+  const headers = new Headers(init.headers);
+  headers.set('authorization', `Bearer ${token}`);
+  if (init.body && !headers.has('content-type')) headers.set('content-type', 'application/json');
+  return headers;
+}
+
+async function platformApiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = await platformHeaders(init);
+  const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers, cache: 'no-store' });
+  return parseResponse<T>(response);
+}
+
+async function platformTenantApiFetch<T>(
+  path: string,
+  organisationId: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const targetOrganisationId = organisationId.trim();
+  if (!targetOrganisationId) throw new Error('Target organisation is required');
+  const headers = await platformHeaders(init);
+  headers.set('x-organisation-id', targetOrganisationId);
+  const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers, cache: 'no-store' });
+  return parseResponse<T>(response);
+}
+
 async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = await authenticatedHeaders(init);
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -311,6 +443,33 @@ export function getStudio(projectId: string): Promise<StudioState> {
   return apiFetch<StudioState>(`/projects/${projectId}/studio`);
 }
 
+export function getRequirementsAssurance(
+  projectId: string,
+): Promise<RequirementsAssuranceState> {
+  return apiFetch<RequirementsAssuranceState>(`/projects/${projectId}/requirements-assurance`);
+}
+
+export function runRequirementsAssurance(
+  projectId: string,
+  reviewerRouteId?: string,
+): Promise<RequirementsAssuranceState> {
+  return apiFetch<RequirementsAssuranceState>(`/projects/${projectId}/requirements-assurance`, {
+    method: 'POST',
+    body: JSON.stringify(reviewerRouteId === undefined ? {} : { reviewerRouteId }),
+  });
+}
+
+export function closeRequirementsAssuranceFinding(
+  projectId: string,
+  findingId: string,
+  input: { status: 'resolved' | 'dismissed'; resolutionNote: string },
+): Promise<RequirementsAssuranceState> {
+  return apiFetch<RequirementsAssuranceState>(
+    `/projects/${projectId}/requirements-assurance/findings/${findingId}/close`,
+    { method: 'POST', body: JSON.stringify(input) },
+  );
+}
+
 export function appendMessage(projectId: string, content: string): Promise<ConversationMessage> {
   return apiFetch<ConversationMessage>(`/projects/${projectId}/messages`, {
     method: 'POST',
@@ -349,17 +508,41 @@ export function reviseKnowledge(
   });
 }
 
-export function listModelRoutes(): Promise<ModelRouteSummary[]> {
-  return apiFetch<ModelRouteSummary[]>('/model-routes');
+export function listModelRoutes(projectId: string): Promise<ModelRouteSummary[]> {
+  return apiFetch<ModelRouteSummary[]>(`/projects/${projectId}/model-routes`);
+}
+
+export function listProjectCapabilities(
+  projectId: string,
+  kind: string,
+): Promise<CapabilitySummary[]> {
+  return apiFetch<CapabilitySummary[]>(`/projects/${projectId}/capabilities?kind=${encodeURIComponent(kind)}`);
+}
+
+export function uploadStudioInteractionArtifact(
+  projectId: string,
+  input: { data: ArrayBuffer; kind: StudioArtifactKind; source: StudioArtifactSource; mediaType: string },
+): Promise<StudioInteractionArtifactSummary> {
+  return apiFetch<StudioInteractionArtifactSummary>(`/projects/${projectId}/interaction-artifacts`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/octet-stream',
+      'x-studio-artifact-kind': input.kind,
+      'x-studio-artifact-source': input.source,
+      'x-studio-artifact-media-type': input.mediaType,
+    },
+    body: input.data,
+  });
 }
 
 export function sendProductPartnerTurn(
   projectId: string,
   content: string,
+  selection: StudioTurnSelection = {},
 ): Promise<ProductPartnerTurnResult> {
   return apiFetch<ProductPartnerTurnResult>(`/projects/${projectId}/product-partner-turn`, {
     method: 'POST',
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, ...selection }),
   });
 }
 
@@ -457,6 +640,88 @@ export function setUserStatus(userId: string, status: 'active' | 'suspended') {
 
 export function revokeOrganisationAccess(userId: string): Promise<void> {
   return apiFetch<void>(`/admin/users/${userId}/organisation-access`, { method: 'DELETE' });
+}
+
+export function getCapabilityEstateSnapshot(): Promise<CapabilityEstateSnapshot> {
+  return platformApiFetch<CapabilityEstateSnapshot>('/admin/capability-estate');
+}
+
+export function refreshCapabilityEstateFromEcc(): Promise<{ discovered: number; reconciled: number }> {
+  return platformApiFetch('/admin/capabilities/refresh/ecc', { method: 'POST' });
+}
+
+export function changeCapabilityGovernanceState(capabilityId: string, governanceState: string) {
+  return platformApiFetch<CapabilityEstateCapability>(`/admin/capabilities/${capabilityId}`, {
+    method: 'PATCH', body: JSON.stringify({ governanceState }),
+  });
+}
+
+export function createCapabilityRelease(capabilityId: string, input: Record<string, string>) {
+  const { organisationId, ...body } = input;
+  if (input.scope === 'platform') {
+    return platformApiFetch<CapabilityEstateRelease>(`/admin/capabilities/${capabilityId}/releases`, {
+      method: 'POST', body: JSON.stringify(body),
+    });
+  }
+  if (!organisationId) throw new Error('Tenant-scoped release requires organisationId');
+  return platformTenantApiFetch<CapabilityEstateRelease>(
+    `/admin/capabilities/${capabilityId}/releases`, organisationId,
+    { method: 'POST', body: JSON.stringify(body) },
+  );
+}
+
+export function revokeCapabilityRelease(
+  capabilityId: string,
+  releaseId: string,
+  platformScoped: boolean,
+  organisationId?: string,
+) {
+  if (platformScoped) {
+    return platformApiFetch<void>(`/admin/capabilities/${capabilityId}/releases/${releaseId}`, { method: 'DELETE' });
+  }
+  if (!organisationId) throw new Error('Tenant-scoped release requires organisationId');
+  return platformTenantApiFetch<void>(
+    `/admin/capabilities/${capabilityId}/releases/${releaseId}`, organisationId, { method: 'DELETE' },
+  );
+}
+
+export function createCapabilityEligibility(capabilityId: string, input: Record<string, string>) {
+  const { organisationId, ...body } = input;
+  if (!organisationId) throw new Error('Capability eligibility requires organisationId');
+  return platformTenantApiFetch<CapabilityEstateEligibility>(
+    `/admin/capabilities/${capabilityId}/eligibility`, organisationId,
+    { method: 'POST', body: JSON.stringify(body) },
+  );
+}
+
+export function revokeCapabilityEligibility(
+  capabilityId: string,
+  policyId: string,
+  organisationId: string,
+): Promise<void> {
+  return platformTenantApiFetch<void>(
+    `/admin/capabilities/${capabilityId}/eligibility/${policyId}`, organisationId, { method: 'DELETE' },
+  );
+}
+
+export function grantCapabilityPopulationMembership(input: {
+  organisationId: string; kind: 'team' | 'cohort'; populationId: string; userId: string;
+}): Promise<void> {
+  return platformTenantApiFetch<void>(
+    `/admin/capability-populations/${input.kind}/${encodeURIComponent(input.populationId)}/members/${encodeURIComponent(input.userId)}`,
+    input.organisationId,
+    { method: 'PUT' },
+  );
+}
+
+export function revokeCapabilityPopulationMembership(input: {
+  organisationId: string; kind: 'team' | 'cohort'; populationId: string; userId: string;
+}): Promise<void> {
+  return platformTenantApiFetch<void>(
+    `/admin/capability-populations/${input.kind}/${encodeURIComponent(input.populationId)}/members/${encodeURIComponent(input.userId)}`,
+    input.organisationId,
+    { method: 'DELETE' },
+  );
 }
 
 // -------------------- AI Connections --------------------
