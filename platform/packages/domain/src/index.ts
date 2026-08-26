@@ -14,3 +14,5 @@ export * from './capability-estate.js';
 export * from './studio-interaction-artifact.js';
 export * from './assurance.js';
 export * from './domain-pack.js';
+export * from './context-trust.js';
+export * from './runtime-capability-manifest.js';

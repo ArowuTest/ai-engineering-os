@@ -312,10 +312,19 @@ describe('Collaborative Memory domain', () => {
       targetSessionIds: ['session-002'], targetAgentIds: ['agent-test'],
       summary: 'Implementation complete; run integration and adversarial tests.',
       evidenceReferences: ['commit:abc123', 'test:unit-42'], blockers: [],
+      goal: 'Ship the accepted backend boundary',
+      decisions: ['Keep exact route fail-closed semantics'],
+      pendingQuestions: ['Does production CI expose the same provider set?'],
+      nextActions: ['Run full gate', 'Open blind council'],
+      sourceBranch: 'feature/task-9', sourceCommit: 'abc123',
       createdBy: 'user-001', createdAt: now,
     });
     expect(handoff.targetSessionIds).toEqual(['session-002']);
     expect(handoff.targetAgentIds).toEqual(['agent-test']);
+    expect(handoff.decisions).toEqual(['Keep exact route fail-closed semantics']);
+    expect(handoff.pendingQuestions).toEqual(['Does production CI expose the same provider set?']);
+    expect(handoff.nextActions).toEqual(['Run full gate', 'Open blind council']);
+    expect(handoff.sourceBranch).toBe('feature/task-9');
     expect(() => createAgentHandoff({
       ...handoff, id: 'handoff-002', summary: 'Bearer abcdefghijklmnopqrstuvwxyz123456',
     })).toThrow(/secret|credential/i);

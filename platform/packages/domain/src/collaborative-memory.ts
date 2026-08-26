@@ -115,8 +115,13 @@ export interface AgentHandoff {
   targetSessionIds: string[];
   targetAgentIds: string[];
   summary: string;
+  goal?: string;
+  decisions?: string[];
+  pendingQuestions?: string[];
+  nextActions?: string[];
   evidenceReferences: string[];
   blockers: string[];
+  sourceBranch?: string;
   sourceCommit?: string;
   workspaceReference?: string;
   createdBy: string;
@@ -376,6 +381,9 @@ export function createAgentHandoff(input: AgentHandoff): AgentHandoff {
   const summary = requireSafeText(input.summary, 'summary', 16_384);
   const evidenceReferences = stringList(input.evidenceReferences, 'evidenceReferences', MAX_HANDOFF_LIST_ITEMS);
   const blockers = stringList(input.blockers, 'blockers', MAX_HANDOFF_LIST_ITEMS);
+  const decisions = input.decisions === undefined ? [] : stringList(input.decisions, 'decisions', MAX_HANDOFF_LIST_ITEMS);
+  const pendingQuestions = input.pendingQuestions === undefined ? [] : stringList(input.pendingQuestions, 'pendingQuestions', MAX_HANDOFF_LIST_ITEMS);
+  const nextActions = input.nextActions === undefined ? [] : stringList(input.nextActions, 'nextActions', MAX_HANDOFF_LIST_ITEMS);
   const handoff: AgentHandoff = {
     id: requireStableIdentifier(input.id, 'id'),
     organisationId: requireStableIdentifier(input.organisationId, 'organisationId'),
@@ -385,6 +393,9 @@ export function createAgentHandoff(input: AgentHandoff): AgentHandoff {
     targetSessionIds: identifierList(input.targetSessionIds, 'targetSessionIds', MAX_HANDOFF_LIST_ITEMS) ?? [],
     targetAgentIds: identifierList(input.targetAgentIds, 'targetAgentIds', MAX_HANDOFF_LIST_ITEMS) ?? [],
     summary,
+    decisions,
+    pendingQuestions,
+    nextActions,
     evidenceReferences,
     blockers,
     createdBy: requireNonBlank(input.createdBy, 'createdBy'),
@@ -393,6 +404,8 @@ export function createAgentHandoff(input: AgentHandoff): AgentHandoff {
   if (handoff.targetSessionIds.length === 0 && handoff.targetAgentIds.length === 0) {
     throw new DomainValidationError('targetSessionIds', 'handoff requires a target session or agent');
   }
+  if (input.goal !== undefined) handoff.goal = requireSafeText(input.goal, 'goal', 4096);
+  if (input.sourceBranch !== undefined) handoff.sourceBranch = requireSafeText(input.sourceBranch, 'sourceBranch', 512);
   if (input.sourceCommit !== undefined) handoff.sourceCommit = requireNonBlank(input.sourceCommit, 'sourceCommit');
   if (input.workspaceReference !== undefined) {
     handoff.workspaceReference = requireWorkspaceReference(input.workspaceReference);
