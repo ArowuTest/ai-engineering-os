@@ -9,8 +9,8 @@ export default function NewProjectPage() {
           <span className="eyebrow">New product</span>
           <h1>What are you thinking about building?</h1>
           <p className="lead">
-            Give Product Studio the starting idea and choose who you want as the first Product
-            Partner. The project knowledge belongs to the platform, so you can switch later.
+            Give Product Studio the starting idea. Auto is the default, and advanced provider
+            preferences stay optional while project knowledge remains platform-owned.
           </p>
         </div>
       </div>
@@ -32,25 +32,30 @@ export default function NewProjectPage() {
             />
           </div>
 
-          <div className="field">
-            <label htmlFor="preferredProductPartner">First Product Partner</label>
-            <select className="select" id="preferredProductPartner" name="preferredProductPartner" defaultValue="auto">
-              <option value="auto">Auto select</option>
-              <option value="openai">OpenAI / ChatGPT</option>
-              <option value="anthropic">Anthropic / Claude</option>
-              <option value="google">Google / Gemini</option>
-            </select>
-            <small>
-              This selects the preferred partner only. Canonical Product Knowledge remains provider-independent.
-            </small>
-          </div>
+          <details className="project-advanced">
+            <summary>Advanced setup</summary>
+            <div className="project-advanced-content">
+              <div className="field">
+                <label htmlFor="preferredProductPartner">Preferred Product Partner</label>
+                <select className="select" id="preferredProductPartner" name="preferredProductPartner" defaultValue="auto">
+                  <option value="auto">Auto select</option>
+                  <option value="openai">OpenAI / ChatGPT</option>
+                  <option value="anthropic">Anthropic / Claude</option>
+                  <option value="google">Google / Gemini</option>
+                </select>
+                <small>
+                  Leave this on Auto unless you deliberately want a provider preference. Canonical Product Knowledge remains provider-independent.
+                </small>
+              </div>
 
-          <div className="partner-options" aria-hidden="true">
-            <div className="partner-option"><strong>Auto</strong><br />Route by policy and availability.</div>
-            <div className="partner-option"><strong>OpenAI</strong><br />Product discussion and analysis.</div>
-            <div className="partner-option"><strong>Claude</strong><br />Product challenge and engineering.</div>
-            <div className="partner-option"><strong>Gemini</strong><br />Product and UI/UX perspective.</div>
-          </div>
+              <div className="partner-options" aria-hidden="true">
+                <div className="partner-option"><strong>Auto</strong><br />Route by policy and availability.</div>
+                <div className="partner-option"><strong>OpenAI</strong><br />Product discussion and analysis.</div>
+                <div className="partner-option"><strong>Claude</strong><br />Product challenge and engineering.</div>
+                <div className="partner-option"><strong>Gemini</strong><br />Product and UI/UX perspective.</div>
+              </div>
+            </div>
+          </details>
 
           <div className="form-actions">
             <Link className="button-secondary" href="/">Cancel</Link>
