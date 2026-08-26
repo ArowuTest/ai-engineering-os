@@ -127,6 +127,22 @@ describe('AI runners HTTP boundary', () => {
     expect((listed.json() as Array<{ id: string }>).map(value => value.id)).toContain(created.runnerId);
     expect(JSON.stringify(listed.json())).not.toContain(created.credential);
     expect(JSON.stringify(listed.json())).not.toMatch(/credentialHash|password|cookie|refreshToken/i);
+
+    const manifest = await app.inject({
+      method: 'GET',
+      url: `/ai-runners/${created.runnerId}/capabilities`,
+      headers: userHeaders(token),
+    });
+    expect(manifest.statusCode).toBe(200);
+    expect(manifest.json()).toMatchObject({
+      runnerId: created.runnerId,
+      harnessId: 'codex',
+      capabilities: [
+        { id: 'chat', state: 'declared', source: 'runner' },
+        { id: 'tools', state: 'declared', source: 'runner' },
+      ],
+    });
+    expect(JSON.stringify(manifest.json())).not.toContain(created.credential);
     await app.close();
   });
   it('keeps user sessions and runner bearer credentials on separate auth paths', async () => {

@@ -1456,6 +1456,18 @@ export function buildApp(dependencies: AppDependencies): FastifyInstance {
     }
   });
 
+  app.get('/ai-runners/:runnerId/capabilities', async (request, reply) => {
+    const identity = await resolveIdentity(request, dependencies);
+    try {
+      return reply.send(await requireAIRunnerService().getRunnerCapabilityManifest({
+        organisationId: identity.organisationId,
+        actorUserId: identity.userId,
+        runnerId: runnerParam(request),
+      }));
+    } catch (error) {
+      throwAIRunnerServiceError(error);
+    }
+  });
   app.post('/ai-runners/:runnerId/rotate', async (request, reply) => {
     const identity = await resolveIdentity(request, dependencies);
     assertAllowedFields(bodyObject(request.body), []);

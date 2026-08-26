@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { createAIRunnerRecord, createAuditEvent, generateOpaqueToken, hashOpaqueToken, type AIRunnerCapability, type AIRunnerOwnership, type AIRunnerTrustState } from '@engineering-os/domain';
+import { createAIRunnerRecord, createAuditEvent, generateOpaqueToken, hashOpaqueToken, runtimeCapabilityManifestFromRunner, type AIRunnerCapability, type AIRunnerOwnership, type AIRunnerTrustState } from '@engineering-os/domain';
 import type { AIRunnerRepository, AuditRepository, DatabaseUnitOfWork, MembershipRepository } from '@engineering-os/database';
 
 export interface AIRunnerServiceDependencies {
@@ -102,6 +102,19 @@ export class AIRunnerService {
       this.dependencies.aiRunners.listOrganisationRunners(input.organisationId)
     ]);
     return [...personal, ...organisation].sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime() || left.id.localeCompare(right.id));
+  }
+  async getRunnerCapabilityManifest(input: {
+    organisationId: string;
+    actorUserId: string;
+    runnerId: string;
+    observedAt?: Date;
+  }) {
+    const membership = await this.dependencies.memberships.getOrganisation(input.organisationId, input.actorUserId);
+    if (!membership || membership.status !== 'active') throw new Error('forbidden');
+    const runner = await this.dependencies.aiRunners.getRunner(input.organisationId, input.runnerId);
+    if (!runner || runner.status === 'revoked' || runner.trustState === 'revoked') throw new Error('runner_not_found');
+    if (runner.ownership === 'personal' && runner.ownerUserId !== input.actorUserId) throw new Error('runner_not_found');
+    return runtimeCapabilityManifestFromRunner(runner, input.observedAt ?? new Date());
   }
   async disableRunner(input: { organisationId: string; actorUserId: string; runnerId: string; now?: Date }): Promise<void> {
     const now = input.now ?? new Date();
