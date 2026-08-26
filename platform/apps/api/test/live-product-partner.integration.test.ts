@@ -176,6 +176,24 @@ describe('live Product Partner turn', () => {
       model: 'vendor/model-a',
       routeId: connectionRoute.id,
       connection: { id: 'connection-user-001', ownerType: 'user', ownerId: 'user-001' },
+      evidence: {
+        kind: 'execution',
+        status: 'pass',
+        source: 'model_gateway',
+        organisationId: 'org-001',
+        projectId: project.id,
+        subjectType: 'conversation_message',
+        attribution: {
+          requesterUserId: 'user-001',
+          providerId: 'openrouter',
+          modelId: 'vendor/model-a',
+          routeId: connectionRoute.id,
+          connection: { id: 'connection-user-001', ownerType: 'user', ownerId: 'user-001' },
+          usage: { inputTokens: 7, outputTokens: 3 },
+          costType: 'metered_api',
+        },
+        provenance: { trustClass: 'directly_observed', sourceType: 'runtime', instructionBearing: false },
+      },
     });
     await app.close();
   });

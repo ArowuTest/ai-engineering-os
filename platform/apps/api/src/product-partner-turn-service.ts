@@ -1,6 +1,8 @@
-﻿import {
+import {
   createAuditEvent,
+  createContextProvenance,
   createConversationMessage,
+  createEvidenceEnvelope,
   createKnowledgeExtractionRun,
   createPendingKnowledgeCandidate,
   dedupeCandidateProposals,
@@ -192,6 +194,36 @@ export async function executeProductPartnerTurn(input: ExecuteTurnInput): Promis
     metadata: { conversationId: conversation.id },
   });
 
+  const executionEvidence = createEvidenceEnvelope({
+    id: assistantMessage.id,
+    kind: 'execution',
+    status: 'pass',
+    source: 'model_gateway',
+    summary: 'Product Partner execution completed',
+    provenance: createContextProvenance({
+      trustClass: 'directly_observed',
+      sourceType: 'runtime',
+      sourceRef: `route:${modelResponse.routeId}`,
+      observedAt: assistantMessage.createdAt,
+    }),
+    organisationId,
+    projectId,
+    subjectType: 'conversation_message',
+    subjectId: assistantMessage.id,
+    attribution: {
+      requesterUserId: userId,
+      providerId: modelResponse.provider,
+      modelId: modelResponse.model,
+      routeId: modelResponse.routeId,
+      ...(modelResponse.connection === undefined ? {} : { connection: modelResponse.connection }),
+      ...(selection === undefined ? {} : {
+        agentId: selection.agent.capabilityId,
+        harnessId: selection.harness.capabilityId,
+      }),
+      ...(modelResponse.usage === undefined ? {} : { usage: modelResponse.usage }),
+      costType: modelResponse.costType,
+    },
+  });
   const assistantEvent = createAuditEvent({
     organisationId, projectId,
     eventType: 'product_partner.assistant_message.created',
@@ -208,6 +240,7 @@ export async function executeProductPartnerTurn(input: ExecuteTurnInput): Promis
       executionMode: modelResponse.executionMode,
       costType: modelResponse.costType,
       usage: modelResponse.usage ?? null,
+      evidence: executionEvidence,
       ...(selection === undefined ? {} : { selection }),
       ...(interactionArtifacts === undefined || interactionArtifacts.length === 0
         ? {} : { interactionArtifactIds: interactionArtifacts.map((artifact) => artifact.id) }),
