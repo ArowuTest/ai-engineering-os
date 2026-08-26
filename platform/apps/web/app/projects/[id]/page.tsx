@@ -74,12 +74,15 @@ export default async function ProductStudioPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const [studio, requirementsAssurance, modelRoutes, agents, harnesses, candidates] = await Promise.all([
+  const [studio, requirementsAssurance, modelRoutes, agents, harnesses, skills, mcpTools, workflows, candidates] = await Promise.all([
     getStudio(id),
     getRequirementsAssurance(id),
     listModelRoutes(id),
     listProjectCapabilities(id, 'agent'),
     listProjectCapabilities(id, 'harness'),
+    listProjectCapabilities(id, 'skill'),
+    listProjectCapabilities(id, 'mcp_tool'),
+    listProjectCapabilities(id, 'workflow'),
     listKnowledgeCandidates(id).catch(() => [] as KnowledgeCandidateSummary[]),
   ]);
   // Effective role is the exact viewerProjectRole resolved server-side by resolveIdentity;
@@ -294,6 +297,35 @@ export default async function ProductStudioPage({
           </div>
         </div>
 
+        <section className="project-capabilities" aria-label="Project capabilities">
+          <div className="review-queue-header">
+            <span className="eyebrow">Governed capability directory</span>
+            <h3>Project capabilities</h3>
+            <p>Only capabilities released and eligible for this project are shown here. Discovery alone never grants use.</p>
+          </div>
+          <div className="capability-directory-grid">
+            <div>
+              <strong>Agents</strong>
+              <p>{agents.length > 0 ? agents.map((item) => item.displayName).join(', ') : 'No eligible agents'}</p>
+            </div>
+            <div>
+              <strong>Skills</strong>
+              <p>{skills.length > 0 ? skills.map((item) => item.displayName).join(', ') : 'No eligible skills'}</p>
+            </div>
+            <div>
+              <strong>MCP &amp; tools</strong>
+              <p>{mcpTools.length > 0 ? mcpTools.map((item) => item.displayName).join(', ') : 'No eligible MCP/tools'}</p>
+            </div>
+            <div>
+              <strong>Workflows</strong>
+              <p>{workflows.length > 0 ? workflows.map((item) => item.displayName).join(', ') : 'No eligible workflows'}</p>
+            </div>
+            <div>
+              <strong>Connectors &amp; model access</strong>
+              <p><Link href="/ai-connections">Manage AI Connections</Link></p>
+            </div>
+          </div>
+        </section>
         <section className="requirements-assurance" aria-label="Requirements Assurance">
           <div className="review-queue-header">
             <span className="eyebrow">Independent challenge</span>

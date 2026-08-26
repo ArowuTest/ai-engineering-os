@@ -41,6 +41,14 @@ test('Product Studio keeps governed execution controls progressively disclosed w
   assert.match(page, /groupStudioModelRoutes\(liveCapableRoutes\)/);
   assert.match(page, /<optgroup key=\{group\.key\} label=\{group\.label\}>/);
   assert.match(page, /value=\{route\.id\}/);
+  assert.match(page, /listProjectCapabilities\(id,\s*'skill'\)/);
+  assert.match(page, /listProjectCapabilities\(id,\s*'mcp_tool'\)/);
+  assert.match(page, /listProjectCapabilities\(id,\s*'workflow'\)/);
+  assert.match(page, /Project capabilities/);
+  assert.match(page, /Skills/);
+  assert.match(page, /MCP &amp; tools/);
+  assert.match(page, /Workflows/);
+  assert.match(page, /href="\/ai-connections"/);
 });
 
 test('web API uploads Studio artifacts as binary without accepting storage authority from the client', async () => {
