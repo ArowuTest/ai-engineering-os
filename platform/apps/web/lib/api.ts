@@ -765,6 +765,19 @@ export interface AIConnectionSummary {
   revokedAt?: string;
 }
 
+export interface AIConnectionModelDiscoveryResult {
+  connectionId: string;
+  providerId: string;
+  models: Array<{
+    routeId: string;
+    capabilityId: string;
+    providerModelId: string;
+    displayName: string;
+    available: boolean;
+    capabilities: ModelRouteCapabilities;
+  }>;
+}
+
 export interface ProjectExecutionPoolShareState {
   id: string;
   mode: AIConnectionShareMode;
@@ -808,25 +821,37 @@ export function listAIConnections(): Promise<AIConnectionSummary[]> {
 
 export function registerPersonalAIConnection(input: {
   connectionFamilyId: string;
+  secretRefId?: string;
+  apiKey?: string;
 }): Promise<AIConnectionSummary> {
+  const body: Record<string, string> = { connectionFamilyId: input.connectionFamilyId };
+  if (input.secretRefId !== undefined && input.secretRefId.trim() !== '') body.secretRefId = input.secretRefId.trim();
+  if (input.apiKey !== undefined && input.apiKey.trim() !== '') body.apiKey = input.apiKey.trim();
   return apiFetch<AIConnectionSummary>('/ai-connections/personal', {
     method: 'POST',
-    body: JSON.stringify({ connectionFamilyId: input.connectionFamilyId }),
+    body: JSON.stringify(body),
   });
 }
 
 export function registerOrganisationAIConnection(input: {
   connectionFamilyId: string;
   secretRefId?: string;
+  apiKey?: string;
 }): Promise<AIConnectionSummary> {
   const body: Record<string, string> = { connectionFamilyId: input.connectionFamilyId };
-  if (input.secretRefId !== undefined && input.secretRefId.trim() !== '') {
-    body.secretRefId = input.secretRefId.trim();
-  }
+  if (input.secretRefId !== undefined && input.secretRefId.trim() !== '') body.secretRefId = input.secretRefId.trim();
+  if (input.apiKey !== undefined && input.apiKey.trim() !== '') body.apiKey = input.apiKey.trim();
   return apiFetch<AIConnectionSummary>('/admin/ai-connections', {
     method: 'POST',
     body: JSON.stringify(body),
   });
+}
+
+export function discoverAIConnectionModels(connectionId: string): Promise<AIConnectionModelDiscoveryResult> {
+  return apiFetch<AIConnectionModelDiscoveryResult>(
+    `/ai-connections/${encodeURIComponent(connectionId)}/models/discover`,
+    { method: 'POST', body: JSON.stringify({}) },
+  );
 }
 
 export function revokeAIConnection(connectionId: string): Promise<void> {

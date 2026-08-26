@@ -13,6 +13,7 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import {
   clearAIConnectionShareWindowAction,
+  discoverAIConnectionModelsAction,
   registerOrganisationAIConnectionAction,
   registerPersonalAIConnectionAction,
   revokeAIConnectionAction,
@@ -110,7 +111,7 @@ export default async function AIConnectionsPage() {
         <div className="panel-heading">
           <div>
             <h2>Personal Connections</h2>
-            <p>Register a connection tied to your account. No credential is entered here.</p>
+            <p>Connect your provider with a managed API key or an external secret reference. Managed keys are encrypted immediately and never displayed again.</p>
           </div>
         </div>
 
@@ -128,6 +129,26 @@ export default async function AIConnectionsPage() {
               ))}
             </select>
           </label>
+          <label>
+            <span>Provider API key (optional)</span>
+            <input
+              className="input"
+              name="apiKey"
+              type="password"
+              placeholder="Encrypted immediately and never displayed again"
+              autoComplete="off"
+            />
+          </label>
+          <label>
+            <span>External secret reference (optional alternative)</span>
+            <input
+              className="input"
+              name="secretRefId"
+              type="text"
+              placeholder="Reference resolved by the runtime, not the secret itself"
+              autoComplete="off"
+            />
+          </label>
           <button className="button-small" type="submit">
             Register personal connection
           </button>
@@ -144,19 +165,27 @@ export default async function AIConnectionsPage() {
                   <div>
                     <strong>{family?.displayName ?? connection.connectionFamilyId}</strong>
                     <span>
-                      {connection.providerId} · {connection.status}
+                      {connection.providerId} Â· {connection.status}
                     </span>
                     <small>
                       Credential configured:{' '}
                       {connection.credentialConfigured ? 'yes' : 'no'}
                     </small>
                   </div>
-                  <form action={revokeAIConnectionAction}>
-                    <input type="hidden" name="connectionId" value={connection.id} />
-                    <button className="button-danger" type="submit">
-                      Revoke
-                    </button>
-                  </form>
+                  <div className="ai-connection-actions">
+                    {family?.executionMode === 'api' && connection.credentialConfigured ? (
+                      <form action={discoverAIConnectionModelsAction}>
+                        <input type="hidden" name="connectionId" value={connection.id} />
+                        <button className="button-small" type="submit">Discover models</button>
+                      </form>
+                    ) : null}
+                    <form action={revokeAIConnectionAction}>
+                      <input type="hidden" name="connectionId" value={connection.id} />
+                      <button className="button-danger" type="submit">
+                        Revoke
+                      </button>
+                    </form>
+                  </div>
                 </article>
               );
             })
@@ -188,12 +217,22 @@ export default async function AIConnectionsPage() {
               </select>
             </label>
             <label>
-              <span>External secret-reference identifier (optional)</span>
+              <span>Provider API key (optional)</span>
+              <input
+                className="input"
+                name="apiKey"
+                type="password"
+                placeholder="Encrypted immediately and never displayed again"
+                autoComplete="off"
+              />
+            </label>
+            <label>
+              <span>External secret-reference identifier (optional alternative)</span>
               <input
                 className="input"
                 name="secretRefId"
                 type="text"
-                placeholder="Reference id resolved by the runtime — not the secret itself"
+                placeholder="Reference resolved by the runtime, not the secret itself"
                 autoComplete="off"
               />
             </label>
@@ -218,7 +257,7 @@ export default async function AIConnectionsPage() {
                   <div>
                     <strong>{family?.displayName ?? connection.connectionFamilyId}</strong>
                     <span>
-                      {connection.providerId} · {connection.status}
+                      {connection.providerId} Â· {connection.status}
                     </span>
                     <small>
                       Credential configured:{' '}
@@ -226,12 +265,20 @@ export default async function AIConnectionsPage() {
                     </small>
                   </div>
                   {canRegisterOrganisationConnection ? (
-                    <form action={revokeAIConnectionAction}>
-                      <input type="hidden" name="connectionId" value={connection.id} />
-                      <button className="button-danger" type="submit">
-                        Revoke
-                      </button>
-                    </form>
+                    <div className="ai-connection-actions">
+                      {family?.executionMode === 'api' && connection.credentialConfigured ? (
+                        <form action={discoverAIConnectionModelsAction}>
+                          <input type="hidden" name="connectionId" value={connection.id} />
+                          <button className="button-small" type="submit">Discover models</button>
+                        </form>
+                      ) : null}
+                      <form action={revokeAIConnectionAction}>
+                        <input type="hidden" name="connectionId" value={connection.id} />
+                        <button className="button-danger" type="submit">
+                          Revoke
+                        </button>
+                      </form>
+                    </div>
                   ) : null}
                 </article>
               );
@@ -269,7 +316,7 @@ export default async function AIConnectionsPage() {
                     const persistentSupported = family?.persistentSupported === true;
                     // Owner-side share state comes from the authoritative requester-tier entry
                     // (backend hydrates entry.share for owner-owned shares). We never infer
-                    // ownership from `tier === 'project_pool'` — that tier is for OTHER users'
+                    // ownership from `tier === 'project_pool'` â€” that tier is for OTHER users'
                     // contributed shares.
                     const ownerEntry = pool.entries.find(
                       (entry) =>
@@ -286,10 +333,10 @@ export default async function AIConnectionsPage() {
                           <span>{connection.providerId}</span>
                           {activeShare ? (
                             <small>
-                              Active share · {activeShare.mode}
+                              Active share Â· {activeShare.mode}
                             </small>
                           ) : (
-                            <small>Do Not Share · not shared with this project</small>
+                            <small>Do Not Share Â· not shared with this project</small>
                           )}
                         </div>
 
@@ -444,8 +491,8 @@ export default async function AIConnectionsPage() {
                         <div>
                           <strong>{entry.providerId}</strong>
                           <span>
-                            {entry.tier} · {entry.connectionFamilyId}
-                            {entry.shareMode ? ` · ${entry.shareMode}` : ''}
+                            {entry.tier} Â· {entry.connectionFamilyId}
+                            {entry.shareMode ? ` Â· ${entry.shareMode}` : ''}
                           </span>
                         </div>
                         <div>
@@ -474,7 +521,7 @@ export default async function AIConnectionsPage() {
                       <li className="ai-connection-pool-entry" key={route.routeId}>
                         <div>
                           <strong>{route.providerId}</strong>
-                          <span>{route.model} · {route.executionMode} · {route.costType}</span>
+                          <span>{route.model} Â· {route.executionMode} Â· {route.costType}</span>
                         </div>
                         <span className={route.available ? 'badge badge-success' : 'badge badge-warning'}>
                           {route.available ? 'Available' : 'Unavailable'}

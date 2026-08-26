@@ -51,9 +51,11 @@ test('lib/api.ts exposes safe AI connection read models and client functions', a
   const aiSection = api.slice(api.indexOf('// -------------------- AI Connections'));
   assert.ok(aiSection.length > 0, 'AI Connections section must exist in lib/api.ts');
   assert.doesNotMatch(aiSection, /\bpassword\s*[:?]\s*string/);
-  assert.doesNotMatch(aiSection, /\bapiKey\s*[:?]\s*string/i);
   assert.doesNotMatch(aiSection, /\btoken\s*[:?]\s*string/);
   assert.doesNotMatch(aiSection, /\bcookie\s*[:?]\s*string/i);
+  assert.match(api, /registerPersonalAIConnection[\s\S]{0,300}?apiKey\?:\s*string/);
+  assert.match(api, /registerOrganisationAIConnection[\s\S]{0,400}?apiKey\?:\s*string/);
+  assert.match(api, /export function discoverAIConnectionModels\(/);
 
   // Project execution pool shape used by /ai-connections.
   assert.match(
@@ -82,12 +84,13 @@ test('lib/api.ts exposes safe AI connection read models and client functions', a
   assert.doesNotMatch(api, /registerPersonalAIConnection[\s\S]{0,200}?delegatable/);
 });
 
-test('actions.ts wires AI connection server actions without accepting provider credentials or actor identity', async () => {
+test('actions.ts wires AI connection server actions with write-only managed credentials and no actor identity input', async () => {
   const actions = await read('app/actions.ts');
 
   // Server actions exist for every UI mutation.
   assert.match(actions, /export async function registerPersonalAIConnectionAction\(/);
   assert.match(actions, /export async function registerOrganisationAIConnectionAction\(/);
+  assert.match(actions, /export async function discoverAIConnectionModelsAction\(/);
   assert.match(actions, /export async function revokeAIConnectionAction\(/);
   assert.match(actions, /export async function shareAIConnectionAction\(/);
   assert.match(actions, /export async function setAIConnectionShareModeAction\(/);
@@ -102,7 +105,9 @@ test('actions.ts wires AI connection server actions without accepting provider c
   assert.doesNotMatch(actions, /formData\.get\(['"]ownerUserId['"]\)/);
   assert.doesNotMatch(actions, /formData\.get\(['"]delegatable['"]\)/);
   assert.doesNotMatch(actions, /formData\.get\(['"]password['"]\)/);
-  assert.doesNotMatch(actions, /formData\.get\(['"]apiKey['"]\)/i);
+  assert.match(actions, /registerPersonalAIConnectionAction[\s\S]{0,700}?formData\.get\(['"]apiKey['"]\)/i);
+  assert.match(actions, /registerOrganisationAIConnectionAction[\s\S]{0,900}?formData\.get\(['"]apiKey['"]\)/i);
+  assert.doesNotMatch(actions, /console\.(?:log|info|debug|warn|error)\([^\n]*apiKey/i);
   assert.doesNotMatch(actions, /formData\.get\(['"]token['"]\)/);
   assert.doesNotMatch(actions, /formData\.get\(['"]cookie['"]\)/i);
   assert.doesNotMatch(actions, /formData\.get\(['"]credentialStrategy['"]\)/);
@@ -157,16 +162,20 @@ test('AI connections page fetches families from the server, exposes required sec
   assert.doesNotMatch(page, /\.cookie\b/i);
   assert.doesNotMatch(page, /credentialStrategies/);
 
-  // Personal register form uses connectionFamilyId only.
+  // Personal registration may accept a write-only managed API key, but never identity/authority fields.
   assert.match(
     page,
     /action=\{registerPersonalAIConnectionAction\}[\s\S]*?name=["']connectionFamilyId["']/,
   );
-  // Personal register form MUST NOT ask for provider credential material or owner identity.
+  assert.match(
+    page,
+    /action=\{registerPersonalAIConnectionAction\}[\s\S]{0,1800}?name=["']apiKey["'][\s\S]{0,300}?type=["']password["']|action=\{registerPersonalAIConnectionAction\}[\s\S]{0,1800}?type=["']password["'][\s\S]{0,300}?name=["']apiKey["']/i,
+  );
   assert.doesNotMatch(
     page,
-    /action=\{registerPersonalAIConnectionAction\}[\s\S]{0,1200}?name=["'](password|apiKey|token|cookie|secretRefId|ownerUserId|actorUserId|delegatable)["']/i,
+    /action=\{registerPersonalAIConnectionAction\}[\s\S]{0,1800}?name=["'](password|token|cookie|ownerUserId|actorUserId|delegatable)["']/i,
   );
+  assert.doesNotMatch(page, /connection\.apiKey|Saved API key|value=\{[^}]*apiKey/i);
 
   // Organisation register controls gated on organisation owner/admin role.
   assert.match(page, /organisationRole/);
@@ -177,6 +186,10 @@ test('AI connections page fetches families from the server, exposes required sec
     assert.match(page, /external secret[- ]reference/i);
     assert.doesNotMatch(page, /Saved secret ref:/i);
   }
+  assert.match(page, /action=\{registerOrganisationAIConnectionAction\}[\s\S]{0,2200}?name=["']apiKey["']/i);
+  assert.match(page, /encrypted immediately|never displayed again/i);
+  assert.match(page, /action=\{discoverAIConnectionModelsAction\}/);
+  assert.match(page, /Discover models/i);
 
   // Project sharing controls only iterate projects returned to the current user.
   assert.match(page, /listProjects\(\)/);

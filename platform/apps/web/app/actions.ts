@@ -15,6 +15,7 @@ import {
   createCapabilityRelease,
   createInvitation,
   createProject,
+  discoverAIConnectionModels,
   getCurrentIdentityWithToken,
   grantCapabilityPopulationMembership,
   refreshCapabilityEstateFromEcc,
@@ -365,22 +366,35 @@ function optionalIsoDate(formData: FormData, key: string): string | undefined {
 }
 
 export async function registerPersonalAIConnectionAction(formData: FormData) {
-  await registerPersonalAIConnection({
+  const secretRefRaw = formData.get('secretRefId');
+  const apiKeyRaw = formData.get('apiKey');
+  const input: { connectionFamilyId: string; secretRefId?: string; apiKey?: string } = {
     connectionFamilyId: required(formData, 'connectionFamilyId'),
-  });
+  };
+  if (typeof secretRefRaw === 'string' && secretRefRaw.trim() !== '') input.secretRefId = secretRefRaw.trim();
+  if (typeof apiKeyRaw === 'string' && apiKeyRaw.trim() !== '') input.apiKey = apiKeyRaw.trim();
+  if (input.secretRefId && input.apiKey) throw new Error('Choose either a managed API key or an external secret reference');
+  await registerPersonalAIConnection(input);
   revalidatePath('/ai-connections');
 }
 
 export async function registerOrganisationAIConnectionAction(formData: FormData) {
   const secretRefRaw = formData.get('secretRefId');
-  const input: { connectionFamilyId: string; secretRefId?: string } = {
+  const apiKeyRaw = formData.get('apiKey');
+  const input: { connectionFamilyId: string; secretRefId?: string; apiKey?: string } = {
     connectionFamilyId: required(formData, 'connectionFamilyId'),
   };
-  if (typeof secretRefRaw === 'string' && secretRefRaw.trim() !== '') {
-    input.secretRefId = secretRefRaw.trim();
-  }
+  if (typeof secretRefRaw === 'string' && secretRefRaw.trim() !== '') input.secretRefId = secretRefRaw.trim();
+  if (typeof apiKeyRaw === 'string' && apiKeyRaw.trim() !== '') input.apiKey = apiKeyRaw.trim();
+  if (input.secretRefId && input.apiKey) throw new Error('Choose either a managed API key or an external secret reference');
   await registerOrganisationAIConnection(input);
   revalidatePath('/ai-connections');
+}
+
+export async function discoverAIConnectionModelsAction(formData: FormData) {
+  await discoverAIConnectionModels(required(formData, 'connectionId'));
+  revalidatePath('/ai-connections');
+  revalidatePath('/admin/capabilities');
 }
 
 export async function revokeAIConnectionAction(formData: FormData) {
