@@ -1,4 +1,4 @@
-﻿import { randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { DomainValidationError, requireNonBlank } from './validation.js';
 
 export const AUDIT_ACTOR_TYPES = ['user', 'agent', 'system'] as const;

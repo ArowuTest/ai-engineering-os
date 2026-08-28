@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { AIConnectionRecord } from '@engineering-os/domain';
 import type { AIConnectionModelRouteRecord, AIConnectionRepository } from '@engineering-os/database';
 import { createConnectionFamilyPolicyRegistry } from '../src/ai-connection-policy.js';

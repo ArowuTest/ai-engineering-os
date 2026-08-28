@@ -1,15 +1,29 @@
 # AI Product & Engineering Operating System
 ## Technical Architecture & Detailed Module Specification
 
-**Document version:** 1.6
+**Document version:** 1.7
 **Status:** Approved technical baseline for V1 planning
-**Date:** 17 August 2026
+**Date:** 20 August 2026
 **Parent:** `docs/product/AI-PRODUCT-ENGINEERING-OS-SRS.md`
 **Execution design:** `docs/superpowers/specs/2026-08-11-extensible-ai-execution-routing-and-shared-entitlements-design.md`
 **ECC-native capability design:** `docs/superpowers/specs/2026-08-12-ecc-native-capability-productisation-design.md`
 **Collaborative memory design:** `docs/superpowers/specs/2026-08-16-collaborative-memory-parallel-session-design.md`
 
 ## 0. Change Record
+
+### Version 1.7
+
+Version 1.7 formalises the extensibility/commercialisation foundation while preserving AI Engineering OS as the flagship Engineering environment.
+
+- Engineering-specific Git/worktree/TDD/CI/code/deployment semantics remain first-class and are not genericised to create future domains.
+- Future Domain Packs/extensions are additive, versioned and governed by the same Capability Estate authority chain as native capabilities.
+- The execution tuple independently resolves Agent, Model/Route, Harness, Connection/Credential Owner, Runner, Environment, Skills/Tools, Operation Grants and Entitlement/Budget.
+- Existing AI Connections remain the credential-ownership foundation; execution attribution is extended rather than introducing parallel billing/credential subsystems.
+- Control/state plane authority is separated from replaceable execution-plane resources, enabling Local today and OpenSandbox/BYOC/managed providers later.
+- Local is the implemented/default ExecutionEnvironmentProvider; the concrete OpenSandbox provider adapter/POC remains pending.
+- Organisation remains the current tenant/security boundary; white-label variation is configuration/policy driven and customer source forks are not the strategy.
+- Task-9 acceptance reconciliation applies A/B/C timing classification in addition to implementation status so only expensive-to-retrofit foundation gaps are implemented now.
+- The richer first-party AIOS Native Harness remains roadmap/incomplete; existing orchestration/runner/environment/harness abstraction plus Codex/Claude Code/Antigravity adapters must not be mistaken for its completion.
 
 ### Version 1.6
 
@@ -38,7 +52,7 @@ Version 1.5 makes Collaborative Memory and parallel engineering-session continui
 
 Version 1.4 records the approved ECC-native productisation architecture.
 
-- AI Engineering OS is the enhanced, privately branded and productised evolution of the inherited ECC repository, not a separate application that later imports ECC as an external capability system.
+- AI Engineering OS is a separate product platform that evolved from useful ECC capabilities, patterns and engineering assets. ECC is a selectively reviewed upstream capability source, not the canonical AIOS product state.
 - Existing ECC agents, skills, commands, workflows, Continuous Learning v2.1, Unified Memory, MCP definitions, evals, verification, security and autonomous-engineering patterns remain native implementation assets unless deliberately superseded or excluded.
 - The default is reuse before rebuild, preserve before replace and generalise before discard.
 - `platform/` adds SaaS tenancy, RBAC, durable canonical state, AI connection/entitlement governance, routing, audit, budgets and UI around the inherited engineering estate; it does not duplicate that estate.
@@ -125,14 +139,12 @@ The platform owns durable workflow state. Models, harnesses, agents, connections
 ### ADR-001 — Separate Web Product
 ECC is an engineering substrate, not the Product Owner interface. The user works in a dedicated web application.
 
-### ADR-002 — Independent Private ECC Derivative
-The project does not use GitHub's public-fork mechanism. The private repository contains the ECC baseline plus proprietary platform code.
+### ADR-002 - Independent AIOS Product with ECC Tracking Branches
+AI Engineering OS is its own product repository and does not use GitHub's public-fork mechanism. `main` is the AIOS product line. Seeded/tracking ECC branches retain comparison and provenance state so upstream ECC updates can be reviewed and selectively incorporated without making ECC canonical to AIOS.
 
-### ADR-003 — Exact Upstream Provenance
-The repository records the accepted ECC source commit, import date and later accepted update commits in `UPSTREAM.md`.
+### ADR-003 - Exact ECC Upstream Provenance`r`nThe repository records the accepted ECC seed/baseline, tracking-branch state, upstream source commit and later selectively accepted update commits. Repository/runtime observations override stale provenance prose.
 
-### ADR-004 — Controlled Upstream Updates
-No upstream release is blindly merged into private `main`. Updates are diffed, classified, scanned, tested and reviewed on a dedicated branch.
+### ADR-004 - Controlled ECC Upstream Updates`r`nNo upstream ECC release is blindly merged into AIOS `main`. Updates are fetched to the read-only/tracking path, diffed, classified, scanned, tested and reviewed before selected changes are deliberately integrated into the AIOS product line.
 
 ### ADR-005 — Isolate Proprietary Extensions
 New product code should live primarily under `platform/`, `extensions/` and `bridge/`. Direct changes to ECC core require explicit justification.
@@ -615,7 +627,6 @@ The approved execution design is delivered in bounded, independently testable sl
 
 Each later slice builds on the same execution-route contracts rather than introducing a parallel provider-specific architecture.
 
-
 ## 27. Collaborative Memory and Parallel Session Architecture
 
 The detailed contract is defined in `docs/superpowers/specs/2026-08-16-collaborative-memory-parallel-session-design.md`.
@@ -658,3 +669,154 @@ The web Studio composer accepts text plus governed media references. Voice/micro
 ### 27.7 Transactionality
 
 Material memory/share/promotion/handoff mutations that require audit use the same PostgreSQL unit-of-work rule as other authority changes. If persistence or mandatory audit fails, the mutation rolls back. Local materialisation failure must not corrupt platform memory authority.
+
+## 28. Extensibility and Commercial Architecture Foundation
+
+The authoritative current-build addendum is `docs/product/AI-ENGINEERING-OS-EXTENSIBILITY-COMMERCIALISATION-FOUNDATION.md`. This section translates it into technical constraints without creating a second product programme.
+
+### 28.1 Domain layering
+
+```text
+Reusable platform/control primitives
+          ↓
+Versioned, capability-governed extension boundary
+          ↓
+AI Engineering OS domain implementation
+          ↓
+Git / worktrees / TDD / CI / code intelligence / exact-source / deployment
+```
+
+Future Domain Packs are additive modules. Engineering remains the reference and deepest implementation and is not reduced to generic configuration.
+
+A minimal future `DomainPackDescriptor` contract may describe stable ID/version/publisher, contributed capabilities, agent roles, workflows/gates, artifact/evidence types, review policy, tool requirements, execution requirements, schemas and bounded UI contributions. The live Task-9 reconciliation determines the smallest safe seam; it shall not pre-build a marketplace or second domain.
+
+### 28.2 Extension authority
+
+All extensions obey the same platform authority model. Discovery/installation is never execution authority.
+The governing progression is conceptually:
+
+```text
+discovered/installed
+→ governance approval/trial state
+→ tenant/platform entitlement and release
+→ user/project/population eligibility
+→ live technical eligibility
+→ operation authority
+→ environment eligibility
+→ executable
+```
+
+No Domain Pack, provider, harness, environment, connector or configuration extension may redefine canonical platform identity, tenancy, audit, credential ownership, entitlement, evidence/provenance or state semantics.
+
+### 28.3 Independently composable execution tuple
+
+The orchestrator resolves an execution tuple only after independent policy checks:
+
+```text
+Agent
++ Model / exact Route
++ Harness
++ Connection / Credential Owner
++ Runner
++ Environment
++ Skills / Tools
++ Operation Grants
++ Entitlement / Budget
+```
+
+One dimension never silently grants another. Explicit selection is exact-or-fail-closed; `Auto` is the policy-ranked mode.
+### 28.4 Credential ownership and execution attribution
+
+Existing AI Connections remain the credential/entitlement ownership boundary. Extend their safe ownership and secret-reference semantics rather than introducing a parallel credential store.
+
+The platform stores credential ownership/provider/policy references; raw tokens, refresh material and provider sessions remain in approved secret/runner boundaries.
+
+Common execution evidence must be able to identify, where applicable, requester, organisation/project/task/session, agent/capability, model/exact route, harness, connection/credential owner, runner, environment, entitlement/budget, usage class/units, known cost reference and outcome/checkpoint evidence.
+
+This attribution is platform evidence, not a requirement to implement billing or FinOps UI now.
+
+### 28.5 Control plane versus execution plane
+
+```text
+CONTROL / STATE PLANE
+identity + organisation/project authority
+capability estate + policy + entitlements
+projects + orchestration + memory
+councils + evidence + audit
+Studio/Admin + usage attribution
+canonical durable state
+          ↓ authorised execution
+EXECUTION PLANE
+models + harnesses + runners
+sandboxes/environments + builds/tests
+browsers + GPU/CPU/specialist compute
+```
+
+Execution resources are replaceable and may be platform-managed, customer-owned, BYOK/BYOC, dedicated, private or hybrid. They never become an alternate canonical project authority.
+### 28.6 Environment provider status
+
+`ExecutionEnvironmentProvider` and the secure Local provider are implemented/accepted. Local is the current default.
+
+A concrete production-grade `OpenSandboxProvider` is not yet an accepted implementation. OpenSandbox remains the approved first additional managed-provider/POC. Future customer AWS/Azure/GCP, Kubernetes, private-cloud, sovereign/on-prem or other providers join through the same environment contract and governance.
+
+Harness answers HOW; Environment answers WHERE. Neither implies the other.
+
+### 28.7 Native harness status
+
+AIOS owns the current orchestration, runner, environment and harness-abstraction substrate and governed Codex/Claude Code/Antigravity adapters. The richer first-party AIOS Native Harness is an incomplete roadmap capability and requires its own TDD/gate/council acceptance before being represented as complete.
+
+### 28.8 Tenancy and white-label boundary
+
+Organisation remains the current security/commercial tenant boundary. A future enterprise-account parent above multiple organisations is additive and is not justified in the current build without a concrete requirement.
+
+White-label variation uses one codebase plus configuration, policy, entitlements, deployment profile and branding. Customer-specific product branches are not an acceptable architecture.
+
+### 28.9 Task-9 reconciliation discipline
+
+Each extension requirement receives both implementation status and timing decision: A = already satisfied/prove; B = foundational change now; C = explicit defer. B requires evidence that delay causes breaking migration, authority/security retrofit, irrecoverable attribution/evidence loss, customer forks or major foundational restructuring.
+
+### 28.10 Provider-neutral AI Connection and model-route foundation
+
+OpenRouter is a provider implementation/reference, not an architectural dependency. AI Connections remain the durable credential/entitlement boundary and ModelGateway routes remain the executable model boundary, joined by a provider-neutral connection adapter seam.
+
+```text
+AI Connection owner (platform / organisation / team / user)
+        ↓ secret/reference authority
+Provider adapter / protocol family
+        ↓ validate + discover/reconcile + capability probe
+Connection-scoped candidate model routes
+        ↓ Capability Estate governance/release/eligibility
+Eligible exact route
+        ↓ ModelGateway execution
+```
+
+A concrete route identity must distinguish the same logical model delivered through different providers or connections because credential ownership, price, latency, availability, data policy and capability support may differ. Provider/model alone is therefore insufficient execution identity; the route/evidence envelope preserves connection reference/owner and provider provenance.
+
+Adapter families may include native-provider adapters, multi-model aggregators such as OpenRouter, OpenAI-compatible endpoints, cloud-provider gateways and private/enterprise model gateways. Task 9 requires the generic seam and a proven reference path, not bespoke integration with every provider. Discovery never grants execution authority, and capability claims must be independently represented/verified rather than assumed from protocol compatibility.
+
+### 28.11 Ordinary-user-first Studio information architecture
+
+The Product Studio defaults to a familiar conversation-first experience. Ordinary users can create a project, describe the goal, attach/upload supported context and work with an `Auto` Product Partner without understanding provider routes, harnesses, environments, MCP internals or credential ownership.
+
+Advanced execution dimensions remain available through progressive disclosure. A normal composer should expose only the controls necessary for the current task; detailed Agent, Model, Provider/Connection, Harness, Environment, Skills, MCPs, Connectors, runner and policy configuration belongs in advanced run settings or dedicated Project Capabilities/Settings surfaces.
+
+Backend capability completeness is not equivalent to UX completeness. Task-9 acceptance must prove that Skills, MCPs, connectors, agents, model connections and other governed capabilities are discoverable and understandable without forcing infrastructure vocabulary into the ordinary-user path.
+### 28.12 Context trust and source-of-truth arbitration
+
+AIOS distinguishes the trust/provenance of context from its semantic relevance. Supported trust classes include canonical, authoritative external, directly observed, derived, user asserted, agent generated, historical and untrusted. Historical memory, agent-generated prose, repository documentation, fetched text and external documents are context, not proof of current runtime/repository/database/CI/deployment state merely because they exist.
+
+Current-state decisions prefer fresh direct deterministic evidence from the appropriate authority surface. Context is non-instruction-bearing by default. Only explicit platform/user authority may become instruction-bearing; external/tool/repository/memory context cannot promote itself into platform instructions.
+
+### 28.13 Runtime capability manifests
+
+Runner/harness/environment capability declaration and observed runtime availability are separate facts. A `RuntimeCapabilityManifest` may report capability state as `declared`, `available`, `unavailable` or `unknown`, with bounded safe provenance/reason metadata. A runner advertising `browser` or `git` therefore does not prove the capability is currently executable until a direct runtime/environment observation establishes availability.
+
+The authenticated runner control plane exposes a tenant-scoped capability manifest without returning runner credentials. Personal runners remain visible only to their owner; organisation runners obey existing organisation membership and trust/revocation boundaries.
+
+### 28.14 Trusted evidence envelope and structured continuation
+
+AIOS defines a generic `EvidenceEnvelope` over existing audit/review/dispatch stores rather than creating a second evidence database. The envelope normalises evidence kind/status/source, context trust/provenance, organisation/project/task/session/subject references and applicable execution attribution such as requester, agent/capability, provider/model/exact route, AI Connection/credential owner, harness, runner, environment, entitlement/budget references, usage, cost type/reference and payload digest.
+
+Attribution is truthful-by-construction: dimensions not actually resolved by an execution path remain absent rather than being fabricated. Evidence summaries/references reject credential-like material and evidence context is never instruction-bearing. Product Partner assistant execution audit now persists this envelope alongside legacy metadata for compatibility.
+
+Existing `AgentHandoff` remains the continuation primitive and now carries structured goal, decisions, pending questions, next actions, evidence references, blockers and source branch/commit metadata. AIOS does not add a parallel V2B-style Mission hierarchy because current Project/Workstream/Task/EngineeringSession/Dispatch and ReviewRun lifecycles already own orchestration state; a future Mission/Objective entity would require a distinct product need rather than duplicating those hierarchies.

@@ -1,4 +1,4 @@
-﻿import type { DatabaseQueryable } from './queryable.js';
+import type { DatabaseQueryable } from './queryable.js';
 
 export interface PlatformMembershipRecord {
   userId: string;

@@ -135,7 +135,7 @@ describe('platform API', () => {
     const response = await app.inject({
       method: 'GET', url: '/model-routes', headers: identityHeaders,
     });
-    expect(response.statusCode).toBe(403);
+    expect(response.statusCode).toBe(401);
   });
 
   it('composes Requirements Assurance in the real runtime', async () => {

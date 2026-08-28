@@ -1,4 +1,4 @@
-﻿import type { Pool } from 'pg';
+import type { Pool } from 'pg';
 import { AIConnectionRepository } from './ai-connection-repository.js';
 import { AIConnectionSecretRepository } from './ai-connection-secret-repository.js';
 import { AssuranceRepository } from './assurance-repository.js';

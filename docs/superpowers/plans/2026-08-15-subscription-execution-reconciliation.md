@@ -216,14 +216,13 @@
 - Consumes: inherited ECC capability inventory, provider/model discovery/configured routes, calibration evidence, project RBAC, AI connection eligibility, runner/environment availability, Collaborative Memory/context policy and object-storage artefact authority.
 - Preserves: provider/model/route/harness/agent/skill/tool/connection/runner dimensions remain independent. Release or selection in one dimension never creates authority in another.
 
-- [ ] **Step 1: RED — capability estate and release policy.** Prove raw OpenRouter/model discovery and inherited ECC harness/agent/skill/MCP discovery are Admin-visible inventory only; disabled/unreleased capabilities are never user-selectable; trial/calibration state is explicit; release is scoped and audited; `Auto` resolves only independently eligible approved/released candidates.
-- [ ] **Step 2: GREEN — minimal governed catalogue persistence/API.** Implement model + harness + agent/capability catalogue/release/eligibility contracts while preserving discovery, maturity, release, execution verification, operation authority, sharing/persistence and environment eligibility as separate states.
-- [ ] **Step 3: RED — Studio interaction contract.** Prove the normal composer supports text, microphone/voice instruction, file/document upload, images/screenshots and an extensible video/screen-recording ingestion boundary; `Agent: Auto` is default; only Admin-released/project-eligible specialists are selectable; agent choice does not silently change model or harness.
-- [ ] **Step 4: GREEN — governed interaction artefacts.** Attachments/captured media become project/context artefacts with digest/provenance, creator, tenant/project scope, media type, permissions/visibility, retention/audit metadata and bounded context materialisation. Large bodies remain in approved object storage.
-- [ ] **Step 5: RED/GREEN — Admin + user UI.** Admin sees the broad inherited/discovered capability estate and can release subsets by supported population/scope. Studio users see `Agent: Auto` plus eligible specialists (Principal/Lead, Architecture, Backend, Frontend, Database, Security, QA, DevOps where released), and only eligible model/harness choices. Voice input feeds the normal Studio turn flow; persistent real-time voice remains a later extension behind the same authority/state boundary.
+- [x] **Step 1: RED — capability estate and release policy.** Prove raw OpenRouter/model discovery and inherited ECC harness/agent/skill/MCP discovery are Admin-visible inventory only; disabled/unreleased capabilities are never user-selectable; trial/calibration state is explicit; release is scoped and audited; `Auto` resolves only independently eligible approved/released candidates.
+- [x] **Step 2: GREEN — minimal governed catalogue persistence/API.** Implement model + harness + agent/capability catalogue/release/eligibility contracts while preserving discovery, maturity, release, execution verification, operation authority, sharing/persistence and environment eligibility as separate states.
+- [x] **Step 3: RED — Studio interaction contract.** Prove the normal composer supports text, microphone/voice instruction, file/document upload, images/screenshots and an extensible video/screen-recording ingestion boundary; `Agent: Auto` is default; only Admin-released/project-eligible specialists are selectable; agent choice does not silently change model or harness.
+- [x] **Step 4: GREEN — governed interaction artefacts.** Attachments/captured media become project/context artefacts with digest/provenance, creator, tenant/project scope, media type, permissions/visibility, retention/audit metadata and bounded context materialisation. Large bodies remain in approved object storage.
+- [x] **Step 5: RED/GREEN — Admin + user UI.** Admin sees the broad inherited/discovered capability estate and can release subsets by supported population/scope. Studio users see `Agent: Auto` plus eligible specialists (Principal/Lead, Architecture, Backend, Frontend, Database, Security, QA, DevOps where released), and only eligible model/harness choices. Voice input feeds the normal Studio turn flow; persistent real-time voice remains a later extension behind the same authority/state boundary.
 - [ ] **Step 6: Verify the substantial Task-9 slice.** Focused API/domain/database/web tests, typecheck, production build and regression proofs that catalogue discovery/release/attachment ingestion never creates execution authority or exposes provider/local auth secrets.
 - [ ] **Step 7: Freeze, full gate, blind council, adjudicate/remediate, then continue.** Do not stop at the first UI/API increment; review the coherent capability-estate + Studio boundary as one substantial engineering slice.
-
 
 ### Task 10: Whole-slice verification, review, merge, and remote proof
 
@@ -246,3 +245,34 @@
 - Authority: no task recreates canonical runner identity, migration 007, runner auth, or connection-pool authority.
 - Placeholder scan: clean; every implementation action is tied to a concrete task, file set, and verification command.
 - Type consistency: harness adapters consume the environment boundary; runner dispatch consumes canonical domain + signed protocol; council consumes governed eligible model routes.
+
+## 20 August 2026 — Task-9 extensibility/commercialisation acceptance addendum
+
+Task 9 now also consumes:
+
+- `docs/product/AI-ENGINEERING-OS-EXTENSIBILITY-COMMERCIALISATION-FOUNDATION.md`;
+- `docs/superpowers/specs/2026-08-20-extensibility-commercialisation-foundation-design.md`;
+- SRS v1.7 `EXT-FR-001` through `EXT-FR-020`;
+- Technical Architecture v1.7 section 28, including provider-neutral AI Connections/model routes and ordinary-user-first Studio UX.
+
+This does **not** interrupt the current Task-9 continuous engineering loop and does not authorise implementation of another domain, full billing/FinOps, white-label administration, bespoke integration with every model provider, a full BYOC/provider marketplace or the OpenSandbox provider POC. It **does** require the provider-neutral AI Connection adapter/discovery/connection-scoped-route foundation and the ordinary-user UX acceptance seam before Task-9 acceptance.
+
+### Newly explicit Task-9 pending B work
+
+- [x] Define/test a provider-neutral `AIConnectionProviderAdapter`-style boundary over the existing AI Connection/secret-reference authority rather than centring OpenRouter.
+- [x] Make model-route identity/reconciliation connection-scoped so the same model through different providers/connections remains distinct for governance, usage, cost and audit.
+- [x] Add/test model discovery or explicit catalogue reconciliation behind the adapter seam, including capability/availability verification and discovery-without-release semantics.
+- [x] Prove at least one reference/provider-neutral path plus generic OpenAI-compatible/private-gateway extensibility without building every provider adapter.
+- [x] Preserve exact explicit provider/model/connection selection and fail closed unless fallback was explicitly authorised.
+- [x] Reconcile execution evidence/usage attribution so provider + model + exact route + connection owner/reference survive durably.
+- [x] Complete the ordinary-user UX convergence: conversation-first Studio/project setup, sensible `Auto` defaults, progressive disclosure of Provider/Connection/Harness/Environment and clear project surfaces for Agents, Skills, MCPs and Connectors.
+- [ ] Treat functional-but-technical/raw Admin/Studio screens as pending productisation where ordinary users would need infrastructure vocabulary to complete normal tasks.
+
+Before Task-9 acceptance, extend the mandatory requirement-to-code reconciliation so every new extension requirement records:
+
+1. implementation status: proven / under-tested / partial / missing / deferred / superseded;
+2. timing: A = already satisfied/prove, B = foundational change now, C = explicitly deferred;
+3. code/evidence references supporting the classification;
+4. for every B item, the concrete retrofit/security/data-loss reason it cannot safely remain C.
+
+Only justified B items enter RED→GREEN implementation before the Task-9 full gate. A items are proven/documented; C items are explicitly deferred.

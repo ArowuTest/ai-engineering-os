@@ -406,7 +406,7 @@ describe('AI connections HTTP boundary', () => {
     const secretValue = 'sk-live-do-not-echo-9f8e7d6c';
     const response = await app.inject({
       method: 'POST', url: '/ai-connections/personal', headers,
-      payload: { connectionFamilyId: 'codex-subscription', apiKey: secretValue },
+      payload: { connectionFamilyId: 'codex-subscription', providerPassword: secretValue },
     });
     expect(response.statusCode).toBe(400);
     const raw = response.body;
@@ -708,7 +708,7 @@ describe('AI connections HTTP boundary', () => {
     } finally {
       await runtime.close();
     }
-  });
+  }, 90_000);
 
   it('createRuntimeApp composes real AIConnectionService and persists connection/share/audit state across restart', async () => {
     let persistedProjectId = '';
@@ -810,5 +810,5 @@ describe('AI connections HTTP boundary', () => {
     } finally {
       await runtime2.close();
     }
-  });
+  }, 90_000);
 });

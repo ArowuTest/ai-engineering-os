@@ -371,3 +371,165 @@ The normalized original findings were independently adjudicated with GPT-5.5 bef
 **Fresh deterministic re-gate on the remediation working source:** 102/102 focused remediation tests; 33/33 static; 321/321 unit; 319/319 PostgreSQL integration across 38 files; root and web TypeScript PASS; Next.js 16.3/Turbopack production build PASS; production dependency audit 0 vulnerabilities; derivative catalogue 67 agents / 94 commands / 284 skills matches documentation; command registry PASS; Harness Adapter Compliance 11/11; Harness Audit 80/80 with 0 failures; Unicode/path/install/IOC validators and `git diff --check` PASS. The inherited ECC memory regression bundle has five Windows-host setup failures caused exclusively by `fs.symlinkSync` returning `EPERM`; those are recorded as non-gating host-capability evidence, not hidden or reported green. Platform ECC adapter/materialisation tests are GREEN.
 
 **Immediate next action:** update/freeze the authoritative docs, commit the known remediation source, construct a fresh packet from that exact new SHA and run the blind fleet (Grok 4.6 specialist/general, DeepSeek V4 Pro, GLM 5.2, Gemini 3.7 Flash; GPT-5.5 only for material disputes). Task 8 remains unaccepted until that council is normalized/adjudicated and clear. Once accepted, immediately start Task 9: governed model/harness/agent/skill/MCP estate, Admin release/user eligibility, `Agent: Auto` plus specialist selection, and Studio text/voice/file/image/extensible-video interaction with governed artefact provenance/permissions.
+
+## 12. Task 9 live continuation and v1.7 extensibility foundation — 20 August 2026
+
+Task 8 is accepted and backed up on GitHub `main` at `7340f136a770f6d8441854dc4b9209c5336e354f`. The authoritative active worktree is `.worktrees/subscription-execution-reconciled` on `feature/subscription-execution-reconciled`. Task-9 source is deliberately dirty/uncommitted until its full reconciliation/gate/council acceptance completes.
+
+Task 9 = **Governed Capability Estate / Admin Release / User Eligibility + Studio Multimodal + Requirements Assurance + provider-neutral AI Connections + ordinary-user UX convergence**. Substantial focused-green WIP already includes Platform/Organisation/Project authority separation, capability catalogue/release/eligibility, team/cohort population membership, dynamic ECC discovery/refresh, governed AI fallback, exact model-route selection, independent Studio Agent/Harness/Model resolution, governed multimodal artifacts/context, Requirements Assurance, durable finding closure/readiness and the Platform Admin Capability Estate surface.
+
+Current evidence includes a serial Task-9 backend gate of **103/103 GREEN across 16 files**, Product Partner **17/17 GREEN**, ModelGateway **19/19 GREEN**, Assurance domain **9/9 GREEN**, Assurance repository **6/6 GREEN**, Requirements Assurance HTTP **4/4 GREEN**, Capability Estate Admin UI **4/4 GREEN**, and direct web TypeScript compilation GREEN. These are WIP evidence, not Task-9 acceptance.
+
+The exact current TDD boundary is the Product Studio Requirements Assurance finding-decision UI. `platform/test/studio-requirements-assurance-ui.test.mjs` currently has the established three existing UI behaviours green and the new Product-Owner closure-control behaviour RED until `closeRequirementsAssuranceFinding()` → server action → Studio reason/resolve/dismiss controls are wired. Resume there before unrelated source edits, then continue the remaining Task-9 B work below.
+
+New authoritative current-build documents are:
+- `docs/product/AI-ENGINEERING-OS-EXTENSIBILITY-COMMERCIALISATION-FOUNDATION.md`;
+- SRS v1.7, especially `EXT-FR-001..020`;
+- Technical Architecture v1.7 section 28, especially 28.10 provider-neutral AI Connections and 28.11 ordinary-user-first Studio;
+- `docs/superpowers/specs/2026-08-20-extensibility-commercialisation-foundation-design.md`;
+- Task-9 plan/addendum in `docs/superpowers/plans/2026-08-15-subscription-execution-reconciliation.md`;
+- provider-neutral connection/model discovery implementation plan in `docs/superpowers/plans/2026-08-20-provider-neutral-ai-connections-model-discovery.md`.
+
+The newly approved provider requirement is a targeted Task-9 foundation, not a backend rewrite: OpenRouter is one provider family, not the architecture. The pending B seam is provider-neutral connection adapters + connection-scoped model discovery/route reconciliation + exact provider/model/connection identity/attribution. Bespoke integrations for every provider and a full provider marketplace remain deferred C work.
+
+The ordinary-user UX rule is now authoritative: Product Studio/project setup stays conversation-first and guided, with sensible `Auto` defaults. Provider/Connection, Harness, Environment and similar expert controls use progressive disclosure, while Agents, Skills, MCPs and Connectors remain discoverable in clear project capability surfaces. A functional raw API/form is not sufficient evidence of product completeness if an ordinary user must understand infrastructure vocabulary to perform normal work.
+
+These additions do not create a generic-platform detour. Engineering remains first-class; future Domain Packs are additive/versioned/capability-governed; AI Connections remain the ownership foundation; execution attribution is preserved without building FinOps; control/state and execution planes remain separate; Organisation remains the current tenant boundary; white-label is configuration/policy rather than customer source forks.
+Sandbox/environment status: the generic `ExecutionEnvironmentProvider` and secure Local provider are implemented/accepted; Local is current/default. The concrete production `OpenSandboxProvider` adapter/POC remains pending. Future Local/OpenSandbox/BYOC/private providers remain interchangeable environment implementations subject to independent governance.
+
+Native Harness status: AIOS owns the orchestration/runner/environment/harness abstraction and has governed Codex/Claude Code/Antigravity adapters. The richer first-party **AIOS Native Harness** remains roadmap/incomplete until separately implemented, gated and accepted.
+
+Governed execution tuple remains independently composable: **Agent + Model/Route + Harness + Connection Ownership + Runner + Environment + Skills/Tools + Operation Grants + Entitlement/Budget**. `Auto` uses policy ranking; explicit selections are exact-or-fail-closed. Current Product Partner API turns may persist Agent/Harness as governed metadata because that path does not yet operationally consume them; Engineering execution will.
+
+Before Task-9 acceptance, every new extensibility/commercialisation requirement must receive normal implementation status plus A/B/C timing: A = already satisfied/prove; B = only expensive-to-retrofit foundational change now; C = explicitly deferred future capability. A B item must document the breaking-migration, security/authority, irrecoverable-attribution, customer-fork or major-boundary reason for implementing it now.
+
+Do **not** build Scientific Research/Legal/Strategy/Data domains, full billing/FinOps, white-label administration, bespoke adapters for every model provider, a full commercial BYOC/provider-marketplace administration suite, speculative parent-enterprise tenancy or a generic epistemic engine merely to satisfy v1.7. The provider-neutral AI Connection/discovery/connection-scoped-route foundation and ordinary-user UX convergence are explicitly required Task-9 B work. Continue the current coherent slice, then include these requirements in the mandatory full pre-acceptance reconciliation.
+## 25 August 2026 continuation update — Task 9 remains WIP
+
+Fresh continuation evidence after resuming from the 21 August handover:
+
+- Production AI Connection runtime composition is now wired in `platform/apps/api/src/server.ts` using shared `AIConnectionRepository`, `AIConnectionSecretRepository`, provider adapter registry, configured managed-secret protector/resolver, `ConnectionModelRouteCatalogue`, `CapabilityEstateService` and `AIConnectionService` dependencies. The preserved composition RED is now `3/3 GREEN`.
+- The strict root + web TypeScript gate is GREEN. Task-9 exact-optional/capability-shape errors uncovered during the composition gate were fixed without weakening runtime contracts.
+- Focused provider/BYOC/model-gateway hardening is `79/79 GREEN`, including exact connection-scoped model discovery/resolution, provider adapters, managed-secret crypto/runtime and ModelGateway regressions.
+- Platform Admin tenant-scoped eligibility authority was reproduced as a real HTTP-boundary defect (`403` for a platform-only admin), then fixed without weakening tenant authorization. Capability Estate authority regression is `11/11 GREEN`; ordinary members remain denied.
+- Requirements Readiness is now an executable project lifecycle gate. `PATCH /projects/:id/stage` requires Product Owner authority and fails closed for `engineering_planning` or later unless the exact current Product Requirements Assurance state is `ready`. No-review / blocked / insufficient evidence returns conflict; a ready exact-state review permits the transition and emits `project.stage.changed` audit evidence. Requirements Assurance HTTP regression is `5/5 GREEN`.
+
+These are intermediate Task-9 hardening results only. Task 9 is still intentionally uncommitted/unaccepted. Remaining major boundaries include durable execution provenance/evidence convergence, v1.7 Studio progressive-disclosure/connection-aware model UX, Domain Pack seam reconciliation, full deterministic gate, exact-source blind council/adjudication and acceptance.
+
+### 25 August 2026 — accepted feature-branch checkpoints
+
+To keep Task 9 recoverable and prevent the authoritative worktree from accumulating one oversized dirty boundary, verified coherent units are now checkpointed on `feature/subscription-execution-reconciled`; only whole-Task-9 acceptance remains eligible for promotion to `main`.
+
+- `269f8646` — `feat: checkpoint task 9 backend governance and byoc`
+  - Capability Estate / Platform Admin authority foundations
+  - multimodal Studio backend + semantic normalization/object storage
+  - Requirements Assurance + exact-state engineering readiness gate
+  - provider-neutral AI Connections/BYOC, connection-scoped routes and managed secrets
+  - Product Partner / dispatch provenance hardening
+- `411f91d1` — `feat: checkpoint task 9 studio and capability admin`
+  - conversation-first Studio progressive disclosure for Agent/Model/Harness
+  - exact route identity retained while routes are grouped as AIOS Managed / personal provider / organisation / team
+  - global Capability Admin tenant release/eligibility controls
+  - Platform Admin team/cohort population authority with explicit organisation targeting
+  - Requirements Assurance finding closure UI and multimodal composer web contracts
+
+Fresh evidence for the second checkpoint: Capability authority integration `12/12 GREEN`; Studio/Admin static contracts `17/17 GREEN`; Studio composer helper `6/6 GREEN`; root + web TypeScript PASS; Next production build PASS. Task 9 remains WIP/unaccepted.
+- `c7f0f75c` — `feat: add minimal domain pack descriptor seam`
+  - immutable declarative Domain Pack identity/version/publisher/source boundary
+  - bounded capability/agent/workflow/artifact/evidence/review/tool/execution/schema/UI contribution metadata
+  - exact-version registry that rejects silent replacement
+  - contributed capabilities project only into Capability Estate `discovered + unverified`; no release/eligibility/authority is implied
+  - full domain regression `156/156 GREEN`; TypeScript PASS
+
+## 26 August 2026 — Task-9 mandatory extensibility/commercialisation reconciliation
+
+This matrix is evidence-based against the current feature-branch source through `8390d5cd`. `A` means already satisfied/prove, `B` means expensive-to-retrofit foundation implemented now, and `C` means explicitly deferred product capability. A row may split A/B/C where the approved requirement intentionally spans present and future product scope.
+
+| Requirement | Status | Timing | Current evidence / boundary |
+| --- | --- | --- | --- |
+| Domain-neutral primitives | implemented + proven | A | Existing organisation/project/session/memory/evidence/orchestration primitives remain reusable underneath Engineering; no second domain model introduced. |
+| Domain Pack boundary | implemented + proven | B | `c7f0f75c`; immutable declarative `DomainPackDescriptor`/exact-version registry; contributions enter Capability Estate only as `discovered + unverified`. Full Domain Packs/marketplace remain C. |
+| Tenant isolation | implemented + proven | A | Organisation remains canonical tenant/security boundary; Capability Estate/AI Connection/Assurance/database tests preserve organisation/project scoping. Enterprise-parent tenancy is C. |
+| Entitlements | implemented for current connection entitlement ownership; broader budget product deferred | A / C | Approved shared-entitlement design defines an AI Connection as one authenticated entitlement/managed credential source. Personal/org ownership, project delegation and usage windows are durable. Full organisation/project/provider budget administration and billing/FinOps are C. |
+| Credential ownership | implemented + proven | B hardening | `269f8646`, `a1785e33`; personal/organisation connection ownership, JIT credential resolution, encrypted managed credentials and safe external-secret references. Raw credentials never enter normal read models. |
+| Execution provider extensibility | implemented + proven seam | A | Existing `ExecutionEnvironmentProvider` + secure Local provider and provider-neutral runner contracts. Concrete OpenSandbox adapter remains C/pending separate approval. |
+| Usage attribution | implemented for currently resolved dimensions; future dimensions not fabricated | B hardening / C product analytics | `269f8646`; Product Partner preserves provider/model/exact route/connection owner/usage/cost type; dispatch evidence preserves requester/project/task/connection/runner/route/harness/outcome. Environment/budget refs are recorded only when a future execution path actually resolves them. Full analytics/FinOps is C. |
+| White-label boundary | architecture satisfied; product administration deliberately deferred | A / C | One-codebase/configuration-policy rule is locked in SRS/architecture. White-label admin, custom domains, SAML/SCIM/reseller/billing catalogue are C. |
+| Control/execution separation | implemented + proven | A | Canonical state/policy/audit/memory remain platform-side; models/harnesses/runners/environments are replaceable execution resources. Local execution environment remains default. |
+| BYOC state ownership | implemented + proven | B | AI Connections own credential/provider/account state; connection-scoped discovered routes reconcile into Capability Estate and never become canonical project state. |
+| Epistemic/provenance extensibility | implemented stable provenance seam; generic epistemic engine deferred | A / C | Existing artifact, knowledge, assurance, review and execution evidence keep stable subject/source/reference provenance. Generic Claim/Epistemic reasoning system is C. |
+| Extension governance/security | implemented + proven | B | Capability Estate separates discovery/governance/verification/release/eligibility/technical authority; Domain Pack descriptors cannot grant tenant/credential/execution authority. |
+| Independent governed execution tuple | partial by path, intentionally truthful | A / B / future | Agent/Model/Harness are independently selectable; connection/route authority is exact; runner/environment/operations are separately governed for engineering dispatch. Product Partner API turns retain Agent/Harness as selection metadata because those dimensions are not operationally consumed there. Rich first-party AIOS Native Harness remains future work. |
+| Generic Assurance substrate | implemented + proven | B | `269f8646`; generic versioned Assurance run/finding/readiness persistence and service contracts. |
+| Product Requirements Assurance reviewer | implemented + proven | B | Independent Requirements Reviewer agent capability and `product_requirements_v1` profile; findings remain non-canonical evidence. |
+| Requirements Readiness exact-state gate | implemented + proven | B | `269f8646`; `engineering_planning` or later fails closed unless the exact current Requirements Assurance state is `ready`; stage transition is audited. |
+| Reviewer model independence/capability eligibility | implemented + proven | B | Requirements reviewer agent and model route resolve independently from Product Partner and must be governed/released/eligible. |
+| Assurance provenance / no silent canonical mutation | implemented + proven | B | Exact target digest, invalidation, reviewer route/agent provenance and separate finding closure; reviewer output never silently mutates Product Knowledge. |
+| Multi-provider BYOC/BYOM | foundation implemented + proven | B / C | `269f8646`, `a1785e33`; provider-neutral adapter + OpenAI-compatible/reference family, secure personal/org onboarding and discovery. Exhaustive native named-provider adapters/provider marketplace are C. |
+| Connection-scoped model catalogue | implemented + proven | B | Migration `016`, deterministic connection route identity, stale/unavailable reconciliation, exact Capability Estate `sourceRef`, project route catalogue. |
+| Exact provider/model/connection routing | implemented + proven | B | Explicit route is exact-or-fail-closed; scoped dynamic resolver is installed only after Capability Estate authorises the selected exact route; no global credential resolver. |
+| Managed encrypted credentials | implemented + proven | B | Migration `017`; AES-256-GCM managed-secret store, opaque `dbsecret:` refs, deployment master key outside PostgreSQL, JIT decrypt and revocation. |
+| Delegated execution authority | implemented + proven | A / prior foundation | Personal connection Do-Not-Share default, project `online_only`/`persistent` delegation, runner availability and provider/harness policy gates remain independently enforced. |
+| Usage/cost attribution | implemented for known current facts; comprehensive commercial costing deferred | B hardening / C | ModelGateway/Product Partner retain cost type and token usage plus exact route/connection provenance. Dispatch evidence retains governed execution identity. Price normalisation, invoices, cost centres and FinOps dashboards are C. |
+
+### Reconciliation decision
+
+No additional speculative billing/entitlement table is justified for Task 9. The approved 11-August shared-entitlement design explicitly defines an AI Connection as the current authenticated entitlement/managed credential source. A separate commercial budget object is not yet resolved by any current execution path, and existing append-only execution evidence can carry bounded metadata when such a policy exists later. Creating a billing/budget subsystem now would therefore be C work, not a justified B retrofit.
+
+The remaining Task-9 acceptance work is evidence/gating rather than a newly discovered foundational product subsystem: final documentation cleanup, accessibility/responsive/browser verification of the ordinary-user path, complete deterministic gate, exact-source fingerprint, blind council, adjudication/remediation, re-gate/re-review, then whole-Task-9 acceptance and promotion policy.
+
+### 26 August 2026 — AIOS-native V2B-derived hardening checkpoints
+
+The approved V2B review has now been selectively incorporated into AIOS without embedding V2B as a second platform layer:
+
+- `13e4743c` — `feat: add trusted context and runtime capability primitives`
+  - context trust classes and source-of-truth arbitration;
+  - `RuntimeCapabilityManifest` distinguishes declaration from observed availability;
+  - existing `AgentHandoff` extended with goal/decisions/pending questions/next actions/source revision;
+  - full domain regression `163/163 GREEN`, TypeScript PASS.
+- `126331fb` — `feat: add durable trusted execution evidence envelope`
+  - generic `EvidenceEnvelope` over existing persistence rather than a new evidence database;
+  - Product Partner audit persists trusted exact-route/connection/usage attribution;
+  - Product Partner `18/18 GREEN`, evidence-envelope `3/3 GREEN`, TypeScript PASS.
+- `6913fb11` — `feat: expose governed runner capability manifests`
+  - tenant/ownership-scoped `GET /ai-runners/:runnerId/capabilities`;
+  - declared runner capabilities exposed without runner credential material;
+  - runner HTTP regression `9/9 GREEN`, TypeScript PASS.
+
+Review Council sealing/lease/recovery mechanics were inspected and already satisfy the useful V2B patterns: SHA-256 source/evidence/packet seals, immutable run/assignment identity, collection leases, execution claims, stale recovery, durable reviewer state, adjudication and rechallenge are existing AIOS-native behavior. No duplicate council subsystem was added.
+
+A separate V2B-style `Mission` table was deliberately not introduced. AIOS already owns orchestration through Project/Workstream/Task/EngineeringSession/Dispatch plus ReviewRun lifecycles. The useful Mission semantics are carried through structured handoffs, acceptance/evidence and durable checkpoints; a new Mission/Objective entity requires a future distinct product need.
+
+The authoritative product relationship has also been corrected in the SRS/architecture: AI Engineering OS is a separate product platform that evolved from useful ECC capabilities and selectively incorporates approved ECC updates. `main` is the AIOS product line; `ecc-seed`/`ecc-upstream` and the read-only `upstream` remote exist for provenance/comparison and controlled selective adoption, not as canonical AIOS state.
+
+## 28 August 2026 — Task-9 pre-council deterministic gate checkpoint
+
+The authoritative feature branch remains `feature/subscription-execution-reconciled`. Accepted implementation checkpoints through `6913fb11` are preserved. The current reconciliation boundary adds only authoritative documentation updates, stale-test expectation corrections, race-safe Review Council test hardening, and Unicode BOM normalization; generated build/version output is excluded.
+
+Fresh deterministic evidence on the normalized current source:
+
+- static/contracts: `57/57 GREEN`;
+- non-DB/unit: `428/428 GREEN` across 53 files;
+- serialized PostgreSQL integration: `63/63 files GREEN`;
+- platform + web TypeScript: PASS;
+- Next.js 16.3/Turbopack production build: PASS;
+- `npm audit --audit-level=high`: 0 vulnerabilities;
+- root agent/hook/command/skill/install/rule/workflow-security validation: PASS;
+- ECC derivative catalogue and command registry checks: PASS;
+- Unicode safety, no-personal-path and supply-chain IOC scans: PASS;
+- source ESLint with generated `.next/**` excluded: PASS;
+- changed/new Task-9 Markdown documents: PASS;
+- SRS Markdown: PASS with only the document's pre-existing multi-H1/heading-increment conventions (`MD025`, `MD001`) excluded;
+- `git diff --check`: PASS before checkpoint staging.
+
+Gate findings remediated during this pass:
+
+- stale migration-order expectations were updated from the Task-8 chain through `012` to the accepted Task-9 chain through `017`;
+- the AI Connection HTTP security regression was corrected to reject a genuinely unsupported secret-shaped field now that `apiKey` is an approved write-only managed credential input;
+- Review Council stale-claim recovery test expiry was made race-safe without weakening the database claim invariant;
+- 12 leading UTF-8 BOM bytes rejected by repository Unicode policy were removed with no semantic source change;
+- repeated `resetDatabase()` timeouts/connection refusals were traced to the isolated AIOS Postgres test container and destructive schema-reset cost; affected files passed cleanly in isolation and the complete serial 63-file gate is green.
+
+The broad root `npm run lint` command is not used as Task-9 acceptance evidence because it traverses generated `platform/apps/web/.next/**`, nested `platform/node_modules/**`, and historical Markdown outside the changed Task-9 boundary. Its source-equivalent checks were run explicitly and are green as listed above.
+
+Next boundary: checkpoint-commit this exact accepted reconciliation source, seal the resulting commit/source fingerprint, run the blind Review Council on that exact source/evidence packet, independently adjudicate findings, reproduce/remediate any valid defects, re-gate changed source, and only then make the Task-9 acceptance/promotion decision.

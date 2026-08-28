@@ -1,4 +1,4 @@
-﻿import { randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { hashPassword } from '@engineering-os/domain';
 import { MembershipRepository, PlatformMembershipRepository, UserRepository } from '@engineering-os/database';

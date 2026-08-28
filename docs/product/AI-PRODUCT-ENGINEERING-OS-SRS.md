@@ -1,9 +1,9 @@
 # AI Product & Engineering Operating System
 ## Product Requirements & Software Requirements Specification
 
-**Document version:** 1.6
+**Document version:** 1.7
 **Status:** Approved baseline for V1 planning
-**Date:** 17 August 2026
+**Date:** 20 August 2026
 **Working name:** AI Engineering OS
 **Parent initiative:** Private AI-native product and software engineering platform
 **Execution design:** `docs/superpowers/specs/2026-08-11-extensible-ai-execution-routing-and-shared-entitlements-design.md`
@@ -11,6 +11,21 @@
 **Collaborative memory design:** `docs/superpowers/specs/2026-08-16-collaborative-memory-parallel-session-design.md`
 
 ## 0. Change record
+
+### Version 1.7
+
+This revision adopts the extensibility/commercialisation architectural foundation without changing AI Engineering OS from its flagship software-engineering mission.
+
+1. Engineering remains deeply specialised; reusable platform primitives sit underneath it rather than replacing Git/worktree/TDD/CI/deployment semantics.
+2. Future Domain Packs/extensions must be additive, versioned and governed through the Capability Estate; they cannot bypass canonical identity, tenancy, audit, entitlement, evidence or state semantics.
+3. The governed execution tuple explicitly preserves independent Agent, Model/Route, Harness, Connection/Credential Owner, Runner, Environment, Skills/Tools, Operation Grants and Entitlement/Budget dimensions.
+4. Existing AI Connections are the credential-ownership foundation; future BYOK/BYOC extends this boundary rather than creating a parallel credential subsystem.
+5. Material execution evidence must retain sufficient attribution for requester/project/capability/route/harness/runner/environment/credential-owner/entitlement/usage without requiring billing/FinOps UI now.
+6. Control/state plane and execution plane are formally separated. Local remains the implemented/default ExecutionEnvironmentProvider; the concrete OpenSandbox managed-provider adapter/POC remains pending.
+7. Organisation remains the current tenant/security boundary; future enterprise-parent tenancy and white-label configuration are additive and must not require customer-specific source forks.
+8. Task-9 acceptance reconciliation classifies each extensibility requirement by implementation status plus A (already satisfied), B (foundational change required now) or C (explicitly deferred).
+9. The richer first-party AIOS Native Harness remains roadmap/incomplete even though the AIOS orchestration/runner/environment/harness abstraction and Codex/Claude Code/Antigravity adapters exist.
+10. `docs/product/AI-ENGINEERING-OS-EXTENSIBILITY-COMMERCIALISATION-FOUNDATION.md` is authoritative for these current-build seams until a future full extension SRS elaborates them.
 
 ### Version 1.6
 
@@ -39,7 +54,7 @@ This revision makes Collaborative Memory and parallel engineering-session contin
 
 ### Version 1.4
 
-This revision makes explicit that AI Engineering OS is the enhanced, privately branded and productised evolution of the inherited ECC foundation rather than a separate platform that later imports ECC features.
+This revision makes explicit that AI Engineering OS is a separate product platform that evolved from useful capabilities, patterns and engineering assets available in ECC. AIOS selectively reuses, adapts or productises approved ECC capabilities through its own architecture and authority model; it is not ECC itself and does not treat ECC as its canonical product state.
 
 1. Existing ECC agents, skills, commands, workflows, continuous learning, unified memory, evals, verification, security patterns, autonomous loops and MCP definitions are native product capabilities and must be preserved unless deliberately superseded or excluded with recorded rationale.
 2. The engineering default is **reuse before rebuild; preserve before replace; generalise before discard**. Platform work productises and governs inherited capability instead of duplicating it.
@@ -83,9 +98,9 @@ This revision added the approved V1 authentication and collaboration requirement
 
 This revision incorporated the decisions made after the original v1.0 requirements discussion:
 
-1. The product will be based on an **independent private derivative of the official `affaan-m/ECC` repository**, not a GitHub public fork.
-2. The private repository will retain the exact ECC baseline commit and use the official ECC repository only as a **read-only upstream source for candidate updates**.
-3. ECC updates must pass an explicit update review gate before entering the private product.
+1. AI Engineering OS is an independent private platform repository, not a GitHub public fork of ECC.
+2. The AIOS repository retains seeded/tracking ECC branches plus the exact accepted ECC provenance needed to compare upstream changes without making ECC state canonical to AIOS.
+3. The official `affaan-m/ECC` repository is a **read-only upstream source for candidate updates**. ECC updates must pass explicit diff/classification/security/test/review gates before selected changes enter the AIOS product line.
 4. ECC's built-in skills form the trusted baseline; selected external skills discovered through OneSkill may be added only after security, provenance and compatibility review.
 5. The platform is **subscription-first, API-capable and provider-independent**. Existing supported subscription entitlements should be used where the provider officially permits programmatic agent execution; APIs are fallback/automation routes rather than the only route.
 6. The platform owns project state; AI sessions are replaceable workers.
@@ -258,22 +273,27 @@ Relevant ECC capabilities include:
 
 ECC agent definitions, skills and other inherited engineering subsystems are native reusable capabilities. The platform shall enumerate, govern and select approved inherited assets through stable product contracts rather than recreating them as hard-coded private duplicates. Before replacing a material ECC subsystem, the implementation decision must be recorded as reuse, adapt/generalise, supersede or exclude with rationale.
 
-## 4.2 Independent private derivative
-The project shall **not** use GitHub's public fork mechanism.
+## 4.2 Independent AIOS product with ECC tracking branches
+The project shall **not** use GitHub's public fork mechanism and shall not treat ECC as the canonical product branch.
 
 Instead:
 
 ```text
-PUBLIC SOURCE
-affaan-m/ECC
-      │
-      │ baseline import / update comparison
-      ▼
-PRIVATE PRODUCT
-ArowuTest/ai-engineering-os
+READ-ONLY UPSTREAM
+  affaan-m/ECC
+        |
+        | fetch / compare candidate updates
+        v
+AIOS ECC TRACKING BRANCHES
+  ecc-seed / ecc-upstream
+        |
+        | diff + classify + scan + test + review
+        v
+AIOS PRODUCT LINE
+  feature branches -> main
 ```
 
-The private repository contains our product and is accessible only to explicitly authorised GitHub users/integrations.
+The private AIOS repository contains the AIOS product. ECC tracking branches exist to preserve comparison/provenance and support deliberate selective adoption; they are not the product's canonical state. The repository is accessible only to explicitly authorised GitHub users/integrations.
 
 ## 4.3 Upstream provenance
 The repository must record:
@@ -1094,7 +1114,7 @@ V1 shall prove the Product Studio and model-independent project-memory concept w
 
 Required V1 outcomes:
 
-- private ECC derivative repository established;
+- independent AIOS product repository established with seeded/read-only ECC tracking branches for controlled upstream review;
 - upstream baseline/provenance recorded;
 - project creation;
 - Product Partner conversation abstraction;
@@ -1334,3 +1354,75 @@ The AI Product & Engineering Operating System is a **private, provider/model/har
 - The Product Owner works through conversations, documents, previews and approvals.
 
 **The platform owns state. Agents do work.**
+
+# 43. Extensibility & Commercialisation Foundation Requirements
+
+These are current-build foundation requirements only. The future full-scale extension SRS may elaborate commercial/domain products but must preserve this section's invariants and `docs/product/AI-ENGINEERING-OS-EXTENSIBILITY-COMMERCIALISATION-FOUNDATION.md` unless explicitly superseded.
+
+## EXT-FR-001 Engineering remains the flagship domain
+Software Engineering shall remain a dedicated, deeply opinionated operating environment. Engineering-specific Git, worktree, TDD, CI, code-analysis, exact-source, review, deployment and rollback semantics shall not be weakened merely to support other domains.
+
+## EXT-FR-002 Domain Pack extension contract
+The platform shall expose an additive, versioned extension boundary through which future Domain Packs may declare capabilities, agent roles, workflows/gates, artifact/evidence types, review policy, tools/connectors, schemas, execution requirements and bounded UI contributions without rebuilding platform identity, orchestration, memory, governance or audit.
+
+## EXT-FR-003 Capability-governed extensions
+A Domain Pack, harness, provider, execution environment, connector or other extension shall not become usable merely because it is installed/discovered. It must remain subject to the platform's discovery/governance/release/entitlement/eligibility/technical/operation/environment authority chain.
+
+## EXT-FR-004 Extension security invariants
+Extensions shall not redefine or bypass canonical platform identity, organisation/project tenancy, audit, credential ownership, entitlement, evidence/provenance, state ownership or operation-authority semantics.
+## EXT-FR-005 Independently governed execution tuple
+Material engineering execution shall resolve Agent, Model/Route, Harness, Connection/Credential Owner, Runner, Environment, Skills/Tools, Operation Grants and Entitlement/Budget as independently governed dimensions. No selection silently grants another dimension.
+
+## EXT-FR-006 Exact explicit selection
+`Auto` may rank independently eligible routes under policy. An explicit route/harness/agent/environment selection shall either resolve exactly as requested after eligibility checks or fail closed; it shall not silently fall back to Auto.
+
+## EXT-FR-007 Credential ownership
+Existing AI Connection/secret-reference architecture shall remain the basis for credential ownership. The architecture shall support platform-, organisation-, team-where-applicable-, and user-owned execution credentials/connections without creating a duplicate credential subsystem or exposing raw secrets.
+
+## EXT-FR-008 Execution attribution
+Material execution evidence shall be able to attribute requester, organisation/project/task/session, agent/capability, model/exact route, harness, connection/credential owner, runner, environment, entitlement/budget, usage class/units, cost reference where known and outcome/checkpoint/evidence references.
+
+## EXT-FR-009 Control-plane/execution-plane separation
+Canonical identity, policy, memory, governance, evidence, audit, entitlement, orchestration and state remain in the control/state plane. Model inference, harnesses, runners, sandboxes, builds/tests, browsers and specialist compute are replaceable execution-plane resources.
+
+## EXT-FR-010 Environment-provider extensibility
+The implemented/default Local `ExecutionEnvironmentProvider` shall remain one provider behind the environment contract. OpenSandbox and future BYOC/private/managed providers shall join through the same contract and independent governance rather than creating separate product-state semantics.
+## EXT-FR-011 Native AIOS Harness status
+The AIOS-owned orchestration/runner/environment/harness abstraction and governed Codex/Claude Code/Antigravity adapters are existing platform capability. The richer first-party AIOS Native Harness remains a separate incomplete roadmap capability until explicitly implemented, gated and accepted.
+
+## EXT-FR-012 Current tenant boundary
+`Organisation` remains the current security/commercial tenant boundary. A future enterprise/account parent above multiple organisations may be added additively when required; the current build shall not introduce a speculative duplicate tenancy model.
+
+## EXT-FR-013 White-label without forks
+Future product identity, branding/domain, authentication policy, Domain Pack enablement, capability entitlements, provider/execution policy, retention and notification branding shall be configuration/policy driven. Customer-specific product branches are prohibited as the white-label strategy.
+
+## EXT-FR-014 Evidence extensibility
+Current artifact/evidence/review/decision records shall preserve stable subject/reference/provenance semantics sufficient for a later Claim/Epistemic layer without requiring a generic epistemology subsystem in Task 9.
+
+## EXT-FR-015 A/B/C pre-acceptance classification
+Before Task 9 is accepted, every requirement in the current extensibility/commercialisation addendum shall be assigned both an implementation-status classification and a timing classification: A = already satisfied/prove; B = foundational change required now; C = explicitly deferred product capability.
+
+A B classification requires explicit justification that deferral would create a breaking schema/API migration, security/authority retrofit, irrecoverable attribution/evidence loss, customer-specific forks or major foundational restructuring. Otherwise the requirement remains A or C.
+
+## EXT-FR-016 Current-build non-goals
+Task 9 shall not build a Scientific Research/Legal/Strategy/Data domain, full billing/FinOps product, white-label administration suite, every possible named model-provider adapter, speculative enterprise-parent tenancy, reseller marketplace or generic epistemic reasoning engine merely to satisfy extensibility. Full commercial BYOC administration and provider-marketplace UX remain deferred; the provider-neutral connection/discovery/routing foundation defined below is required now.
+
+## EXT-FR-017 Provider-neutral AI Connection adapters
+AI Connections shall not encode OpenRouter, OpenAI or any other provider as the architectural centre. Task 9 shall establish a provider-neutral adapter/connection contract capable of authenticating or validating a connection, discovering or reconciling available models where supported, exposing verified route capabilities/availability and binding execution to the connection that supplies credentials. Native-provider, multi-model-provider, OpenAI-compatible and private/enterprise gateway implementations shall join through this contract rather than creating parallel connection or routing subsystems.
+
+## EXT-FR-018 Connection-scoped model routes and discovery
+A model available through different providers/connections shall be represented as distinct governed execution routes. Route identity/evidence shall preserve provider, model, connection reference/owner and verified capabilities. Dynamic provider model catalogues shall reconcile into connection-scoped candidate routes before Capability Estate governance/release/eligibility; discovery alone never grants execution authority. Task 9 must prove this foundation with at least one provider-neutral/reference path. Exhaustive named-provider integrations are deferred.
+
+## EXT-FR-019 BYOC/BYOM exactness and fallback
+Users and organisations may use platform-managed or approved user-/organisation-owned model connections. `Auto` may rank eligible routes across permitted connections under policy. An explicitly selected provider/model/connection route shall execute exactly or fail closed unless the user or governing policy has explicitly authorised fallback; no silent provider substitution is allowed.
+
+## EXT-FR-020 Ordinary-user-first Studio UX
+The default Product Studio and project onboarding shall be understandable to an ordinary non-expert user without requiring knowledge of model routes, harnesses, environments, MCP internals or credential ownership. Conversation, project goal and guided setup remain primary; Agent/Model may default to `Auto`, while Provider/Connection, Harness, Environment, Skills, MCPs, Connectors and other advanced controls are progressively disclosed. Skills/MCPs/connectors/agents/capabilities shall remain discoverable through clear project capability surfaces rather than being hidden backend-only features. Task 9 shall not be accepted merely because backend APIs/forms exist if the ordinary-user path is materially confusing or requires infrastructure vocabulary for normal use.
+## EXT-FR-021 Context trust and current-state evidence
+AIOS shall classify context provenance/trust independently from relevance. Canonical, authoritative-external and directly-observed evidence may prove current state when sourced from the appropriate authority surface; historical memory, agent-generated prose, repository documentation, fetched text, uploaded documents and other untrusted/derived context shall not prove current runtime/repository/database/CI/deployment state merely because they exist. Context is non-instruction-bearing by default, and external/tool/repository/memory content shall not self-promote into platform instructions.
+
+## EXT-FR-022 Generic durable evidence envelope
+AIOS shall provide a reusable evidence envelope over existing audit/review/dispatch persistence so material evidence can preserve kind/status/source, trust/provenance, subject references and all execution dimensions actually resolved by the producing path. Applicable attribution may include requester, agent/capability, provider/model/exact route, AI Connection/credential owner, harness, runner, environment, entitlement/budget references, usage, cost type/reference and checkpoint/payload digest. Unresolved dimensions shall remain absent rather than fabricated, and evidence metadata shall reject credential material.
+
+## EXT-FR-023 Runtime capability observation and structured handoff
+Declared runner/harness/environment capability shall remain distinct from observed runtime availability. Runtime capability manifests shall support at least `declared`, `available`, `unavailable` and `unknown` states and shall obey existing tenant/runner trust/credential-redaction boundaries. Existing AIOS handoff/session structures shall carry structured continuation metadata including goal, decisions, pending questions, next actions, evidence references, blockers and source revision. Task 9 shall not introduce a parallel Mission hierarchy unless a distinct orchestration requirement exists that Project/Workstream/Task/EngineeringSession/Dispatch cannot represent.

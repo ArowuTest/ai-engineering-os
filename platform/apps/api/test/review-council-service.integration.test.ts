@@ -342,8 +342,12 @@ describe('ReviewCouncilService blind collection', () => {
     await started; await new Promise((resolve)=>setTimeout(resolve,35));
     const beforeRecovery=await new ReviewCouncilRepository(pool).getRun('org-001',created.run.id);
     if (beforeRecovery?.status === 'collecting') {
-      await pool.query('UPDATE review_runs SET collection_claim_expires_at=$3 WHERE organisation_id=$1 AND id=$2',
-        ['org-001',created.run.id,new Date(Date.now()-1000)]);
+      await pool.query(
+        `UPDATE review_runs SET collection_claim_expires_at=$3
+         WHERE organisation_id=$1 AND id=$2 AND status='collecting'
+           AND collection_claim_token IS NOT NULL AND collection_claim_expires_at IS NOT NULL`,
+        ['org-001',created.run.id,new Date(Date.now()-1000)],
+      );
     }
     const recovered=await council.recoverExpiredCollectionClaim({organisationId:'org-001',projectId:project.id,
       actorUserId:userId,reviewRunId:created.run.id,observedAt:new Date()}).then((value)=>value,()=>false);

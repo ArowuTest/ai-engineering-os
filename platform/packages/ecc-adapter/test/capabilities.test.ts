@@ -1,4 +1,4 @@
-﻿import { readdir } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import * as adapter from '../src/index.js';

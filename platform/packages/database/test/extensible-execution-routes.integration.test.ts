@@ -83,6 +83,11 @@ describe('004_extensible_execution_routes migration', () => {
       '010_review_council.sql',
       '011_task8_review_hardening.sql',
       '012_task8_final_hardening.sql',
+      '013_governed_capability_estate.sql',
+      '014_studio_interaction_artifacts.sql',
+      '015_assurance.sql',
+      '016_ai_connection_model_routes.sql',
+      '017_ai_connection_secrets.sql',
     ]);
     expect(second).toEqual([]);
 

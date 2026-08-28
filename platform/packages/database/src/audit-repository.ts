@@ -1,4 +1,4 @@
-﻿import type { AuditEvent, PlatformAuditEvent } from '@engineering-os/domain';
+import type { AuditEvent, PlatformAuditEvent } from '@engineering-os/domain';
 import type { DatabaseQueryable } from './queryable.js';
 
 type PersistedAuditEvent = AuditEvent | PlatformAuditEvent;
