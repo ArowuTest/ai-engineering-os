@@ -533,3 +533,18 @@ Gate findings remediated during this pass:
 The broad root `npm run lint` command is not used as Task-9 acceptance evidence because it traverses generated `platform/apps/web/.next/**`, nested `platform/node_modules/**`, and historical Markdown outside the changed Task-9 boundary. Its source-equivalent checks were run explicitly and are green as listed above.
 
 Next boundary: checkpoint-commit this exact accepted reconciliation source, seal the resulting commit/source fingerprint, run the blind Review Council on that exact source/evidence packet, independently adjudicate findings, reproduce/remediate any valid defects, re-gate changed source, and only then make the Task-9 acceptance/promotion decision.
+
+## 29 August 2026 — FS V2B adaptation tranche started
+
+The revised FS V2B implementation was re-reviewed against AIOS checkpoint `978c838590b1ada358f4ecc56cd2ce0bc69506d5`. The adaptation plan is documented in `docs/superpowers/plans/2026-08-29-v2b-operational-continuity-hardening.md`. AIOS continues to adapt useful mechanics into existing Project/Task/EngineeringSession/Dispatch/Capability Estate/Review Council/Evidence architecture; FS V2B is not embedded as a second platform.
+
+P0.1–P0.3 implementation status:
+
+- Durable Engineering Recovery Checkpoint is implemented over existing session-private Collaborative Memory with typed schema `engineering_recovery_checkpoint_v1`; no new persistence subsystem or migration was introduced.
+- Portable Project Continuation Context is reconstructed from live Engineering Session state plus the latest stored recovery checkpoint. Live session state remains authority for current execution selection; stored source revision remains contextual and must be re-observed before use as current truth.
+- Runtime Capability Manifest now separates availability from health/retryability. Capability observations can carry `healthy`, `degraded`, `temporarily_unhealthy`, `unavailable`, or `unknown` health plus `retryable`, `non_retryable`, or `approval_required`, supported flag, safe reason code and evidence reference.
+- Runner declarations remain `declared` with health `unknown`; declaration does not prove current availability/health.
+
+Fresh focused evidence: Engineering Session integration `18/18 GREEN`, Runtime Capability Manifest `3/3 GREEN`, combined focused tranche `21/21 GREEN`, platform + web TypeScript PASS.
+
+Next FS V2B adaptation boundary: P0.4 automatic Review Council evidence material collection using existing `EvidenceEnvelope` and native Review Council source/evidence/packet sealing. No second council or evidence store will be introduced.

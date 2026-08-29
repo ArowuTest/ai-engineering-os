@@ -127,6 +127,22 @@ export class CollaborativeMemoryRepository {
     return result.rows[0] ? mapMemory(result.rows[0]) : null;
   }
 
+  async getLatestSessionMemoryBySchema(
+    organisationId: string,
+    projectId: string,
+    sessionId: string,
+    sourceSchema: string,
+  ): Promise<CollaborativeMemoryRecord | null> {
+    const result = await this.database.query<MemoryRow>(
+      `SELECT ${MEMORY_COLUMNS} FROM collaborative_memories
+       WHERE organisation_id=$1 AND project_id=$2 AND source_session_id=$3
+         AND visibility='session_private' AND source_schema=$4
+       ORDER BY created_at DESC, id DESC LIMIT 1`,
+      [organisationId, projectId, sessionId, sourceSchema],
+    );
+    return result.rows[0] ? mapMemory(result.rows[0]) : null;
+  }
+
   async getUserMemory(ownerUserId: string, memoryId: string): Promise<CollaborativeMemoryRecord | null> {
     const result = await this.database.query<MemoryRow>(
       `SELECT ${MEMORY_COLUMNS} FROM collaborative_memories

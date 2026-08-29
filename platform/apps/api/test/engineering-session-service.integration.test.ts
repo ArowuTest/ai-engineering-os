@@ -160,6 +160,42 @@ describe('EngineeringSessionService', () => {
     });
     expect(otherContext.items.map((item) => item.memoryId)).not.toContain(handoff.memory.id);
   });
+  it('persists a typed recovery checkpoint and reconstructs portable continuation context', async () => {
+    const { alice, project } = await setupProject();
+    const sessions = service();
+    const session = await sessions.startSession({
+      organisationId: 'org-001', projectId: project.id, actorUserId: alice.id,
+      workstreamId: 'payments', taskId: 'task-backend', agentId: 'agent-backend',
+      harnessId: 'codex', modelRouteId: 'openai-gpt', runnerId: 'runner-a', environmentId: 'local', now,
+    });
+
+    const saved = await sessions.recordRecoveryCheckpoint({
+      organisationId: 'org-001', projectId: project.id, actorUserId: alice.id, sessionId: session.id,
+      reason: 'verification_gate', objective: 'Finish payment backend acceptance', currentPhase: 'integration',
+      lastAcceptedBoundary: 'unit tests green', evidenceReferences: ['test:unit-428'],
+      blockers: ['integration gate pending'], nextActions: ['run integration', 'open council'],
+      sourceRevision: { branch: 'feature/task-9', commit: 'abc123', dirty: true, dirtyDigest: 'a'.repeat(64) },
+      now: new Date(now.getTime() + 3),
+    });
+    expect(saved.memory.sourceSchema).toBe('engineering_recovery_checkpoint_v1');
+    expect(saved.checkpoint.execution).toMatchObject({
+      agentId: 'agent-backend', harnessId: 'codex', modelRouteId: 'openai-gpt', runnerId: 'runner-a', environmentId: 'local',
+    });
+
+    const continuation = await sessions.getContinuationContext({
+      organisationId: 'org-001', projectId: project.id, actorUserId: alice.id, sessionId: session.id,
+    });
+    expect(continuation).toMatchObject({
+      objective: 'Finish payment backend acceptance',
+      activeTask: { taskId: 'task-backend', sessionId: session.id, agentId: 'agent-backend' },
+      sourceRevision: { branch: 'feature/task-9', commit: 'abc123', dirty: true },
+      acceptanceState: { lastAcceptedBoundary: 'unit tests green' },
+      blockers: ['integration gate pending'],
+      nextActions: ['run integration', 'open council'],
+    });
+    expect(continuation.generatedAt).toBeInstanceOf(Date);
+  });
+
   it('delivers an explicitly targeted handoff across workstream boundaries', async () => {
     const { alice, bob, project } = await setupProject();
     const sessions = service();

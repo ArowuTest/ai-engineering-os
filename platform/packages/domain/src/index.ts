@@ -17,3 +17,4 @@ export * from './domain-pack.js';
 export * from './context-trust.js';
 export * from './runtime-capability-manifest.js';
 export * from './evidence-envelope.js';
+export * from './engineering-continuity.js';

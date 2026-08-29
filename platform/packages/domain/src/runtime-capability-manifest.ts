@@ -9,10 +9,23 @@ export const RUNTIME_CAPABILITY_SOURCES = [
 ] as const;
 export type RuntimeCapabilitySource = (typeof RUNTIME_CAPABILITY_SOURCES)[number];
 
+export const RUNTIME_CAPABILITY_HEALTH_STATES = [
+  'healthy', 'degraded', 'temporarily_unhealthy', 'unavailable', 'unknown',
+] as const;
+export type RuntimeCapabilityHealthState = (typeof RUNTIME_CAPABILITY_HEALTH_STATES)[number];
+
+export const RUNTIME_CAPABILITY_RETRYABILITY = ['retryable', 'non_retryable', 'approval_required'] as const;
+export type RuntimeCapabilityRetryability = (typeof RUNTIME_CAPABILITY_RETRYABILITY)[number];
+
 export interface RuntimeCapabilityObservation {
   id: string;
   state: RuntimeCapabilityState;
   source: RuntimeCapabilitySource;
+  health?: RuntimeCapabilityHealthState;
+  supported?: boolean;
+  retryability?: RuntimeCapabilityRetryability;
+  reasonCode?: string;
+  evidenceRef?: string;
   reason?: string;
 }
 
@@ -63,6 +76,31 @@ export function createRuntimeCapabilityManifest(
     const state = requireEnum(capability.state, RUNTIME_CAPABILITY_STATES, `capabilities[${index}].state`);
     const source = requireEnum(capability.source, RUNTIME_CAPABILITY_SOURCES, `capabilities[${index}].source`);
     const item: RuntimeCapabilityObservation = { id, state, source };
+    if (capability.health !== undefined) {
+      item.health = requireEnum(capability.health, RUNTIME_CAPABILITY_HEALTH_STATES, `capabilities[${index}].health`);
+    }
+    if (capability.supported !== undefined) {
+      if (typeof capability.supported !== 'boolean') {
+        throw new DomainValidationError(`capabilities[${index}].supported`, 'supported must be boolean');
+      }
+      item.supported = capability.supported;
+    }
+    if (capability.retryability !== undefined) {
+      item.retryability = requireEnum(
+        capability.retryability,
+        RUNTIME_CAPABILITY_RETRYABILITY,
+        `capabilities[${index}].retryability`,
+      );
+    }
+    if (capability.reasonCode !== undefined) {
+      item.reasonCode = requireStableIdentifier(capability.reasonCode, `capabilities[${index}].reasonCode`);
+    }
+    if (capability.evidenceRef !== undefined) {
+      const evidenceRef = requireNonBlank(capability.evidenceRef, `capabilities[${index}].evidenceRef`);
+      if (evidenceRef.length > 2048) throw new DomainValidationError('evidenceRef', 'capability evidenceRef is too long');
+      assertSensitiveTextSafe(evidenceRef, `capabilities[${index}].evidenceRef`);
+      item.evidenceRef = evidenceRef;
+    }
     if (capability.reason !== undefined) {
       const reason = requireNonBlank(capability.reason, `capabilities[${index}].reason`);
       if (reason.length > 1024) throw new DomainValidationError('reason', 'capability reason is too long');
@@ -96,6 +134,13 @@ export function runtimeCapabilityManifestFromRunner(
     runnerId: runner.id,
     harnessId: runner.harnessId,
     observedAt,
-    capabilities: runner.capabilities.map((id) => ({ id, state: 'declared' as const, source: 'runner' as const })),
+    capabilities: runner.capabilities.map((id) => ({
+      id,
+      state: 'declared' as const,
+      source: 'runner' as const,
+      health: 'unknown' as const,
+      supported: true,
+      retryability: 'retryable' as const,
+    })),
   });
 }

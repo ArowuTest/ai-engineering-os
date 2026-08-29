@@ -3,7 +3,11 @@ import {
   createAgentHandoff,
   createAuditEvent,
   createCollaborativeMemoryRecord,
+  createEngineeringRecoveryCheckpoint,
   createEngineeringSession,
+  ENGINEERING_RECOVERY_CHECKPOINT_SCHEMA,
+  parseEngineeringRecoveryCheckpoint,
+  serializeEngineeringRecoveryCheckpoint,
   rebindEngineeringSessionExecution,
   type AgentHandoff,
   type CollaborativeMemoryRecord,
@@ -169,6 +173,122 @@ export class EngineeringSessionService {
       }));
     });
     return memory;
+  }
+
+  async recordRecoveryCheckpoint(input: {
+    organisationId: string; projectId: string; actorUserId: string; sessionId: string;
+    reason: 'source_mutation' | 'verification_gate' | 'accepted_commit' | 'execution_transition' |
+      'handoff' | 'council' | 'environment_suspend' | 'deployment' | 'manual';
+    objective: string; currentPhase?: string; lastAcceptedBoundary?: string;
+    evidenceReferences: string[]; blockers: string[]; nextActions: string[];
+    sourceRevision?: { branch?: string; commit?: string; dirty?: boolean; dirtyDigest?: string };
+    now?: Date;
+  }) {
+    const now = requireDate(input.now);
+    const sourceSession = await this.requireOwnedSession(
+      input.organisationId, input.projectId, input.actorUserId, input.sessionId,
+    );
+    if (sourceSession.status !== 'active') throw new Error('engineering session is not active');
+
+    const checkpoint = createEngineeringRecoveryCheckpoint({
+      reason: input.reason,
+      objective: input.objective,
+      ...(input.currentPhase === undefined ? {} : { currentPhase: input.currentPhase }),
+      ...(input.lastAcceptedBoundary === undefined ? {} : { lastAcceptedBoundary: input.lastAcceptedBoundary }),
+      evidenceReferences: input.evidenceReferences,
+      blockers: input.blockers,
+      nextActions: input.nextActions,
+      ...(input.sourceRevision === undefined ? {} : { sourceRevision: input.sourceRevision }),
+      execution: {
+        agentId: sourceSession.agentId,
+        ...(sourceSession.harnessId === undefined ? {} : { harnessId: sourceSession.harnessId }),
+        ...(sourceSession.modelRouteId === undefined ? {} : { modelRouteId: sourceSession.modelRouteId }),
+        ...(sourceSession.runnerId === undefined ? {} : { runnerId: sourceSession.runnerId }),
+        ...(sourceSession.environmentId === undefined ? {} : { environmentId: sourceSession.environmentId }),
+      },
+      observedAt: now,
+    });
+    const memory = createCollaborativeMemoryRecord({
+      id: newMemoryId(), organisationId: input.organisationId, projectId: input.projectId,
+      ...(sourceSession.workstreamId === undefined ? {} : { workstreamId: sourceSession.workstreamId }),
+      scope: 'session', visibility: 'session_private', kind: 'checkpoint', trust: 'unreviewed',
+      title: `Recovery checkpoint: ${checkpoint.reason}`,
+      content: serializeEngineeringRecoveryCheckpoint(checkpoint),
+      createdBy: input.actorUserId, sourceType: 'agent', sourceAgentId: sourceSession.agentId,
+      sourceSessionId: sourceSession.id,
+      ...(sourceSession.harnessId === undefined ? {} : { sourceHarnessId: sourceSession.harnessId }),
+      sourceSchema: ENGINEERING_RECOVERY_CHECKPOINT_SCHEMA,
+      sourceReference: `engineering-session:${sourceSession.id}`,
+      tags: ['engineering-recovery', checkpoint.reason],
+      createdAt: now,
+    });
+
+    await this.dependencies.unitOfWork.run(async ({ users, memberships, collaborativeMemory, engineeringSessions, audit }) => {
+      const user = await users.getByIdForUpdate(input.actorUserId);
+      const organisationMembership = await memberships.getOrganisationForUpdate(input.organisationId, input.actorUserId);
+      const projectMembership = await memberships.getProjectForUpdate(input.organisationId, input.projectId, input.actorUserId);
+      if (!user || user.status !== 'active' || !organisationMembership || organisationMembership.status !== 'active' ||
+          !projectMembership || projectMembership.status !== 'active') throw new Error('forbidden');
+      await engineeringSessions.requireActiveAssignmentForUpdate({
+        organisationId: input.organisationId, projectId: input.projectId, userId: input.actorUserId,
+        ...(sourceSession.workstreamId === undefined ? {} : { workstreamId: sourceSession.workstreamId }),
+        taskId: sourceSession.taskId, agentId: sourceSession.agentId,
+      });
+      const lockedSession = await engineeringSessions.getForUpdate(input.organisationId, input.projectId, sourceSession.id);
+      if (!lockedSession || lockedSession.createdBy !== input.actorUserId) throw new Error('forbidden');
+      if (lockedSession.status !== 'active') throw new Error('engineering session is not active');
+      if (lockedSession.updatedAt.getTime() !== sourceSession.updatedAt.getTime()) {
+        throw new Error('engineering session changed during recovery checkpoint creation');
+      }
+      await collaborativeMemory.createMemory(memory);
+      await audit.append(createAuditEvent({
+        organisationId: input.organisationId, projectId: input.projectId,
+        eventType: 'engineering.session.recovery_checkpointed', actorType: 'user', actorId: input.actorUserId,
+        subjectType: 'collaborative_memory', subjectId: memory.id,
+        metadata: { sessionId: sourceSession.id, reason: checkpoint.reason, sourceSchema: checkpoint.schema },
+      }));
+    });
+    return { memory, checkpoint };
+  }
+
+  async getContinuationContext(input: {
+    organisationId: string; projectId: string; actorUserId: string; sessionId: string; now?: Date;
+  }) {
+    const session = await this.requireOwnedSession(
+      input.organisationId, input.projectId, input.actorUserId, input.sessionId,
+    );
+    const memory = await this.dependencies.collaborativeMemory.getLatestSessionMemoryBySchema(
+      input.organisationId, input.projectId, session.id, ENGINEERING_RECOVERY_CHECKPOINT_SCHEMA,
+    );
+    if (!memory) throw new Error('recovery_checkpoint_not_found');
+    const checkpoint = parseEngineeringRecoveryCheckpoint(memory.content);
+    const generatedAt = requireDate(input.now);
+    return {
+      objective: checkpoint.objective,
+      activeTask: {
+        taskId: session.taskId,
+        sessionId: session.id,
+        agentId: session.agentId,
+        ...(session.workstreamId === undefined ? {} : { workstreamId: session.workstreamId }),
+      },
+      ...(checkpoint.sourceRevision === undefined ? {} : { sourceRevision: checkpoint.sourceRevision }),
+      execution: {
+        agentId: session.agentId,
+        ...(session.harnessId === undefined ? {} : { harnessId: session.harnessId }),
+        ...(session.modelRouteId === undefined ? {} : { modelRouteId: session.modelRouteId }),
+        ...(session.runnerId === undefined ? {} : { runnerId: session.runnerId }),
+        ...(session.environmentId === undefined ? {} : { environmentId: session.environmentId }),
+      },
+      acceptanceState: {
+        ...(checkpoint.lastAcceptedBoundary === undefined ? {} : { lastAcceptedBoundary: checkpoint.lastAcceptedBoundary }),
+      },
+      evidenceReferences: checkpoint.evidenceReferences,
+      blockers: checkpoint.blockers,
+      pendingQuestions: [],
+      nextActions: checkpoint.nextActions,
+      latestRecoveryCheckpointId: memory.id,
+      generatedAt,
+    };
   }
 
   async createHandoff(input: {

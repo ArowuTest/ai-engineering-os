@@ -22,17 +22,30 @@ describe('runtime capability manifest', () => {
     ]);
   });
 
-  it('accepts direct observed availability separately from declarations', () => {
+  it('accepts direct observed availability separately from health and retryability', () => {
     const manifest = createRuntimeCapabilityManifest({
       runnerId: 'runner-001', environmentId: 'env-local', harnessId: 'codex', observedAt,
       capabilities: [
-        { id: 'git', state: 'available', source: 'runtime_probe' },
-        { id: 'browser', state: 'unavailable', source: 'runtime_probe', reason: 'browser binary missing' },
-        { id: 'database.write.production', state: 'unavailable', source: 'policy', reason: 'production is read-only' },
+        { id: 'git', state: 'available', health: 'healthy', supported: true, retryability: 'retryable', source: 'runtime_probe' },
+        {
+          id: 'browser', state: 'available', health: 'temporarily_unhealthy', supported: true,
+          retryability: 'retryable', source: 'runtime_probe', reasonCode: 'browser_transport_502',
+          reason: 'browser transport temporarily unavailable', evidenceRef: 'evidence:browser-health-001',
+        },
+        {
+          id: 'database.write.production', state: 'unavailable', health: 'unavailable', supported: true,
+          retryability: 'approval_required', source: 'policy', reasonCode: 'production_read_only',
+          reason: 'production is read-only',
+        },
       ],
     });
-    expect(manifest.capabilities.find((item) => item.id === 'git')?.state).toBe('available');
-    expect(manifest.capabilities.find((item) => item.id === 'browser')?.reason).toMatch(/missing/);
+    expect(manifest.capabilities.find((item) => item.id === 'git')).toMatchObject({
+      state: 'available', health: 'healthy', supported: true, retryability: 'retryable',
+    });
+    expect(manifest.capabilities.find((item) => item.id === 'browser')).toMatchObject({
+      state: 'available', health: 'temporarily_unhealthy', supported: true, retryability: 'retryable',
+      reasonCode: 'browser_transport_502', evidenceRef: 'evidence:browser-health-001',
+    });
   });
 
   it('rejects duplicate capabilities and secret-shaped metadata', () => {
