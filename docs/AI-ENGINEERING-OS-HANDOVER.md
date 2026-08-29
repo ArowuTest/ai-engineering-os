@@ -548,3 +548,18 @@ P0.1–P0.3 implementation status:
 Fresh focused evidence: Engineering Session integration `18/18 GREEN`, Runtime Capability Manifest `3/3 GREEN`, combined focused tranche `21/21 GREEN`, platform + web TypeScript PASS.
 
 Next FS V2B adaptation boundary: P0.4 automatic Review Council evidence material collection using existing `EvidenceEnvelope` and native Review Council source/evidence/packet sealing. No second council or evidence store will be introduced.
+
+### 29 August 2026 — FS V2B P0 continuity tranche complete
+
+P0.4 automatic Review Council evidence-material assembly is implemented without changing council persistence. AIOS now builds deterministic `review_council_evidence_material_v1` from applicable source seal, gate results, runtime capability observations, execution `EvidenceEnvelope` records, requirements references and acceptance criteria, then passes that exact canonical material through the existing Review Council source/evidence/packet digest and durable material path.
+
+Fresh evidence for P0.4: Review Council service integration `38/38 GREEN`, Review Council evidence-domain tests `2/2 GREEN`, combined `40/40 GREEN`, platform + web TypeScript PASS.
+
+FS V2B P0 status is therefore complete:
+
+1. Durable Engineering Recovery Checkpoint — implemented.
+2. Portable Project Continuation Context — implemented.
+3. Capability availability + health + retryability — implemented.
+4. Automatic Review Council evidence-material assembly — implemented.
+
+No second Mission, worker, council, evidence or capability-governance subsystem was introduced.

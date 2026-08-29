@@ -145,6 +145,40 @@ describe('ReviewCouncilService blind collection', () => {
     expect((await new ReviewCouncilRepository(pool).getRun('org-001', created.run.id))?.status).toBe('adjudicating');
   });
 
+  it('builds and seals deterministic FS V2B-style evidence material before blind review', async () => {
+    const { userId, project } = await seedProject();
+    const council = service(new FakeExecutor(new Map()));
+    const created = await council.createBlindRunFromEvidenceMaterial({
+      id: 'run-collected-evidence', organisationId: 'org-001', projectId: project.id,
+      actorUserId: userId, source, invariantIds: ['runner-local-auth'],
+      evidenceMaterial: {
+        sourceSeal: { commit: '978c8385', tree: 'a025b5ab', dirty: false },
+        gates: [
+          { id: 'integration', status: 'pass', summary: '63/63 files GREEN' },
+          { id: 'unit', status: 'pass', summary: '428/428 GREEN' },
+        ],
+        requirementsReferences: ['SRS EXT-FR-021', 'SRS EXT-FR-023'],
+        acceptanceCriteria: ['Exact source sealed', 'No unresolved blocking findings'],
+        collectedAt: now,
+      },
+      reviewers: [
+        { id: 'assignment-collected', role: 'general', routeId: 'route-a', modelId: 'model-a', modelVersion: 'v1' },
+      ],
+      now,
+    });
+    const evidenceMaterial = JSON.parse(created.packet.evidence) as {
+      schema: string; gates: Array<{ id: string; status: string }>;
+    };
+    expect(evidenceMaterial.schema).toBe('review_council_evidence_material_v1');
+    expect(evidenceMaterial.gates).toEqual([
+      expect.objectContaining({ id: 'integration', status: 'pass' }),
+      expect.objectContaining({ id: 'unit', status: 'pass' }),
+    ]);
+    const durable = await new ReviewCouncilRepository(pool).getRunMaterial('org-001', created.run.id);
+    expect(durable?.evidence).toBe(created.packet.evidence);
+    expect(digestReviewMaterial(created.packet.evidence)).toBe(created.run.evidenceDigest);
+  });
+
   it('recovers the canonical blind packet from durable review material after transient request state is lost', async () => {
     const { userId, project } = await seedProject();
     const executor = new FakeExecutor(new Map());

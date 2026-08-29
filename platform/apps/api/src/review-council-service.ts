@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   buildBlindReviewPacket,
+  buildReviewCouncilEvidenceMaterial,
   classifyReviewerOutcome,
   DomainValidationError,
   createAuditEvent,
@@ -328,6 +329,30 @@ export class ReviewCouncilService {
     const run = await this.dependencies.reviewCouncil.getRun(organisationId, reviewRunId);
     if (!run || run.projectId !== projectId) throw new Error('review run not found');
     return run;
+  }
+  async createBlindRunFromEvidenceMaterial(input: {
+    id: string;
+    organisationId: string;
+    projectId: string;
+    actorUserId: string;
+    source: string;
+    evidenceMaterial: Parameters<typeof buildReviewCouncilEvidenceMaterial>[0];
+    invariantIds: string[];
+    reviewers: ReviewerConfig[];
+    now?: Date;
+  }): Promise<{ run: ReviewRun; packet: BlindReviewPacket; assignments: ReviewerAssignmentRecord[] }> {
+    const evidence = buildReviewCouncilEvidenceMaterial(input.evidenceMaterial);
+    return this.createBlindRun({
+      id: input.id,
+      organisationId: input.organisationId,
+      projectId: input.projectId,
+      actorUserId: input.actorUserId,
+      source: input.source,
+      evidence,
+      invariantIds: input.invariantIds,
+      reviewers: input.reviewers,
+      ...(input.now === undefined ? {} : { now: input.now }),
+    });
   }
   async createBlindRun(input: {
     id: string;
