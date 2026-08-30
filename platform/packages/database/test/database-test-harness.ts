@@ -3,7 +3,7 @@ import { runMigrations } from '../src/migrations.js';
 
 export const databaseUrl =
   process.env.DATABASE_URL ??
-  'postgresql://engineering_os:engineering_os@localhost:55432/engineering_os_test';
+  'postgresql://engineering_os:engineering_os@127.0.0.1:55432/engineering_os_test';
 
 export const pool = new Pool({ connectionString: databaseUrl, max: 4 });
 

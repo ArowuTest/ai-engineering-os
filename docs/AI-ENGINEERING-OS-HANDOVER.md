@@ -563,3 +563,19 @@ FS V2B P0 status is therefore complete:
 4. Automatic Review Council evidence-material assembly — implemented.
 
 No second Mission, worker, council, evidence or capability-governance subsystem was introduced.
+
+### 30 August 2026 — PostgreSQL integration harness networking hardening
+
+During the final Task-9 exact-source re-gate, repeated long-running Windows/Docker integration failures were isolated to the test harness hostname rather than AIOS product logic. Direct concurrency probing reproduced `ECONNRESET`/timeout behavior against `localhost:55432`, while the same PostgreSQL workload against `127.0.0.1:55432` remained stable. The integration harness default connection string was therefore changed from `localhost` to `127.0.0.1`; no product runtime/database behavior changed.
+
+Fresh deterministic evidence after the harness change:
+
+- serialized PostgreSQL integration: **63/63 files GREEN**;
+- static/contracts: **57/57 GREEN**;
+- non-DB/unit: **430/430 GREEN** across 54 files;
+- platform + web TypeScript: PASS;
+- Next production web build: PASS;
+- dependency audit at high severity: **0 vulnerabilities**;
+- Unicode, agents, commands, rules, skills, hooks, install manifests, personal-path, workflow-security, ECC catalog, command-registry and supply-chain IOC validation: PASS.
+
+The networking change is a test-environment hardening fix only. Exact-source council sealing must use the post-commit branch/HEAD/tree, not the earlier `87433e5d` seal.
