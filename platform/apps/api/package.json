@@ -13,11 +13,11 @@
     "@engineering-os/ecc-adapter": "0.1.0",
     "@engineering-os/model-gateway": "0.1.0",
     "@engineering-os/object-storage": "0.1.0",
-    "fastify": "5.11.3",
-    "openai": "^7.4.0"
+    "fastify": "5.12.1",
+    "openai": "^7.8.0"
   },
   "devDependencies": {
-    "tsx": "4.23.11"
+    "tsx": "4.23.12"
   },
   "exports": "./src/app.ts"
 }
